@@ -1,0 +1,3 @@
+// the configured options and settings for Magewell2ts
+#define magewellpro2ts_VERSION_MAJOR @magewellpro2ts_VERSION_MAJOR@
+#define magewellpro2ts_VERSION_MINOR @magewellpro2ts_VERSION_MINOR@
