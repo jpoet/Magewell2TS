@@ -1021,15 +1021,16 @@ bool OutputTS::open_spdif(void)
     const AVInputFormat * fmt = nullptr;
     int ret;
     int idx;
-    int data_cnt = 0, null_cnt = 0, sz;
     uint8_t buf[BURST_HEADER_SIZE];
 
-    size_t probesize = m_audio_block_size * 3;
-    size_t max_nulls = m_audio_block_size * 2000;
-    size_t nulls_msg = m_audio_block_size * 200;
+    const size_t probesize = m_audio_block_size * 3;
+    const size_t max_nulls = m_audio_block_size * 2000;
+    const size_t nulls_msg = m_audio_block_size * 200;
 
     for (idx = 0; idx < 10; ++idx)
     {
+        int data_cnt = 0, null_cnt = 0, sz;
+
         if (m_verbose > 2)
         {
             cerr << "Attempt " << idx << " to open SPDIF audio stream.\n";
