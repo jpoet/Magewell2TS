@@ -441,11 +441,11 @@ static int64_t seek_packet(void *opaque, int64_t offset, int whence)
 
 
 OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
-                   int video_bitrate)
+                   int look_ahead)
     : m_packet_queue(verbose_level)
     , m_verbose(verbose_level)
     , m_video_codec_name(video_codec_name)
-    , m_video_bitrate(video_bitrate)
+    , m_look_ahead(look_ahead)
 {
 }
 
@@ -793,7 +793,7 @@ void OutputTS::add_stream(OutputStream *ost, AVFormatContext *oc,
         case AVMEDIA_TYPE_VIDEO:
           ost->enc->codec_id = (*codec)->id;
 
-          ost->enc->bit_rate = m_video_bitrate;
+//          ost->enc->bit_rate = m_video_bitrate;
           /* Resolution must be a multiple of two. */
           ost->enc->width    = m_input_width;
           ost->enc->height   = m_input_height;
@@ -1435,22 +1435,21 @@ void OutputTS::open_video(AVFormatContext *oc, const AVCodec *codec,
 
     av_dict_copy(&opt, opt_arg, 0);
 
-//    av_opt_set(c->priv_data, "preset", "medium", 0);
     av_opt_set(c->priv_data, "preset", "p7", 0);
     av_opt_set(c->priv_data, "tune", "hq", 0);
-//    av_opt_set_int(c->priv_data, "qp", 16, 0);
-    av_opt_set_int(c->priv_data, "qmin", 8, 0);
-    av_opt_set_int(c->priv_data, "qmax", 18, 0);
     av_opt_set(c->priv_data, "rc", "constqp", 0);
+//    av_opt_set(c->priv_data, "tier", "high", 0);
 
-    av_opt_set_int(c->priv_data, "spatial-aq", 1, 0);
-    av_opt_set_int(c->priv_data, "aq-strength", 8, 0);
+    av_opt_set_int(c->priv_data, "cq", 16, 0);
+    if (m_look_ahead >= 0)
+        av_opt_set_int(c->priv_data, "rc-lookahead", m_look_ahead, 0);
+    av_opt_set_int(c->priv_data, "b", 0, 0);
+    av_opt_set_int(c->priv_data, "minrate", 1500000, 0);
+    av_opt_set_int(c->priv_data, "maxrate", 20000000, 0);
+    av_opt_set_int(c->priv_data, "bufsize", 400000000, 0);
+    av_opt_set_int(c->priv_data, "surfaces", 4, 0);
 
     av_opt_set_int(c->priv_data, "bf", 0, 0);
-    av_opt_set_int(c->priv_data, "rc-lookahead", 4, 0);
-
-//    av_opt_set_int(c->priv_data, "qdiff", 10, 0);
-//    av_opt_set(c->priv_data, "qcomp", "0.9", 0);
 
     /* open the codec */
     ret = avcodec_open2(c, codec, &opt);

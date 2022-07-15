@@ -818,10 +818,10 @@ bool video_capture(HCHANNEL hChannel, int verbose, OutputTS & out2ts)
     return true;
 }
 
-bool capture(HCHANNEL channel_handle, int verbose, int video_bitrate,
-             const string & video_codec)
+bool capture(HCHANNEL channel_handle, int verbose,
+             int look_ahead, const string & video_codec)
 {
-    OutputTS out2ts(verbose, video_codec, video_bitrate);
+    OutputTS out2ts(verbose, video_codec, look_ahead);
 
     MWCAP_CHANNEL_INFO channel_info;
     MWRefreshDevice();
@@ -1061,7 +1061,7 @@ void show_help(string_view app)
          << "<--verbose level> "
          << "<--read-edid 'filename'> "
          << "<--write-edid 'filename'> <--get-volume> <--set-volume val> "
-         << "<--mux>"
+         << "<--mux> <--lookahead frames>"
          << endl;
 
     cerr << "\n";
@@ -1070,12 +1070,20 @@ void show_help(string_view app)
          << "--input (-i)      : input idx, *required*. Starts at 1.\n"
          << "--verbose (-v)    : message verbose level. 0=completely quiet.\n"
          << "--mux (-m)        : capture audio and video and mux into TS.\n"
+         << "--lookahead (-l)  : How many frames to 'look ahead' (default 15)\n"
          << "--read-edid (-r)  : Read EDID info for input to file.\n"
          << "--write-edid (-w) : Write EDID info from file to input.\n"
          << "--get-volume (-g) : Display volume settings for each channel of input.\n"
          << "--set-volume (-s) : Set volume for all channels of the input.\n";
 
-    cerr << "\nExamples:\n"
+    cerr << "\n"
+         << "Video encoding is done at 'constant quality' and will adjust \n"
+         << "the bitrate automatically. 'lookahead' allows for more efficient\n"
+         << "use of bits while maintaining the quality at the expense of RAM.\n"
+         << "Set lookahead to 0 to disable, or -1 to use the encoder default.\n";
+
+    cerr << "\n"
+         << "Examples:\n"
          << "\tCapture from input 2 and write Transport Stream to stdout:\n"
          << "\t" << app << " -i 2 -m\n"
          << "\n"
@@ -1121,7 +1129,7 @@ int main(int argc, char* argv[])
     bool        read_edid  = false;
     bool        write_edid = false;
 
-    int         video_bitrate = 9000000;
+    int         look_ahead = 15;
 
     vector<string_view> args(argv + 1, argv + argc);
 
@@ -1131,6 +1139,11 @@ int main(int argc, char* argv[])
         {
             show_help(app_name);
             return 0;
+        }
+        else if (*iter == "-l" || *iter == "--lookahead")
+        {
+            if (!string_to_int(*(++iter), look_ahead, "lookahead"))
+                exit(1);
         }
         else if (*iter == "-m" || *iter == "--mux")
         {
@@ -1167,11 +1180,6 @@ int main(int argc, char* argv[])
         else if (*iter == "-s" || *iter == "--set-volume")
         {
             if (!string_to_int(*(++iter), set_volume, "volume"))
-                exit(1);
-        }
-        else if (*iter == "--video-bitrate")
-        {
-            if (!string_to_int(*(++iter), video_bitrate, "video bitrate"))
                 exit(1);
         }
         else if (*iter == "-v" || *iter == "--verbose")
@@ -1217,8 +1225,8 @@ int main(int argc, char* argv[])
 
     if (do_capture)
     {
-        if (!capture(channel_handle, verbose, video_bitrate,
-                     video_codec))
+        if (!capture(channel_handle, verbose,
+                     look_ahead, video_codec))
             return -1;
     }
 

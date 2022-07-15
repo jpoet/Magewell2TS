@@ -65,7 +65,7 @@ class OutputTS
 {
   public:
     OutputTS(int verbose, const std::string & video_codec_name,
-             int video_bitrate);
+             int look_ahead);
     ~OutputTS(void);
 
     void setAudioParams(int num_channels, int bytes_per_sample,
@@ -166,7 +166,7 @@ class OutputTS
     AVChannelLayout m_channel_layout;
 
     std::string      m_video_codec_name        {"hevc_nvenc"};
-    int              m_video_bitrate           {9000000};
+    int              m_look_ahead              {-1};
     int              m_input_width             {1280};
     int              m_input_height            {720};
     AVRational       m_input_frame_rate        {10000000, 166817};
