@@ -1444,10 +1444,10 @@ void OutputTS::open_video(AVFormatContext *oc, const AVCodec *codec,
     if (m_look_ahead >= 0)
         av_opt_set_int(c->priv_data, "rc-lookahead", m_look_ahead, 0);
     av_opt_set_int(c->priv_data, "b", 0, 0);
-    av_opt_set_int(c->priv_data, "minrate", 1500000, 0);
-    av_opt_set_int(c->priv_data, "maxrate", 20000000, 0);
+    av_opt_set_int(c->priv_data, "minrate", 4000000, 0);
+    av_opt_set_int(c->priv_data, "maxrate", 25000000, 0);
     av_opt_set_int(c->priv_data, "bufsize", 400000000, 0);
-    av_opt_set_int(c->priv_data, "surfaces", 4, 0);
+    av_opt_set_int(c->priv_data, "surfaces", 50, 0);
 
     av_opt_set_int(c->priv_data, "bf", 0, 0);
 

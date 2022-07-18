@@ -1070,7 +1070,7 @@ void show_help(string_view app)
          << "--input (-i)      : input idx, *required*. Starts at 1.\n"
          << "--verbose (-v)    : message verbose level. 0=completely quiet.\n"
          << "--mux (-m)        : capture audio and video and mux into TS.\n"
-         << "--lookahead (-l)  : How many frames to 'look ahead' (default 15)\n"
+         << "--lookahead (-l)  : How many frames to 'look ahead' (default 32)\n"
          << "--read-edid (-r)  : Read EDID info for input to file.\n"
          << "--write-edid (-w) : Write EDID info from file to input.\n"
          << "--get-volume (-g) : Display volume settings for each channel of input.\n"
@@ -1129,7 +1129,7 @@ int main(int argc, char* argv[])
     bool        read_edid  = false;
     bool        write_edid = false;
 
-    int         look_ahead = 15;
+    int         look_ahead = 32;
 
     vector<string_view> args(argv + 1, argv + argc);
 
