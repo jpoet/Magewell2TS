@@ -515,9 +515,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
     while (g_running)
     {
         if (!out2ts.AudioReady())
-        {
             continue;
-        }
 
         MWCAP_VIDEO_BUFFER_INFO videoBufferInfo;
         MWGetVideoBufferInfo(hChannel, &videoBufferInfo);
@@ -819,9 +817,8 @@ bool video_capture(HCHANNEL hChannel, int verbose, OutputTS & out2ts)
 }
 
 bool capture(HCHANNEL channel_handle, int verbose,
-             int look_ahead, const string & video_codec)
+             OutputTS & out2ts, bool no_audio)
 {
-    OutputTS out2ts(verbose, video_codec, look_ahead);
 
     MWCAP_CHANNEL_INFO channel_info;
     MWRefreshDevice();
@@ -842,15 +839,24 @@ bool capture(HCHANNEL channel_handle, int verbose,
         cerr << "Board SerialNo: "
              << channel_info.szBoardSerialNo << "\n";
 
-        cerr << "Start audio thread.\n";
+        if (!no_audio)
+            cerr << "Start audio thread.\n";
     }
 
-    std::thread audio_capture_tid(audio_capture, channel_handle, verbose,
-                                  &out2ts);
+    std::thread audio_thr;
+
+    if (!no_audio)
+    {
+        audio_thr = std::thread(audio_capture, channel_handle,
+                                verbose, &out2ts);
+    }
 
     video_capture(channel_handle, verbose, out2ts);
 
-    audio_capture_tid.join();
+    if (!no_audio)
+    {
+        audio_thr.join();
+    }
 
     if (channel_handle)
         MWCloseChannel(channel_handle);
@@ -1061,7 +1067,7 @@ void show_help(string_view app)
          << "<--verbose level> "
          << "<--read-edid 'filename'> "
          << "<--write-edid 'filename'> <--get-volume> <--set-volume val> "
-         << "<--mux> <--lookahead frames>"
+         << "<--mux> <--lookahead frames> <--no-audio>"
          << endl;
 
     cerr << "\n";
@@ -1074,7 +1080,8 @@ void show_help(string_view app)
          << "--read-edid (-r)  : Read EDID info for input to file.\n"
          << "--write-edid (-w) : Write EDID info from file to input.\n"
          << "--get-volume (-g) : Display volume settings for each channel of input.\n"
-         << "--set-volume (-s) : Set volume for all channels of the input.\n";
+         << "--set-volume (-s) : Set volume for all channels of the input.\n"
+         << "--no-audio (-n)   : Only capture video.\n";
 
     cerr << "\n"
          << "Video encoding is done at 'constant quality' and will adjust \n"
@@ -1130,6 +1137,7 @@ int main(int argc, char* argv[])
     bool        write_edid = false;
 
     int         look_ahead = 32;
+    bool        no_audio = false;
 
     vector<string_view> args(argv + 1, argv + argc);
 
@@ -1182,6 +1190,10 @@ int main(int argc, char* argv[])
             if (!string_to_int(*(++iter), set_volume, "volume"))
                 exit(1);
         }
+        else if (*iter == "-n" || *iter == "--no-audio")
+        {
+            no_audio = true;
+        }
         else if (*iter == "-v" || *iter == "--verbose")
         {
             if (iter + 1 == args.end())
@@ -1225,8 +1237,9 @@ int main(int argc, char* argv[])
 
     if (do_capture)
     {
-        if (!capture(channel_handle, verbose,
-                     look_ahead, video_codec))
+        OutputTS out2ts(verbose, video_codec, look_ahead, no_audio);
+
+        if (!capture(channel_handle, verbose, out2ts, no_audio))
             return -1;
     }
 

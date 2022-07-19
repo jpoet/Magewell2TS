@@ -65,7 +65,7 @@ class OutputTS
 {
   public:
     OutputTS(int verbose, const std::string & video_codec_name,
-             int look_ahead);
+             int look_ahead, bool force_stereo);
     ~OutputTS(void);
 
     void setAudioParams(int num_channels, int bytes_per_sample,
@@ -163,7 +163,9 @@ class OutputTS
     const AVCodec   *m_spdif_codec          {nullptr};
     AVCodecID        m_spdif_codec_id;
     std::string      m_audio_codec_name;
-    AVChannelLayout m_channel_layout;
+    AVChannelLayout  m_channel_layout;
+    bool             m_no_audio             {false};
+
 
     std::string      m_video_codec_name        {"hevc_nvenc"};
     int              m_look_ahead              {-1};

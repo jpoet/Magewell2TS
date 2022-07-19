@@ -441,11 +441,12 @@ static int64_t seek_packet(void *opaque, int64_t offset, int whence)
 
 
 OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
-                   int look_ahead)
+                   int look_ahead, bool no_audio)
     : m_packet_queue(verbose_level)
     , m_verbose(verbose_level)
     , m_video_codec_name(video_codec_name)
     , m_look_ahead(look_ahead)
+    , m_no_audio(no_audio)
 {
 }
 
@@ -479,17 +480,21 @@ void OutputTS::open_streams(void)
         return;
     }
 
-    const AVCodec * audio_codec =
-        avcodec_find_encoder_by_name(m_audio_codec_name.c_str());
-
-    if (!audio_codec)
+    const AVCodec * audio_codec = nullptr;
+    if (!m_no_audio)
     {
-        if (m_verbose > 0)
+        audio_codec =
+            avcodec_find_encoder_by_name(m_audio_codec_name.c_str());
+
+        if (!audio_codec)
         {
-            cerr << "Could not find audio encoder for AC3\n";
+            if (m_verbose > 0)
+            {
+                cerr << "Could not find audio encoder for AC3\n";
+            }
+            m_error = true;
+            return;
         }
-        m_error = true;
-        return;
     }
 
     filename = "pipe:1";
@@ -513,13 +518,17 @@ void OutputTS::open_streams(void)
      * and initialize the codecs. */
     add_stream(&m_video_stream, m_output_format_context,
                &video_codec);
-    add_stream(&m_audio_stream, m_output_format_context,
-               &audio_codec);
+    if (!m_no_audio)
+    {
+        add_stream(&m_audio_stream, m_output_format_context,
+                   &audio_codec);
+    }
 
     /* Now that all the parameters are set, we can open the audio and
      * video codecs and allocate the necessary encode buffers. */
     open_video(m_output_format_context, video_codec, &m_video_stream, opt);
-    open_audio(m_output_format_context, audio_codec, &m_audio_stream, opt);
+    if (!m_no_audio)
+        open_audio(m_output_format_context, audio_codec, &m_audio_stream, opt);
 
     if (m_verbose > 0)
     {
@@ -616,9 +625,12 @@ bool OutputTS::Write(uint8_t * pImage, uint32_t imageSize, int64_t timestamp)
                       &m_video_stream, pImage, imageSize,
                       timestamp);
 
-    while (m_video_stream.next_pts >= m_audio_stream.next_pts)
-        if (!write_audio_frame(m_output_format_context, &m_audio_stream))
-            break;
+    if (!m_no_audio)
+    {
+        while (m_video_stream.next_pts >= m_audio_stream.next_pts)
+            if (!write_audio_frame(m_output_format_context, &m_audio_stream))
+                break;
+    }
 
     return false;
 }
@@ -1234,6 +1246,9 @@ void OutputTS::detect_audio(void)
 bool OutputTS::AudioReady(void)
 {
     std::unique_lock<std::mutex> lock(m_detect_mutex);
+    if (m_no_audio)
+        return true;
+
     if (m_audio_detect)
         m_audio_detected.wait_for(lock, std::chrono::milliseconds(100));
 
