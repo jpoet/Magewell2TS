@@ -9,6 +9,12 @@ Both AC3 and EAC3 are supported if the source device outputs them as a bitstream
 
 More than two channels of PCM are not currently supported. Adding such support should be easy but I do not have a source device to test with.
 
+The Magewell driver provides V4L2 and ALSA interfaces to the
+card. This application by-passes those interfaces and talks directly
+to it via the Magewell API. A big advantage to this is you don't have
+to figure out which /dev/videoX or ALSA "device" is needed to make it
+work. The other advantage is that a raw bitstream can be captured.
+
 ----
 ## Caveats
 
@@ -27,7 +33,7 @@ https://www.magewell.com/downloads/pro-capture#/driver/linux-x86
 
 Install the driver:
 ```
-gtar -xzvf ProCaptureForLinux_4236.tar.gz
+gtar -xzvf ~/Downloads/ProCaptureForLinux_4236.tar.gz
 cd ProCaptureForLinux_4236/
 sudo ./install.sh
 ```
@@ -42,7 +48,7 @@ Pick an audio input
 ```
 export AUDIO=sysdefault:CARD=HDMI_3
 ```
-Find the video input
+After you figure out which video device is appropriate, select it:
 ```
 export VIDEO=/dev/video3
 ```
@@ -173,16 +179,16 @@ Description=Load EDID and volume information into Magewell card inputs
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/magewellpro2ts -i 1 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStart=/usr/local/bin/magewellpro2ts -i 2 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStart=/usr/local/bin/magewellpro2ts -i 3 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStart=/usr/local/bin/magewellpro2ts -i 4 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStart=/usr/local/bin/magewellpro2ts -i 1 -s 85 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStart=/usr/local/bin/magewellpro2ts -i 2 -s 85 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStart=/usr/local/bin/magewellpro2ts -i 3 -s 85 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStart=/usr/local/bin/magewellpro2ts -i 4 -s 85 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
 RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target
 ```
-That will load the eac3 EDID and set the volume level to 100. Enable it:
+That will load the eac3 EDID and set the volume level to 85. Enable it:
 ```
 systemctl enable MagewellPro.service
 ```

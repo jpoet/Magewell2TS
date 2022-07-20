@@ -145,10 +145,409 @@ HCHANNEL open_channel(int verbose, int devIndex, double boardId)
         cerr << "Opened ";
         if (boardId >= 0)
             cerr << "board " << boardId << " ";
-        cerr << "index " << devIndex << " (starting at 0)." << endl;
+        cerr << "index " << devIndex + 1 << endl;
     }
 
     return hChannel;
+}
+
+string GetVideoSignal(int state)
+{
+    switch(state)
+    {
+        case MWCAP_VIDEO_SIGNAL_LOCKED:
+          return "LOCKED";
+        case MWCAP_VIDEO_SIGNAL_LOCKING:
+          return "LOCKING";
+        case MWCAP_VIDEO_SIGNAL_UNSUPPORTED:
+          return "UNSUPPORTED";
+        case MWCAP_VIDEO_SIGNAL_NONE:
+          return "None";
+        default:
+          return "UNKNOWN";
+    }
+}
+
+string GetVideoInputName(DWORD dwVideoInput)
+{
+    switch (INPUT_TYPE(dwVideoInput))
+    {
+        case MWCAP_VIDEO_INPUT_TYPE_NONE:
+          return "None";
+        case MWCAP_VIDEO_INPUT_TYPE_HDMI:
+          return "HDMI";
+        case MWCAP_VIDEO_INPUT_TYPE_VGA:
+          return "VGA";
+        case MWCAP_VIDEO_INPUT_TYPE_SDI:
+          return "SDI";
+        case MWCAP_VIDEO_INPUT_TYPE_COMPONENT:
+          return "Component";
+        case MWCAP_VIDEO_INPUT_TYPE_CVBS:
+          return "CVBS";
+        case MWCAP_VIDEO_INPUT_TYPE_YC:
+          return "YC";
+        default:
+          return "Unknown";
+    }
+}
+
+string GetAudioInputName(DWORD dwAudioInput)
+{
+    switch (INPUT_TYPE(dwAudioInput))
+    {
+        case MWCAP_AUDIO_INPUT_TYPE_NONE:
+          return "None";
+        case MWCAP_AUDIO_INPUT_TYPE_HDMI:
+          return "HDMI";
+        case MWCAP_AUDIO_INPUT_TYPE_SDI:
+          return "SDI";
+        case MWCAP_AUDIO_INPUT_TYPE_LINE_IN:
+          return "Line In";
+        case MWCAP_AUDIO_INPUT_TYPE_MIC_IN:
+          return "Mic In";
+        default:
+          return "Unknown";
+    }
+}
+
+string GetVideoColorName(MWCAP_VIDEO_COLOR_FORMAT color)
+{
+    switch (color)
+    {
+        case MWCAP_VIDEO_COLOR_FORMAT_RGB:
+          return "RGB";
+        case MWCAP_VIDEO_COLOR_FORMAT_YUV601:
+          return "YUV BT.601";
+        case MWCAP_VIDEO_COLOR_FORMAT_YUV709:
+          return "YUV BT.709";
+        case MWCAP_VIDEO_COLOR_FORMAT_YUV2020:
+          return "YUV BT.2020";
+        case MWCAP_VIDEO_COLOR_FORMAT_YUV2020C:
+          return "YUV BT.2020C";
+        case MWCAP_VIDEO_COLOR_FORMAT_UNKNOWN:
+        default:
+          return "Unknown";
+    }
+}
+
+//sdi
+string GetVideoSDIType(SDI_TYPE type)
+{
+    switch (type)
+    {
+        case SDI_TYPE_SD:
+          return "SD";
+        case SDI_TYPE_HD:
+          return "HD";
+        case SDI_TYPE_3GA:
+          return "3GA";
+        case SDI_TYPE_3GB_DL:
+          return "3GB_DL";
+        case SDI_TYPE_3GB_DS:
+          return "3GB_DS";
+        case SDI_TYPE_DL_CH1:
+          return "DL_CH1";
+        case SDI_TYPE_DL_CH2:
+          return "DL_CH2";
+        case SDI_TYPE_6G_MODE1:
+          return "6G_MODE1";
+        case SDI_TYPE_6G_MODE2:
+          return "6G_MODE2";
+        default:
+          return "Unknown";
+    }
+}
+
+string GetVideoScanFmt(SDI_SCANNING_FORMAT type)
+{
+    switch (type)
+    {
+        case SDI_SCANING_INTERLACED:
+          return "INTERLACED";
+        case SDI_SCANING_SEGMENTED_FRAME:
+          return "SEGMENTED_FRAME";
+        case SDI_SCANING_PROGRESSIVE:
+          return "PROGRESSIVE";
+        default:
+          return "Unknown";
+    }
+}
+
+string GetVideoSamplingStruct(SDI_SAMPLING_STRUCT type)
+{
+    switch (type)
+    {
+        case SDI_SAMPLING_422_YCbCr:
+          return "422_YCbCr";
+        case SDI_SAMPLING_444_YCbCr:
+          return "444_YCbCr";
+        case SDI_SAMPLING_444_RGB:
+          return "444_RGB";
+        case SDI_SAMPLING_420_YCbCr:
+          return "420_YCbCr";
+        case SDI_SAMPLING_4224_YCbCrA:
+          return "4224_YCbCrA";
+        case SDI_SAMPLING_4444_YCbCrA:
+          return "4444_YCbCrA";
+        case SDI_SAMPLING_4444_RGBA:
+          return "4444_RGBA";
+        case SDI_SAMPLING_4224_YCbCrD:
+          return "4224_YCbCrD";
+        case SDI_SAMPLING_4444_YCbCrD:
+          return "4444_YCbCrD";
+        case SDI_SAMPLING_4444_RGBD:
+          return "4444_RGBD";
+        case SDI_SAMPLING_444_XYZ:
+          return "444_XYZ";
+        default:
+          return "Unknown";
+    }
+}
+
+string GetVideoBitDepth(SDI_BIT_DEPTH type)
+{
+    switch (type)
+    {
+        case SDI_BIT_DEPTH_8BIT:
+          return "8bit";
+        case SDI_BIT_DEPTH_10BIT:
+          return "10bit";
+        case SDI_BIT_DEPTH_12BIT:
+          return "12bit";
+        default:
+          return "Unknown";
+    }
+}
+
+//vga
+string GetVideoSyncType(BYTE type)
+{
+    switch (type)
+    {
+        case VIDEO_SYNC_ALL:
+          return "ALL";
+        case VIDEO_SYNC_HS_VS:
+          return "HS_VS";
+        case VIDEO_SYNC_CS:
+          return "CS";
+        case VIDEO_SYNC_EMBEDDED:
+          return "EMBEDDED";
+        default:
+          return "Unknown";
+    }
+}
+
+//cvbs
+string GetVideoSDStandard(MWCAP_SD_VIDEO_STANDARD type)
+{
+    switch (type)
+    {
+        case MWCAP_SD_VIDEO_NONE:
+          return "NONE";
+        case MWCAP_SD_VIDEO_NTSC_M:
+          return "NTSC_M";
+        case MWCAP_SD_VIDEO_NTSC_433:
+          return "NTSC_433";
+        case MWCAP_SD_VIDEO_PAL_M:
+          return "PAL_M";
+        case MWCAP_SD_VIDEO_PAL_60:
+          return "PAL_60";
+        case MWCAP_SD_VIDEO_PAL_COMBN:
+          return "PAL_COMBN";
+        case MWCAP_SD_VIDEO_PAL_BGHID:
+          return "PAL_BGHID";
+        case MWCAP_SD_VIDEO_SECAM:
+          return "SECAM";
+        case MWCAP_SD_VIDEO_SECAM_60:
+          return "SECAM_60";
+        default:
+          return "Unknown";
+    }
+}
+
+string GetVideoInputType(DWORD type)
+{
+    switch (type)
+    {
+        case MWCAP_VIDEO_INPUT_TYPE_NONE:
+          return "None";
+        case MWCAP_VIDEO_INPUT_TYPE_HDMI:
+          return "HDMI";
+        case MWCAP_VIDEO_INPUT_TYPE_VGA:
+          return "VGA";
+        case MWCAP_VIDEO_INPUT_TYPE_SDI:
+          return "SDI";
+        case MWCAP_VIDEO_INPUT_TYPE_COMPONENT:
+          return "COMPONENT";
+        case MWCAP_VIDEO_INPUT_TYPE_CVBS:
+          return "CVBS";
+        case MWCAP_VIDEO_INPUT_TYPE_YC:
+          return "YC";
+        default:
+          return "Unknown";
+    }
+}
+
+void ListInputs(void)
+{
+    HCHANNEL hChannel = NULL;
+
+    MWRefreshDevice();
+    int num_channels = MWGetChannelCount();
+    int board = -1;
+    int idx;
+
+    for (idx = 0; idx < num_channels; ++idx)
+    {
+        char path[128] = { 0 };
+
+        if (hChannel != NULL)
+            MWCloseChannel(hChannel);
+
+        MWGetDevicePath(idx, path);
+        hChannel = MWOpenChannelByPath(path);
+        if (hChannel == NULL)
+        {
+            cerr << "ERROR: failed to open input " << idx << "\n";
+            continue;
+        }
+
+        MWCAP_CHANNEL_INFO videoInfo = { 0 };
+
+        if (MW_SUCCEEDED != MWGetChannelInfo(hChannel, &videoInfo))
+        {
+            cerr << "ERROR: failed to get channel info for input "
+                 << idx << "\n";
+            continue;
+        }
+
+        if (videoInfo.byBoardIndex != board)
+        {
+            cerr << "Board: " << static_cast<int>(videoInfo.byBoardIndex)
+                 << ", Product: " << videoInfo.szProductName
+                 << ", SerialNo: " << videoInfo.szBoardSerialNo
+                 << "\n";
+            board = videoInfo.byBoardIndex;
+        }
+        cerr << "[" << static_cast<int>(videoInfo.byChannelIndex) + 1
+             << "] ";
+
+        MW_RESULT xr;
+
+        MWCAP_VIDEO_SIGNAL_STATUS vStatus;
+        MWCAP_INPUT_SPECIFIC_STATUS status;
+        xr = MWGetInputSpecificStatus(hChannel, &status);
+
+        if (xr == MW_SUCCEEDED &&
+            MWGetVideoSignalStatus(hChannel, &vStatus) == MW_SUCCEEDED)
+        {
+            if (!status.bValid)
+            {
+                cerr << "No signal\n";
+                continue;
+            }
+
+            cerr << "Video Signal " << GetVideoSignal(vStatus.state);
+            cerr << ": " << GetVideoInputType(status.dwVideoInputType);
+
+            if (status.dwVideoInputType == MWCAP_VIDEO_INPUT_TYPE_HDMI)
+            {
+                cerr << ", HDCP: " << (status.hdmiStatus.bHDCP ? "Yes"
+                                      : "No")
+
+                     << ", Mode: "
+                     << static_cast<int>(status.hdmiStatus.bHDMIMode)
+                     << ", Bit Depth: "
+                     << static_cast<int>(status.hdmiStatus.byBitDepth)
+                     << "\n";
+            }
+            else if (status.dwVideoInputType == MWCAP_VIDEO_INPUT_TYPE_SDI)
+            {
+                cerr << ", Type: " << GetVideoSDIType(status.sdiStatus.sdiType)
+                     << ", Scan Fmt: "
+                     << GetVideoScanFmt(status.sdiStatus.sdiScanningFormat)
+                     << ", Bit depth: "
+                     << GetVideoBitDepth(status.sdiStatus.sdiBitDepth)
+                     << ", Sampling: "
+                     << GetVideoSamplingStruct(status.sdiStatus.sdiSamplingStruct)
+                     << "\n";
+            }
+            else if (status.dwVideoInputType == MWCAP_VIDEO_INPUT_TYPE_VGA)
+            {
+                double dFrameDuration =
+                    (status.vgaComponentStatus.syncInfo.bInterlaced == TRUE)
+                    ? (double)20000000
+                    / status.vgaComponentStatus.syncInfo.dwFrameDuration
+                    : (double)10000000
+                    / status.vgaComponentStatus.syncInfo.dwFrameDuration;
+
+                cerr << ", ScanType: "
+                     << GetVideoSyncType(status.vgaComponentStatus.syncInfo.bySyncType)
+                     << ", bHSPolarity: "
+                     << status.vgaComponentStatus.syncInfo.bHSPolarity
+                     << ", bVSPolarity: "
+                     << status.vgaComponentStatus.syncInfo.bVSPolarity
+                     << ", Interlaced: "
+                     << status.vgaComponentStatus.syncInfo.bInterlaced
+                     << ", FrameDuration: " << dFrameDuration
+                     << "\n";
+            }
+            else if (status.dwVideoInputType == MWCAP_VIDEO_INPUT_TYPE_CVBS) {
+                cerr << ", Standard: "
+                     << GetVideoSDStandard(status.cvbsYcStatus.standard)
+                     << ", b50Hz: " << status.cvbsYcStatus.b50Hz
+                     << "\n";
+            }
+
+            double dFrameDuration = (vStatus.bInterlaced == TRUE)
+                                    ? (double)20000000
+                                    / vStatus.dwFrameDuration
+                                    : (double)10000000
+                                    / vStatus.dwFrameDuration;
+
+            cerr << "    " << vStatus.cx << "x" << vStatus.cy
+                 << (vStatus.bInterlaced ? "i" : "p")
+                 << dFrameDuration;
+
+            cerr << " [x:" << vStatus.x
+                 << ", y:" << vStatus.y << "] "
+                 << "total (" << vStatus.cxTotal << "x"
+                 << vStatus.cyTotal << ") "
+                 << "aspect " << vStatus.nAspectX << ":"
+                 << vStatus.nAspectY
+                 << " " << GetVideoColorName(vStatus.colorFormat)
+                 << "\n";
+        }
+
+
+        // Audio Signal Status
+        MWCAP_AUDIO_SIGNAL_STATUS aStatus;
+        xr = MWGetAudioSignalStatus(hChannel, &aStatus);
+        if (xr == MW_SUCCEEDED)
+        {
+            cerr << "    Audio Signal "
+                 << (aStatus.bChannelStatusValid ? "Valid" : "Invalid");
+            if (!aStatus.bChannelStatusValid)
+            {
+                cerr << "\n";
+                continue;
+            }
+
+            cerr << ", Channels:";
+            for (int i = 0; i < 4; ++i)
+            {
+                if (aStatus.wChannelValid & (0x01 << i))
+                    cerr << " " << (i * 2 + 1) << "&" << (i * 2 + 2);
+            }
+            cerr << ", LPCM: " << (aStatus.bLPCM ? "Yes" : "No")
+                 << ", BPS: " << static_cast<int>(aStatus.cBitsPerSample)
+                 << ", Sample Rate: " << aStatus.dwSampleRate
+                 << "\n";
+        }
+    }
+
+    if (hChannel != NULL)
+        MWCloseChannel(hChannel);
 }
 
 bool ReadEDID(HCHANNEL hChannel, const string & edid_file)
@@ -1076,7 +1475,7 @@ void show_help(string_view app)
          << "--input (-i)      : input idx, *required*. Starts at 1.\n"
          << "--verbose (-v)    : message verbose level. 0=completely quiet.\n"
          << "--mux (-m)        : capture audio and video and mux into TS.\n"
-         << "--lookahead (-l)  : How many frames to 'look ahead' (default 32)\n"
+         << "--lookahead (-a)  : How many frames to 'look ahead' (default 32)\n"
          << "--read-edid (-r)  : Read EDID info for input to file.\n"
          << "--write-edid (-w) : Write EDID info from file to input.\n"
          << "--get-volume (-g) : Display volume settings for each channel of input.\n"
@@ -1129,15 +1528,16 @@ int main(int argc, char* argv[])
     string      video_codec = "hevc_nvenc";
     int         verbose = 1;
 
-    bool        get_volume = false;
-    int         set_volume = -1;
+    bool        get_volume  = false;
+    int         set_volume  = -1;
 
-    bool        do_capture = false;
-    bool        read_edid  = false;
-    bool        write_edid = false;
+    bool        list_inputs = false;
+    bool        do_capture  = false;
+    bool        read_edid   = false;
+    bool        write_edid  = false;
 
-    int         look_ahead = 32;
-    bool        no_audio = false;
+    int         look_ahead  = 32;
+    bool        no_audio    = false;
 
     vector<string_view> args(argv + 1, argv + argc);
 
@@ -1148,7 +1548,11 @@ int main(int argc, char* argv[])
             show_help(app_name);
             return 0;
         }
-        else if (*iter == "-l" || *iter == "--lookahead")
+        else if (*iter == "-l" || *iter == "--list-inputs")
+        {
+            list_inputs = true;
+        }
+        else if (*iter == "-a" || *iter == "--lookahead")
         {
             if (!string_to_int(*(++iter), look_ahead, "lookahead"))
                 exit(1);
@@ -1216,6 +1620,12 @@ int main(int argc, char* argv[])
         cerr << "have InitilizeFailed\n";
         return -1;
     }
+
+    if (list_inputs)
+        ListInputs();
+
+    if (devIndex < 1)
+        return 0;
 
     HCHANNEL channel_handle = open_channel(verbose, devIndex - 1,
                                            boardId);
