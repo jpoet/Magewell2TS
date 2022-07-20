@@ -41,6 +41,7 @@
  */
 
 #include <iostream>
+#include <iomanip>
 #include <cstring>
 #include <sys/eventfd.h>
 #include <sys/select.h>
@@ -480,6 +481,8 @@ void ListInputs(void)
                     / status.vgaComponentStatus.syncInfo.dwFrameDuration
                     : (double)10000000
                     / status.vgaComponentStatus.syncInfo.dwFrameDuration;
+                dFrameDuration = static_cast<int>(dFrameDuration * 100)
+                                 / 100.0;
 
                 cerr << ", ScanType: "
                      << GetVideoSyncType(status.vgaComponentStatus.syncInfo.bySyncType)
@@ -504,6 +507,8 @@ void ListInputs(void)
                                     / vStatus.dwFrameDuration
                                     : (double)10000000
                                     / vStatus.dwFrameDuration;
+            dFrameDuration = static_cast<int>(dFrameDuration * 100)
+                             / 100.0;
 
             cerr << "    " << vStatus.cx << "x" << vStatus.cy
                  << (vStatus.bInterlaced ? "i" : "p")
@@ -541,7 +546,8 @@ void ListInputs(void)
             }
             cerr << ", LPCM: " << (aStatus.bLPCM ? "Yes" : "No")
                  << ", BPS: " << static_cast<int>(aStatus.cBitsPerSample)
-                 << ", Sample Rate: " << aStatus.dwSampleRate
+                 << ", Sample Rate: "
+                 << aStatus.dwSampleRate
                  << "\n";
         }
     }
