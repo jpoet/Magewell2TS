@@ -90,7 +90,9 @@ Ubuntu:
 sudo apt-get install build-essential libv4l-dev
 ```
 
-FFmpeg is also required. Due to this project avoiding deprecated elements in FFmpeg, the "master" or "trunk" version of FFmpeg is currently required. If your platform supplies a development version of the "trunk" version then use it, otherwise you will have to build from source:
+FFmpeg is also required. Due to this project avoiding deprecated elements in FFmpeg, at least version 5.1 is required. If your platform supplies a development package of the 5.1 version then you can use it, otherwise you will have to build from source. You will need to build from source if you want EAC3 detection to work since a patch must be applied.
+
+### Building FFmpeg
 
 Remember to include support for nVidia GPUs when building FFmpeg.
 
