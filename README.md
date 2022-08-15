@@ -87,7 +87,7 @@ sudo dnf install -y make gcc gcc-c++ kernel-devel libstdc++-devel libv4l-devel
 
 Ubuntu:
 ```
-sudo apt-get install build-essential libv4l-dev
+sudo apt-get install build-essential libv4l-dev cmake libudev-dev nvidia-cuda-toolkit
 ```
 
 FFmpeg is also required. Due to this project avoiding deprecated elements in FFmpeg, at least version 5.1 is required. If your platform supplies a development package of the 5.1 version then you can use it, otherwise you will have to build from source. You will need to build from source if you want EAC3 detection to work since a patch must be applied.
@@ -192,8 +192,6 @@ WantedBy=multi-user.target
 ```
 That will load the eac3 EDID and set the volume level to 85. Enable it:
 ```
-systemctl enable MagewellPro.service
+systemctl enable MagewellEDID.service
 ```
 Those commands will now be invoked on each boot.
-
-
