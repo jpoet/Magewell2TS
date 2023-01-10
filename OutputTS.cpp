@@ -158,7 +158,8 @@ int PktQueue::Pop(uint8_t *dest, size_t len)
             return len;
         }
 
-        memcpy(dest, &((*Iprev).data.data()[(*Iprev).data.size() - m_remainder]),
+        memcpy(dest,
+               &((*Iprev).data.data()[(*Iprev).data.size() - m_remainder]),
                m_remainder);
 
         if (m_verbose > 3)
@@ -673,13 +674,18 @@ bool OutputTS::write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
     int ret;
     AVPacket * pkt = ost->tmp_pkt;
 
+#if 0
     /* av_rescale_q apparantly will sometimes "floor" the pts instead
-     * of round it up. */
+     * of round it up resulting in a collision */
     if (ost->prev_pts >= frame->pts)
         ++frame->pts;
+#else
+    if (ost->prev_pts >= frame->pts)
+        cerr << "\nprev PTS " << ost->prev_pts
+             << " new PTS " << frame->pts << "\n\n";
+#endif
 
     ost->prev_pts = frame->pts;
-
 
     // send the frame to the encoder
     ret = avcodec_send_frame(c, frame);
@@ -707,8 +713,19 @@ bool OutputTS::write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
             return false;
         }
 
-        /* rescale output packet timestamp values from codec to stream timebase */
+        /* rescale output packet timestamp values from codec to stream
+         * timebase */
+#if 0
         av_packet_rescale_ts(pkt, c->time_base, st->time_base);
+#else
+        pkt->pts = av_rescale_q_rnd(pkt->pts, c->time_base, st->time_base,
+                                    (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
+        pkt->dts = av_rescale_q_rnd(pkt->dts, c->time_base, st->time_base,
+                                    (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
+
+        pkt->duration = av_rescale_q(pkt->duration, c->time_base,
+                                     st->time_base);
+#endif
 
         pkt->stream_index = st->index;
 
@@ -777,7 +794,7 @@ void OutputTS::add_stream(OutputStream *ost, AVFormatContext *oc,
     switch ((*codec)->type) {
         case AVMEDIA_TYPE_AUDIO:
           ost->enc->sample_fmt  = (*codec)->sample_fmts ?
-                           (*codec)->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
+                                  (*codec)->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
           ost->enc->bit_rate    = 192000;
           ost->enc->sample_rate = 48000;
           if ((*codec)->supported_samplerates)
@@ -809,15 +826,17 @@ void OutputTS::add_stream(OutputStream *ost, AVFormatContext *oc,
           /* Resolution must be a multiple of two. */
           ost->enc->width    = m_input_width;
           ost->enc->height   = m_input_height;
-          /* timebase: This is the fundamental unit of time (in seconds) in terms
-           * of which frame timestamps are represented. For fixed-fps content,
-           * timebase should be 1/framerate and timestamp increments should be
-           * identical to 1. */
+          /* timebase: This is the fundamental unit of time (in
+           * seconds) in terms of which frame timestamps are
+           * represented. For fixed-fps content, timebase should be
+           * 1/framerate and timestamp increments should be identical
+           * to 1. */
           ost->st->time_base = AVRational{m_input_frame_rate.den,
               m_input_frame_rate.num};
           ost->enc->time_base       = ost->st->time_base;
-
-//          ost->enc->gop_size      = 12; /* emit one intra frame every twelve frames at most */
+#if 0
+          ost->enc->gop_size      = 12; /* emit one intra frame every twelve frames at most */
+#endif
           ost->enc->pix_fmt       = STREAM_PIX_FMT;
 
           if (m_verbose > 2)
@@ -856,8 +875,8 @@ void OutputTS::close_stream(AVFormatContext *oc, OutputStream *ost)
 /* audio output */
 
 AVFrame *OutputTS::alloc_audio_frame(enum AVSampleFormat sample_fmt,
-                                  const AVChannelLayout *channel_layout,
-                                  int sample_rate, int nb_samples)
+                                     const AVChannelLayout *channel_layout,
+                                     int sample_rate, int nb_samples)
 {
     AVFrame *frame = av_frame_alloc();
     int ret;
@@ -884,7 +903,7 @@ AVFrame *OutputTS::alloc_audio_frame(enum AVSampleFormat sample_fmt,
 }
 
 void OutputTS::open_audio(AVFormatContext *oc, const AVCodec *codec,
-                       OutputStream *ost, AVDictionary *opt_arg)
+                          OutputStream *ost, AVDictionary *opt_arg)
 {
     AVCodecContext *c;
     int nb_samples;
@@ -1064,7 +1083,7 @@ bool OutputTS::open_spdif(void)
                 }
 
                 sz = m_packet_queue.Pop(reinterpret_cast<uint8_t *>(buf),
-                                          BURST_HEADER_SIZE);
+                                        BURST_HEADER_SIZE);
 
                 uint16_t *p = reinterpret_cast<uint16_t *>(buf);
 
@@ -1101,10 +1120,10 @@ bool OutputTS::open_spdif(void)
         {
             if (m_verbose > 0)
             {
-                            cerr << "Did not find SPDIF header in first "
-                                 << null_cnt + data_cnt << " bytes"
-                                 << " (nulls: " << null_cnt
-                                 << " data: " << data_cnt << ")\n";
+                cerr << "Did not find SPDIF header in first "
+                     << null_cnt + data_cnt << " bytes"
+                     << " (nulls: " << null_cnt
+                     << " data: " << data_cnt << ")\n";
             }
             return false;
         }
@@ -1334,9 +1353,17 @@ bool OutputTS::write_pcm_frame(AVFormatContext *oc, OutputStream *ost)
     }
 
     frame = ost->frame;
+#if 0
     frame->pts = av_rescale_q(m_packet_queue.TimeStamp(),
                               m_input_time_base,
                               c->time_base);
+#else
+    frame->pts = av_rescale_q_rnd(m_packet_queue.TimeStamp(),
+                                  m_input_time_base,
+                                  c->time_base,
+                                  static_cast<AVRounding>(AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX));
+#endif
+
     ost->samples_count += dst_nb_samples;
 
     return write_frame(oc, c, ost->st, frame, ost);
@@ -1418,7 +1445,8 @@ bool OutputTS::write_audio_frame(AVFormatContext *oc, OutputStream *ost)
 /**************************************************************/
 /* video output */
 
-AVFrame *OutputTS::alloc_picture(enum AVPixelFormat pix_fmt, int width, int height)
+AVFrame *OutputTS::alloc_picture(enum AVPixelFormat pix_fmt,
+                                 int width, int height)
 {
     AVFrame *picture;
     int ret;
@@ -1442,7 +1470,7 @@ AVFrame *OutputTS::alloc_picture(enum AVPixelFormat pix_fmt, int width, int heig
 }
 
 void OutputTS::open_video(AVFormatContext *oc, const AVCodec *codec,
-                       OutputStream *ost, AVDictionary *opt_arg)
+                          OutputStream *ost, AVDictionary *opt_arg)
 {
     int ret;
     AVCodecContext *c = ost->enc;
@@ -1465,6 +1493,7 @@ void OutputTS::open_video(AVFormatContext *oc, const AVCodec *codec,
     av_opt_set_int(c->priv_data, "surfaces", 50, 0);
 
     av_opt_set_int(c->priv_data, "bf", 0, 0);
+    av_opt_set_int(c->priv_data, "b_ref_mode", 0, 0);
 
     /* open the codec */
     ret = avcodec_open2(c, codec, &opt);

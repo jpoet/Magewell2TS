@@ -88,7 +88,7 @@ class OutputTS
 
         AVFrame *frame;
         AVFrame *tmp_frame;
-        int64_t  prev_pts;
+        int64_t  prev_pts        {-1};
 
         AVPacket *tmp_pkt;
 

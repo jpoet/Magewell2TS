@@ -811,7 +811,7 @@ void *audio_capture(void * param1, int param2, void * param3)
             if (MWWaitEvent(notify_event, 1000) <= 0)
             {
                 if (verbose > 1)
-                    cerr << "wait notify error or timeout\n";
+                    cerr << "Audio wait notify error or timeout\n";
                 continue;
             }
 
@@ -1038,8 +1038,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
             if (MWWaitEvent(hNotifyEvent, 1000) <= 0)
             {
                 if (verbose > 0)
-                    cerr << "Error:wait notify error or timeout\n";
-                break;
+                    cerr << "Video wait notify error or timeout\n";
+                continue;
             }
 
             ULONGLONG ullStatusBits = 0;
