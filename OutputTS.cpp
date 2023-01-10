@@ -674,8 +674,6 @@ bool OutputTS::write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
     int ret;
     AVPacket * pkt = ost->tmp_pkt;
 
-    /* av_rescale_q apparantly will sometimes "floor" the pts instead
-     * of round it up resulting in a collision */
     if (ost->prev_pts >= frame->pts)
         ++frame->pts;
     ost->prev_pts = frame->pts;
@@ -708,19 +706,11 @@ bool OutputTS::write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
 
         /* rescale output packet timestamp values from codec to stream
          * timebase */
-#if 0
+#if 1
         av_packet_rescale_ts(pkt, c->time_base, st->time_base);
-#else
+#else // AV_ROUND_NEAR_INF seems to cause bad AV sync issues.
         pkt->pts = av_rescale_q_rnd(pkt->pts, c->time_base, st->time_base,
-                                    (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
-
-#if 0 // This seems to cause DTS > PTS errors
-        pkt->dts = av_rescale_q_rnd(pkt->dts, c->time_base, st->time_base,
-                                    (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
-
-        pkt->duration = av_rescale_q(pkt->duration, c->time_base,
-                                     st->time_base);
-#endif
+                   static_cast<AVRounding>(AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX));
 #endif
 
         pkt->stream_index = st->index;
@@ -1349,7 +1339,7 @@ bool OutputTS::write_pcm_frame(AVFormatContext *oc, OutputStream *ost)
     }
 
     frame = ost->frame;
-#if 0
+#if 1
     frame->pts = av_rescale_q(m_packet_queue.TimeStamp(),
                               m_input_time_base,
                               c->time_base);
@@ -1357,7 +1347,7 @@ bool OutputTS::write_pcm_frame(AVFormatContext *oc, OutputStream *ost)
     frame->pts = av_rescale_q_rnd(m_packet_queue.TimeStamp(),
                                   m_input_time_base,
                                   c->time_base,
-                                  static_cast<AVRounding>(AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX));
+                    static_cast<AVRounding>(AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX));
 #endif
 
     ost->samples_count += dst_nb_samples;
@@ -1562,8 +1552,9 @@ AVFrame *OutputTS::get_video_frame(OutputStream *ost, uint8_t * data,
            ost->enc->width * ost->enc->height / 4);
 
 
-    ost->frame->pts = av_rescale_q(timestamp, m_input_time_base,
-                                   ost->enc->time_base);
+    ost->frame->pts = av_rescale_q_rnd(timestamp, m_input_time_base,
+                                       ost->enc->time_base,
+                      static_cast<AVRounding>(AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX));
 
     ost->next_pts = timestamp + 1;
 
