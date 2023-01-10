@@ -82,7 +82,7 @@ git clone https://github.com/jpoet/Magewell2TS.git
 ## Dependencies
 Fedora:
 ```
-sudo dnf install -y make gcc gcc-c++ kernel-devel libstdc++-devel libv4l-devel
+sudo dnf install -y make gcc gcc-c++ libstdc++-devel libv4l-devel patch kernel-devel
 ```
 
 Ubuntu:
