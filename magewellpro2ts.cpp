@@ -812,6 +812,7 @@ void *audio_capture(void * param1, int param2, void * param3)
             {
                 if (verbose > 1)
                     cerr << "wait notify error or timeout\n";
+                continue;
             }
 
             if (MW_SUCCEEDED != MWGetNotifyStatus(channel_handle,
