@@ -674,17 +674,10 @@ bool OutputTS::write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
     int ret;
     AVPacket * pkt = ost->tmp_pkt;
 
-#if 0
     /* av_rescale_q apparantly will sometimes "floor" the pts instead
      * of round it up resulting in a collision */
     if (ost->prev_pts >= frame->pts)
         ++frame->pts;
-#else
-    if (ost->prev_pts >= frame->pts)
-        cerr << "\nprev PTS " << ost->prev_pts
-             << " new PTS " << frame->pts << "\n\n";
-#endif
-
     ost->prev_pts = frame->pts;
 
     // send the frame to the encoder
@@ -720,11 +713,14 @@ bool OutputTS::write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
 #else
         pkt->pts = av_rescale_q_rnd(pkt->pts, c->time_base, st->time_base,
                                     (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
+
+#if 0 // This seems to cause DTS > PTS errors
         pkt->dts = av_rescale_q_rnd(pkt->dts, c->time_base, st->time_base,
                                     (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
 
         pkt->duration = av_rescale_q(pkt->duration, c->time_base,
                                      st->time_base);
+#endif
 #endif
 
         pkt->stream_index = st->index;
