@@ -64,10 +64,14 @@ class PktQueue
 class OutputTS
 {
   public:
+    enum EncoderType { UNKNOWN, NV, VAAPI };
+
     OutputTS(int verbose, const std::string & video_codec_name,
-             int look_ahead, bool force_stereo);
+             int look_ahead, bool no_audio,
+             const std::string & device, const std::string & driver);
     ~OutputTS(void);
 
+    EncoderType encoderType(void) const { return m_encoderType; }
     void setAudioParams(int num_channels, int bytes_per_sample,
                         int samples_per_frame);
     void setVideoParams(int width, int height, bool interlaced,
@@ -80,6 +84,7 @@ class OutputTS
     // a wrapper around a single output AVStream
     using OutputStream = struct {
         AVStream *st;
+        AVBufferRef    *hw_device_ctx  {nullptr};
         AVCodecContext *enc;
 
         /* pts of the next frame that will be generated */
@@ -127,13 +132,21 @@ class OutputTS
     // Video output
     static AVFrame *alloc_picture(enum AVPixelFormat pix_fmt,
                                   int width, int height);
-    void open_video(AVFormatContext *oc, const AVCodec *codec,
-                    OutputStream *ost, AVDictionary *opt_arg);
-    AVFrame *get_video_frame(OutputStream *ost, uint8_t * pImage,
-                             uint32_t imageSize, int64_t timestamp);
-    int write_video_frame(AVFormatContext *oc, OutputStream *ost,
-                          uint8_t * pImage, uint32_t imageSize,
-                          int64_t timestamp);
+    bool open_nvidia(const AVCodec *codec, OutputStream *ost,
+                     AVDictionary *opt_arg);
+    bool open_vaapi(const AVCodec *codec, OutputStream *ost,
+                    AVDictionary *opt_arg);
+    bool nv_encode(AVFormatContext *oc,
+                   OutputStream *ost, uint8_t * pImage,
+                   uint32_t imageSize, int64_t timestamp);
+    bool vaapi_encode(AVFormatContext *oc,
+                      OutputStream *ost, uint8_t * pImage,
+                      uint32_t imageSize, int64_t timestamp);
+    bool write_video_frame(AVFormatContext *oc, OutputStream *ost,
+                           uint8_t * pImage, uint32_t imageSize,
+                           int64_t timestamp);
+
+    EncoderType     m_encoderType  { UNKNOWN };
 
     PktQueue         m_packet_queue;
 
@@ -167,8 +180,9 @@ class OutputTS
     AVChannelLayout  m_channel_layout;
     bool             m_no_audio             {false};
 
-
     std::string      m_video_codec_name        {"hevc_nvenc"};
+    std::string      m_device;
+    std::string      m_driver;
     int              m_look_ahead              {-1};
     int              m_input_width             {1280};
     int              m_input_height            {720};

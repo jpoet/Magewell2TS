@@ -58,6 +58,7 @@
 #include <MWFOURCC.h>
 #include <LibMWCapture/MWCapture.h>
 #include <libavutil/rational.h>
+#include <libavutil/pixfmt.h>
 
 #include "OutputTS.h"
 #include "version.h"
@@ -917,6 +918,17 @@ bool video_capture_loop(HCHANNEL  hChannel,
     MWCAP_VIDEO_DEINTERLACE_MODE mode;
     DWORD notifyBufferMode;
     LONGLONG llTotalTime = 0LL;
+    DWORD dwFourcc = MWFOURCC_I420;
+
+    if (out2ts.encoderType() == OutputTS::VAAPI)
+        dwFourcc = MWFOURCC_NV12;
+    else if (out2ts.encoderType() == OutputTS::NV)
+        dwFourcc = MWFOURCC_I420;
+    else
+    {
+        cerr << "Failed to determine best magewell pixel format.\n";
+        return false;
+    }
 
     while (g_running)
     {
@@ -934,8 +946,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
         MWCAP_VIDEO_SIGNAL_STATUS videoSignalStatus;
         MWGetVideoSignalStatus(hChannel, &videoSignalStatus);
 
-//        DWORD dwFourcc = MWFOURCC_BGR24;
-        DWORD dwFourcc = MWFOURCC_I420;
         DWORD dwMinStride = FOURCC_CalcMinStride(dwFourcc,
                                                  videoSignalStatus.cx, 4);
         DWORD dwImageSize = FOURCC_CalcImageSize(dwFourcc,
@@ -1469,25 +1479,42 @@ void save_volume(HCHANNEL channel_handle, int verbose, int volume_level)
 
 void show_help(string_view app)
 {
-    cerr << app << " <--board id> --input id <--edid 'filename'> "
-         << "<--verbose level> "
-         << "<--read-edid 'filename'> "
-         << "<--write-edid 'filename'> <--get-volume> <--set-volume val> "
-         << "<--mux> <--lookahead frames> <--no-audio>"
+    cerr << app
+         << " <--help> "
+         << " <--verbose level>"
+         << " --input id"
+         << " <--board id> "
+         << " <--device 'dev_name'>"
+         << " <--driver 'driver_name'>"
+         << " <--get-volume>"
+         << " <--list-inputs>"
+         << " <--lookahead frames>"
+         << " <--mux>"
+         << " <--no-audio>"
+         << " <--read-edid 'filename'>"
+         << " <--set-volume val>"
+         << " <--video-codec 'codec_name'>"
+         << " <--write-edid 'filename'>"
          << endl;
 
-    cerr << "\n";
+    cerr << "\n"
+         << "Defaults in []:\n"
+         << "\n";
 
-    cerr << "--board (-b)      : board id, if you have more than one.\n"
-         << "--input (-i)      : input idx, *required*. Starts at 1.\n"
-         << "--verbose (-v)    : message verbose level. 0=completely quiet.\n"
-         << "--mux (-m)        : capture audio and video and mux into TS.\n"
-         << "--lookahead (-a)  : How many frames to 'look ahead' (default 32)\n"
-         << "--read-edid (-r)  : Read EDID info for input to file.\n"
-         << "--write-edid (-w) : Write EDID info from file to input.\n"
-         << "--get-volume (-g) : Display volume settings for each channel of input.\n"
-         << "--set-volume (-s) : Set volume for all channels of the input.\n"
-         << "--no-audio (-n)   : Only capture video.\n";
+    cerr << "--board (-b)       : board id, if you have more than one [0]\n"
+         << "--device (-e)      : vaapi device (e.g. /dev/dri/renderD129) [/dev/dri/renderD128]\n"
+         << "--driver (-d)      : vaapi driver (e.g. i965) [iHD]\n"
+         << "--get-volume (-g)  : Display volume settings for each channel of input\n"
+         << "--input (-i)       : input idx, *required*. Starts at 1\n"
+         << "--list-inputs (l)  : List capture card inputs\n"
+         << "--lookahead (-a)   : How many frames to 'look ahead' [32]\n"
+         << "--mux (-m)         : capture audio and video and mux into TS [false]\n"
+         << "--no-audio (-n)    : Only capture video. [false]\n"
+         << "--read-edid (-r)   : Read EDID info for input to file\n"
+         << "--set-volume (-s)  : Set volume for all channels of the input\n"
+         << "--verbose (-v)     : message verbose level. 0=completely quiet [1]\n"
+         << "--video-codec (-c) : Video codec name (e.g. hevc_vaapi, h264_nvenc) [hevc_nvenc]\n"
+         << "--write-edid (-w)  : Write EDID info from file to input\n";
 
     cerr << "\n"
          << "Video encoding is done at 'constant quality' and will adjust \n"
@@ -1504,7 +1531,10 @@ void show_help(string_view app)
          << "\t" << app << " -i 3 -w ProCaptureHDMI-EAC3.bin -m\n"
          << "\n"
          << "\tSet Volume of input 1 to max and capture to TS:\n"
-         << "\t" << app << " -i 1 -s 100 -m\n";
+         << "\t" << app << " -i 1 -s 100 -m\n"
+         << "\n"
+         << "\tUse the i965 vaapi driver to encode h264 video and pipe it to mpv:\n"
+         << "\t" << app << " ./magewellpro2ts -i 1 -m -n -c h264_vaapi -d i965 | mpv -\n";
 
     cerr << "\nNOTE: setting EDID does not survive a reboot.\n";
 }
@@ -1533,7 +1563,9 @@ int main(int argc, char* argv[])
     string_view app_name = argv[0];
     string      edid_file;
     string      video_codec = "hevc_nvenc";
-    int         verbose = 1;
+    string      driver      = "iHD";
+    string      device      = "/dev/dri/renderD128";
+    int         verbose     = 1;
 
     bool        get_volume  = false;
     int         set_volume  = -1;
@@ -1605,6 +1637,14 @@ int main(int argc, char* argv[])
         {
             no_audio = true;
         }
+        else if (*iter == "-d" || *iter == "--driver")
+        {
+            driver = *(++iter);
+        }
+        else if (*iter == "-e" || *iter == "--device")
+        {
+            device = *(++iter);
+        }
         else if (*iter == "-v" || *iter == "--verbose")
         {
             if (iter + 1 == args.end())
@@ -1654,7 +1694,8 @@ int main(int argc, char* argv[])
 
     if (do_capture)
     {
-        OutputTS out2ts(verbose, video_codec, look_ahead, no_audio);
+        OutputTS out2ts(verbose, video_codec, look_ahead, no_audio,
+                        device, driver);
 
         if (!capture(channel_handle, verbose, out2ts, no_audio))
             return -1;
