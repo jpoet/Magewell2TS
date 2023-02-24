@@ -112,12 +112,12 @@ It is probably best to build Intel vaapi libs from source:
 mkdir -p ~/src/Intel
 cd ~/src/Intel
 sudo dnf install -y libva-devel libva-intel-driver \
-     libva-vdpau-driver libdrm-devel
+     libva-vdpau-driver libdrm-devel intel-media-driver
 git clone git@github.com:intel/intel-vaapi-driver.git
 cd intel-vaapi-driver
 ./autogen.sh
 ./configure
-make
+make -j16
 sudo make install
 ```
 

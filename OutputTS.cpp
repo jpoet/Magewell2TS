@@ -456,7 +456,10 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     else if (m_video_codec_name.find("nvenc") != string::npos)
         m_encoderType = EncoderType::NV;
     else
+    {
         m_encoderType = EncoderType::UNKNOWN;
+        cerr << "'" << m_video_codec_name << "' not supported.\n";
+    }
 }
 
 void OutputTS::open_streams(void)
@@ -1772,16 +1775,16 @@ bool OutputTS::write_video_frame(AVFormatContext *oc, OutputStream *ost,
 bool OutputTS::Write(uint8_t * pImage, uint32_t imageSize,
                      int64_t timestamp)
 {
-    write_video_frame(m_output_format_context,
-                      &m_video_stream, pImage, imageSize,
-                      timestamp);
-
     if (!m_no_audio)
     {
         while (m_video_stream.next_pts >= m_audio_stream.next_pts)
             if (!write_audio_frame(m_output_format_context, &m_audio_stream))
                 break;
     }
+
+    write_video_frame(m_output_format_context,
+                      &m_video_stream, pImage, imageSize,
+                      timestamp);
 
     return false;
 }
