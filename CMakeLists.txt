@@ -50,9 +50,15 @@ pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
     libavutil>=57
     )
 
+pkg_check_modules(vpl IMPORTED_TARGET
+  vpl
+  )
 
-message(STATUS "Magewell include lib: ${MAGEWELL_LIBRARIES}")
-#print_all_variables()
+add_compile_definitions(VPL_VERSION=${vpl_VERSION})
+
+message(STATUS "VPL: ${VPL_VERSION}")
+
+# print_all_variables()
 
 target_include_directories(magewellpro2ts PUBLIC
                            "${PROJECT_BINARY_DIR}"
