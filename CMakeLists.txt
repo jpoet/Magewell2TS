@@ -11,6 +11,10 @@ cmake_minimum_required(VERSION 3.10)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/helpers")
 
+SET(CMAKE_COLOR_MAKEFILE ON)
+SET(CMAKE_VERBOSE_MAKEFILE ON)
+SET(CMAKE_COLOR_DIAGNOSTICS ON)
+
 # specify the C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
@@ -38,25 +42,34 @@ find_package(udev REQUIRED)
 #find_package(FFmpeg COMPONENTS AVCODEC AVFORMAT AVUTIL AVDEVICE REQUIRED)
 
 
+
 set(ENV{PKG_CONFIG_PATH} "$ENV{PKG_CONFIG_PATH}:/opt/ffmpeg/lib/pkgconfig")
 find_package(PkgConfig)
+
+
 pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
-    libavdevice
-    libavfilter
-    libavformat
+    libavdevice>=57
+    libavformat>=57
     libavcodec>=57
+    libavutil>=57
     libswresample
     libswscale
-    libavutil>=57
+    libavfilter
     )
 
-pkg_check_modules(vpl IMPORTED_TARGET
+string(COMPARE LESS ${LIBAV_libavdevice_VERSION} "60" result)
+if(result)
+  message(WARNING "libavdevice version >= 60 required for EAC3/SPDIF support. Found " ${LIBAV_libavdevice_VERSION})
+endif()
+
+
+pkg_check_modules(VPL IMPORTED_TARGET
   vpl
   )
 
-add_compile_definitions(VPL_VERSION=${vpl_VERSION})
+add_compile_definitions(VPL_VERSION=${VPL_VERSION})
 
-message(STATUS "VPL: ${VPL_VERSION}")
+message(STATUS "VPL: " ${VPL_VERSION})
 
 # print_all_variables()
 
@@ -77,3 +90,15 @@ target_link_libraries(magewellpro2ts PRIVATE
 )
 
 install(TARGETS magewellpro2ts DESTINATION /usr/local/bin)
+
+ADD_CUSTOM_TARGET(debug
+  COMMAND ${CMAKE_COMMAND} -DCMAKE_BUILD_TYPE=Debug ${CMAKE_SOURCE_DIR}
+  COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target all
+  COMMENT "Switch CMAKE_BUILD_TYPE to Debug"
+  )
+
+ADD_CUSTOM_TARGET(release
+  COMMAND ${CMAKE_COMMAND} -DCMAKE_BUILD_TYPE=Release ${CMAKE_SOURCE_DIR}
+  COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target all
+  COMMENT "Switch CMAKE_BUILD_TYPE to Release"
+  )
