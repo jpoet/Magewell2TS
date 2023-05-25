@@ -583,7 +583,7 @@ bool ReadEDID(HCHANNEL hChannel, const string & edid_file)
 
     MW_RESULT xr;
 
-    FILE * pFile = nullptr;
+    FILE* pFile = nullptr;
     pFile=fopen(edid_file.c_str(), "wb");
     if (pFile == nullptr)
     {
@@ -646,7 +646,7 @@ bool WriteEDID(HCHANNEL hChannel, const string & edid_file)
 
     MW_RESULT xr;
 
-    FILE * pFile = nullptr;
+    FILE* pFile = nullptr;
     pFile=fopen(edid_file.c_str(), "rb");
     if (pFile == nullptr)
     {
@@ -670,7 +670,7 @@ bool WriteEDID(HCHANNEL hChannel, const string & edid_file)
 }
 
 
-void *audio_capture(void * param1, int param2, void * param3)
+void* audio_capture(void* param1, int param2, void* param3)
 {
     int       bytes_per_sample;
     MWCAP_PTR notify_event = 0;
@@ -678,7 +678,7 @@ void *audio_capture(void * param1, int param2, void * param3)
     DWORD     input_count = 0;
     int       cur_channels;
     int       channel_offset;
-    unsigned char *capture_buf = nullptr;
+    unsigned char* capture_buf = nullptr;
     MWCAP_AUDIO_SIGNAL_STATUS audio_signal_status;
     int err_cnt = 0;
     int cnt     = 0;
@@ -687,9 +687,9 @@ void *audio_capture(void * param1, int param2, void * param3)
     long long int tm_last     = 0LL;
     uint64_t audio_frame_rate = 0LL;
 
-    HCHANNEL * channel_handle = reinterpret_cast<HCHANNEL *>(param1);
+    HCHANNEL* channel_handle = reinterpret_cast<HCHANNEL* >(param1);
     int        verbose        = param2;
-    OutputTS * out2ts         = reinterpret_cast<OutputTS *>(param3);
+    OutputTS* out2ts         = reinterpret_cast<OutputTS* >(param3);
 
     notify_event = MWCreateEvent();
     if (notify_event == 0)
@@ -806,7 +806,7 @@ void *audio_capture(void * param1, int param2, void * param3)
         while (g_running)
         {
             ULONGLONG notify_status = 0;
-            unsigned char *audio_frame;
+            unsigned char* audio_frame;
             MWCAP_AUDIO_CAPTURE_FRAME macf;
 
             if (MWWaitEvent(notify_event, 1000) <= 0)
@@ -911,7 +911,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
                         HNOTIFY   hNotify,
                         MWCAP_PTR hNotifyEvent,
                         MWCAP_PTR hCaptureEvent,
-                        uint8_t * pbImage,
+                        uint8_t* pbImage,
                         int       verbose,
                         OutputTS & out2ts)
 {
@@ -1102,7 +1102,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             MW_RESULT ret = MWCaptureVideoFrameToVirtualAddressEx
                             (hChannel,
                              videoBufferInfo.iNewestBufferedFullFrame,
-                             (unsigned char *)pbImage,
+                             reinterpret_cast<unsigned char* >(pbImage),
                              dwImageSize,
                              dwMinStride,
                              0,
@@ -1170,7 +1170,7 @@ bool video_capture(HCHANNEL hChannel, int verbose, OutputTS & out2ts)
     HNOTIFY   hNotify       = 0;
     MWCAP_PTR hNotifyEvent  = 0;
     MWCAP_PTR hCaptureEvent = 0;
-    uint8_t * pbImage       = nullptr;
+    uint8_t* pbImage       = nullptr;
 
     hCaptureEvent = MWCreateEvent();
     if (hCaptureEvent == 0)

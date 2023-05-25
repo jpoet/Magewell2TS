@@ -77,10 +77,10 @@ std::string AV_ts2timestr(int64_t ts, AVRational* tb)
     return os.str();
 }
 
-static void log_packet(const AVFormatContext *fmt_ctx,
-                       const AVPacket *pkt)
+static void log_packet(const AVFormatContext* fmt_ctx,
+                       const AVPacket* pkt)
 {
-    AVRational *time_base = &fmt_ctx->streams[pkt->stream_index]->time_base;
+    AVRational* time_base = &fmt_ctx->streams[pkt->stream_index]->time_base;
 
     cerr << "[" << pkt->stream_index << "] pts: " << pkt->pts
          << " pts_time: " << AV_ts2timestr(pkt->pts, time_base)
@@ -97,7 +97,7 @@ PktQueue::PktQueue(int verbose)
 {
 }
 
-int PktQueue::Push(uint8_t *buf, size_t len, int64_t timestamp)
+int PktQueue::Push(uint8_t* buf, size_t len, int64_t timestamp)
 {
     const std::unique_lock<std::mutex> lock(m_mutex);
 
@@ -119,7 +119,7 @@ int PktQueue::Push(uint8_t *buf, size_t len, int64_t timestamp)
     return len;
 }
 
-int PktQueue::Pop(uint8_t *dest, size_t len)
+int PktQueue::Pop(uint8_t* dest, size_t len)
 {
     const std::unique_lock<std::mutex> lock(m_mutex);
 
@@ -419,22 +419,22 @@ void PktQueue::Clear(void)
     m_remainder = 0;
 }
 
-static int read_packet(void *opaque, uint8_t *buf, int buf_size)
+static int read_packet(void* opaque, uint8_t* buf, int buf_size)
 {
-    PktQueue * q = reinterpret_cast<PktQueue *>(opaque);
+    PktQueue* q = reinterpret_cast<PktQueue* >(opaque);
 
     return q->Pop(buf, buf_size);
 }
 
-static int write_packet(void *opaque, uint8_t *buf, int buf_size)
+static int write_packet(void* opaque, uint8_t* buf, int buf_size)
 {
     cerr << "Write packet not implemented but it needs to be!\n";
     exit(1);
 }
 
-static int64_t seek_packet(void *opaque, int64_t offset, int whence)
+static int64_t seek_packet(void* opaque, int64_t offset, int whence)
 {
-    PktQueue * q = reinterpret_cast<PktQueue *>(opaque);
+    PktQueue* q = reinterpret_cast<PktQueue* >(opaque);
 
     return q->Seek(offset, whence);
 }
@@ -464,12 +464,12 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
 
 void OutputTS::open_streams(void)
 {
-    const char *filename;
+    const char* filename;
     int ret;
     int idx;
 
-    AVDictionary *opt = NULL;
-    const AVCodec * video_codec =
+    AVDictionary* opt = NULL;
+    const AVCodec* video_codec =
         avcodec_find_encoder_by_name(m_video_codec_name.c_str());
     if (video_codec)
     {
@@ -492,7 +492,7 @@ void OutputTS::open_streams(void)
         return;
     }
 
-    const AVCodec * audio_codec = nullptr;
+    const AVCodec* audio_codec = nullptr;
     if (!m_no_audio)
     {
         audio_codec =
@@ -665,7 +665,7 @@ OutputTS::~OutputTS(void)
     avformat_free_context(m_output_format_context);
 }
 
-void OutputTS::addPacket(uint8_t *buf, int buf_size, int64_t timestamp)
+void OutputTS::addPacket(uint8_t* buf, int buf_size, int64_t timestamp)
 {
     m_packet_queue.Push(buf, buf_size, timestamp);
 }
@@ -677,13 +677,13 @@ std::string OutputTS::AVerr2str(int code)
     return string(astr);
 }
 
-bool OutputTS::write_frame(AVFormatContext *fmt_ctx,
-                           AVCodecContext *c,
-                           AVStream *st, AVFrame *frame,
-                           OutputStream *ost)
+bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
+                           AVCodecContext* c,
+                           AVStream* st, AVFrame* frame,
+                           OutputStream* ost)
 {
     int ret;
-    AVPacket * pkt = ost->tmp_pkt;
+    AVPacket* pkt = ost->tmp_pkt;
 
     if (ost->prev_pts >= frame->pts)
         ++frame->pts;
@@ -763,10 +763,10 @@ bool OutputTS::write_frame(AVFormatContext *fmt_ctx,
 }
 
 /* Add an output stream. */
-void OutputTS::add_stream(OutputStream *ost, AVFormatContext *oc,
-                          const AVCodec **codec)
+void OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
+                          const AVCodec* *codec)
 {
-    AVCodecContext *codec_context;
+    AVCodecContext* codec_context;
     int idx;
 
     ost->tmp_pkt = av_packet_alloc();
@@ -863,7 +863,7 @@ void OutputTS::add_stream(OutputStream *ost, AVFormatContext *oc,
         ost->enc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 }
 
-void OutputTS::close_stream(AVFormatContext *oc, OutputStream *ost)
+void OutputTS::close_stream(AVFormatContext* oc, OutputStream* ost)
 {
     avcodec_free_context(&ost->enc);
     av_frame_free(&ost->frame);
@@ -876,11 +876,11 @@ void OutputTS::close_stream(AVFormatContext *oc, OutputStream *ost)
 /**************************************************************/
 /* audio output */
 
-AVFrame *OutputTS::alloc_audio_frame(enum AVSampleFormat sample_fmt,
-                                     const AVChannelLayout *channel_layout,
+AVFrame* OutputTS::alloc_audio_frame(enum AVSampleFormat sample_fmt,
+                                     const AVChannelLayout* channel_layout,
                                      int sample_rate, int nb_samples)
 {
-    AVFrame *frame = av_frame_alloc();
+    AVFrame* frame = av_frame_alloc();
     int ret;
 
     if (!frame) {
@@ -904,13 +904,13 @@ AVFrame *OutputTS::alloc_audio_frame(enum AVSampleFormat sample_fmt,
     return frame;
 }
 
-void OutputTS::open_audio(AVFormatContext *oc, const AVCodec *codec,
-                          OutputStream *ost, AVDictionary *opt_arg)
+void OutputTS::open_audio(AVFormatContext* oc, const AVCodec* codec,
+                          OutputStream* ost, AVDictionary* opt_arg)
 {
-    AVCodecContext *c;
+    AVCodecContext* c;
     int nb_samples;
     int ret;
-    AVDictionary *opt = NULL;
+    AVDictionary* opt = NULL;
 
     c = ost->enc;
 
@@ -1003,7 +1003,7 @@ bool OutputTS::open_spdif_context(void)
     }
 
     m_spdif_avio_context_buffer =
-        reinterpret_cast<uint8_t *>(av_malloc(m_spdif_avio_context_buffer_size));
+        reinterpret_cast<uint8_t* >(av_malloc(m_spdif_avio_context_buffer_size));
     if (!m_spdif_avio_context_buffer)
     {
         if (m_verbose > 0)
@@ -1016,7 +1016,7 @@ bool OutputTS::open_spdif_context(void)
     m_spdif_avio_context = avio_alloc_context(m_spdif_avio_context_buffer,
                                               m_spdif_avio_context_buffer_size,
                                               0,
-                                              reinterpret_cast<void *>(&m_packet_queue),
+                                              reinterpret_cast<void* >(&m_packet_queue),
                                               read_packet,
                                               write_packet,
                                               seek_packet);
@@ -1031,7 +1031,7 @@ bool OutputTS::open_spdif_context(void)
 
     m_spdif_format_context->pb = m_spdif_avio_context;
 
-    const AVInputFormat *spdif_fmt = av_find_input_format("spdif");
+    const AVInputFormat* spdif_fmt = av_find_input_format("spdif");
 
 
 
@@ -1051,7 +1051,7 @@ bool OutputTS::open_spdif_context(void)
 bool OutputTS::open_spdif(void)
 {
     /* retrieve stream information */
-    const AVInputFormat * fmt = nullptr;
+    const AVInputFormat* fmt = nullptr;
     int ret;
     int idx;
     uint8_t buf[BURST_HEADER_SIZE];
@@ -1084,10 +1084,10 @@ bool OutputTS::open_spdif(void)
                     continue;
                 }
 
-                sz = m_packet_queue.Pop(reinterpret_cast<uint8_t *>(buf),
+                sz = m_packet_queue.Pop(reinterpret_cast<uint8_t* >(buf),
                                         BURST_HEADER_SIZE);
 
-                uint16_t *p = reinterpret_cast<uint16_t *>(buf);
+                uint16_t* p = reinterpret_cast<uint16_t* >(buf);
 
                 // If nulls, ignore them.
                 if (p[0] == 0 && p[1] == 0)
@@ -1181,7 +1181,7 @@ bool OutputTS::open_spdif(void)
 
         int audio_stream_idx = 0;
 
-        AVStream * audio_stream =
+        AVStream* audio_stream =
             m_spdif_format_context->streams[audio_stream_idx];
         if (audio_stream == nullptr)
         {
@@ -1279,12 +1279,12 @@ bool OutputTS::AudioReady(void)
     return (!m_audio_detect && m_audio_channels >= 0);
 }
 
-AVFrame *OutputTS::get_pcm_audio_frame(OutputStream *ost)
+AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
 {
-    AVFrame *frame = ost->tmp_frame;
+    AVFrame* frame = ost->tmp_frame;
 
     int j, i;
-    uint8_t *q = (uint8_t*)frame->data[0];
+    uint8_t* q = (uint8_t*)frame->data[0];
     size_t bytes;
     size_t got;
 
@@ -1307,10 +1307,10 @@ AVFrame *OutputTS::get_pcm_audio_frame(OutputStream *ost)
     return frame;
 }
 
-bool OutputTS::write_pcm_frame(AVFormatContext *oc, OutputStream *ost)
+bool OutputTS::write_pcm_frame(AVFormatContext* oc, OutputStream* ost)
 {
-    AVCodecContext *c = ost->enc;
-    AVFrame * frame = get_pcm_audio_frame(ost);
+    AVCodecContext* c = ost->enc;
+    AVFrame* frame = get_pcm_audio_frame(ost);
     int dst_nb_samples = 0;
     int ret = 0;
 
@@ -1344,7 +1344,8 @@ bool OutputTS::write_pcm_frame(AVFormatContext *oc, OutputStream *ost)
     /* convert to destination format */
     ret = swr_convert(ost->swr_ctx,
                       ost->frame->data, dst_nb_samples,
-                      (const uint8_t **)frame->data, frame->nb_samples);
+                      const_cast<const uint8_t** >(frame->data),
+                      frame->nb_samples);
     if (ret < 0)
     {
         if (m_verbose > 0)
@@ -1371,12 +1372,12 @@ bool OutputTS::write_pcm_frame(AVFormatContext *oc, OutputStream *ost)
     return write_frame(oc, c, ost->st, frame, ost);
 }
 
-bool OutputTS::write_bitstream_frame(AVFormatContext *oc, OutputStream *ost)
+bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
 {
     if (m_packet_queue.Size() < m_audio_block_size * 12)
         return false;
 
-    AVPacket * pkt = av_packet_alloc();
+    AVPacket* pkt = av_packet_alloc();
     if (!pkt)
     {
         if (m_verbose > 0)
@@ -1432,7 +1433,7 @@ bool OutputTS::write_bitstream_frame(AVFormatContext *oc, OutputStream *ost)
 /*
  * encode one audio frame and send it to the muxer
  */
-bool OutputTS::write_audio_frame(AVFormatContext *oc, OutputStream *ost)
+bool OutputTS::write_audio_frame(AVFormatContext* oc, OutputStream* ost)
 {
     std::unique_lock<std::mutex> lock(m_detecting_mutex);
 
@@ -1447,10 +1448,10 @@ bool OutputTS::write_audio_frame(AVFormatContext *oc, OutputStream *ost)
 /**************************************************************/
 /* video output */
 
-AVFrame *OutputTS::alloc_picture(enum AVPixelFormat pix_fmt,
+AVFrame* OutputTS::alloc_picture(enum AVPixelFormat pix_fmt,
                                  int width, int height)
 {
-    AVFrame *picture;
+    AVFrame* picture;
     int ret;
 
     picture = av_frame_alloc();
@@ -1465,7 +1466,7 @@ AVFrame *OutputTS::alloc_picture(enum AVPixelFormat pix_fmt,
     ret = av_frame_get_buffer(picture, 0);
     if (ret < 0)
     {
-        const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(pix_fmt);
+        const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(pix_fmt);
         cerr << "Could not allocate " << desc->name
              << " video frame of " << width << "x" << height
              << " : " << AV_ts2str(ret) << endl;
@@ -1475,12 +1476,12 @@ AVFrame *OutputTS::alloc_picture(enum AVPixelFormat pix_fmt,
     return picture;
 }
 
-bool OutputTS::open_nvidia(const AVCodec *codec,
-                           OutputStream *ost, AVDictionary *opt_arg)
+bool OutputTS::open_nvidia(const AVCodec* codec,
+                           OutputStream* ost, AVDictionary* opt_arg)
 {
     int ret;
-    AVCodecContext *ctx = ost->enc;
-    AVDictionary *opt = NULL;
+    AVCodecContext* ctx = ost->enc;
+    AVDictionary* opt = NULL;
 
     av_dict_copy(&opt, opt_arg, 0);
 
@@ -1551,17 +1552,17 @@ bool OutputTS::open_nvidia(const AVCodec *codec,
     return true;
 }
 
-bool OutputTS::open_vaapi(const AVCodec *codec,
-                          OutputStream *ost, AVDictionary *opt_arg)
+bool OutputTS::open_vaapi(const AVCodec* codec,
+                          OutputStream* ost, AVDictionary* opt_arg)
 {
     int ret;
-    AVCodecContext *ctx = ost->enc;
-    AVDictionary *opt = nullptr;
-    AVBufferRef *hw_frames_ref;
-    AVHWFramesContext *frames_ctx = nullptr;
+    AVCodecContext* ctx = ost->enc;
+    AVDictionary* opt = nullptr;
+    AVBufferRef* hw_frames_ref;
+    AVHWFramesContext* frames_ctx = nullptr;
 
     static string envstr = "LIBVA_DRIVER_NAME=" + m_driver;
-    char *env = envstr.data();
+    char* env = envstr.data();
     putenv(env);
 
     av_dict_copy(&opt, opt_arg, 0);
@@ -1590,7 +1591,7 @@ bool OutputTS::open_vaapi(const AVCodec *codec,
         m_error = true;
         return false;
     }
-    frames_ctx = (AVHWFramesContext *)(hw_frames_ref->data);
+    frames_ctx = reinterpret_cast<AVHWFramesContext* >(hw_frames_ref->data);
     frames_ctx->format    = AV_PIX_FMT_VAAPI;
     frames_ctx->sw_format = AV_PIX_FMT_NV12;
     frames_ctx->width     = m_input_width;
@@ -1647,13 +1648,13 @@ bool OutputTS::open_vaapi(const AVCodec *codec,
     return true;
 }
 
-bool OutputTS::nv_encode(AVFormatContext *oc,
-                         OutputStream *ost,
-                         uint8_t * data,
+bool OutputTS::nv_encode(AVFormatContext* oc,
+                         OutputStream* ost,
+                         uint8_t* data,
                          uint32_t imageSize,
                          int64_t timestamp)
 {
-    AVCodecContext *ctx = ost->enc;
+    AVCodecContext* ctx = ost->enc;
 
 #if 0
     /* when we pass a frame to the encoder, it may keep a reference to it
@@ -1684,15 +1685,15 @@ bool OutputTS::nv_encode(AVFormatContext *oc,
     return write_frame(oc, ost->enc, ost->st, ost->frame, ost);
 }
 
-bool OutputTS::vaapi_encode(AVFormatContext *oc,
-                            OutputStream *ost,
-                            uint8_t * data,
+bool OutputTS::vaapi_encode(AVFormatContext* oc,
+                            OutputStream* ost,
+                            uint8_t* data,
                             uint32_t imageSize,
                             int64_t timestamp)
 {
     int ret;
-    AVCodecContext *ctx = ost->enc;
-    AVFrame        *hw_frame = nullptr;
+    AVCodecContext* ctx = ost->enc;
+    AVFrame       * hw_frame = nullptr;
 
 #if 0
     /* when we pass a frame to the encoder, it may keep a reference to it
@@ -1760,8 +1761,8 @@ bool OutputTS::vaapi_encode(AVFormatContext *oc,
  * encode one video frame and send it to the muxer
  * return 1 when encoding is finished, 0 otherwise
  */
-bool OutputTS::write_video_frame(AVFormatContext *oc, OutputStream *ost,
-                                uint8_t * pImage, uint32_t imageSize,
+bool OutputTS::write_video_frame(AVFormatContext* oc, OutputStream* ost,
+                                uint8_t* pImage, uint32_t imageSize,
                                 int64_t timestamp)
 {
     if (m_encoderType == EncoderType::NV)
@@ -1772,7 +1773,7 @@ bool OutputTS::write_video_frame(AVFormatContext *oc, OutputStream *ost,
     return false;
 }
 
-bool OutputTS::Write(uint8_t * pImage, uint32_t imageSize,
+bool OutputTS::Write(uint8_t* pImage, uint32_t imageSize,
                      int64_t timestamp)
 {
     if (!m_no_audio)

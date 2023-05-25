@@ -20,8 +20,8 @@ class PktQueue
     PktQueue(int verbose);
     ~PktQueue(void) { ; }
 
-    int Push(uint8_t *buf, size_t len, int64_t timestamp);
-    int Pop(uint8_t *dest, size_t len);
+    int Push(uint8_t* buf, size_t len, int64_t timestamp);
+    int Pop(uint8_t* dest, size_t len);
     int Seek(int64_t offset, int whence);
 
     void SetEOL(bool val);
@@ -77,81 +77,81 @@ class OutputTS
     void setVideoParams(int width, int height, bool interlaced,
                         AVRational time_base, AVRational frame_rate);
     bool AudioReady(void);
-    void addPacket(uint8_t *buf, int buf_size, int64_t timestamp);
-    bool Write(uint8_t * pImage, uint32_t imageSize, int64_t timestamp);
+    void addPacket(uint8_t* buf, int buf_size, int64_t timestamp);
+    bool Write(uint8_t*  pImage, uint32_t imageSize, int64_t timestamp);
 
   private:
     // a wrapper around a single output AVStream
     using OutputStream = struct {
-        AVStream *st;
-        AVBufferRef    *hw_device_ctx  {nullptr};
-        AVCodecContext *enc;
+        AVStream* st;
+        AVBufferRef*    hw_device_ctx  {nullptr};
+        AVCodecContext* enc;
 
         /* pts of the next frame that will be generated */
         int64_t next_pts;
         int samples_count;
 
-        AVFrame *frame;
-        AVFrame *tmp_frame;
+        AVFrame* frame;
+        AVFrame* tmp_frame;
         int64_t  prev_pts        {-1};
         int64_t  prev_dts        {-1};
 
-        AVPacket *tmp_pkt;
+        AVPacket* tmp_pkt;
 
         float t, tincr, tincr2;
 
-        struct SwsContext *sws_ctx;
-        struct SwrContext *swr_ctx;
+        struct SwsContext* sws_ctx;
+        struct SwrContext* swr_ctx;
     };
 
     void open_streams(void);
 
     static std::string AVerr2str(int code);
 
-    bool write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
-                     AVStream *st, AVFrame *frame, OutputStream *ost);
-    void add_stream(OutputStream *ost, AVFormatContext *oc,
-                    const AVCodec **codec);
-    static void close_stream(AVFormatContext *oc, OutputStream *ost);
+    bool write_frame(AVFormatContext* fmt_ctx, AVCodecContext* c,
+                     AVStream* st, AVFrame* frame, OutputStream* ost);
+    void add_stream(OutputStream* ost, AVFormatContext* oc,
+                    const AVCodec* *codec);
+    static void close_stream(AVFormatContext* oc, OutputStream* ost);
 
     // Audio output
     void detect_audio(void);
-    static AVFrame *alloc_audio_frame(enum AVSampleFormat sample_fmt,
-                                      const AVChannelLayout *channel_layout,
+    static AVFrame* alloc_audio_frame(enum AVSampleFormat sample_fmt,
+                                      const AVChannelLayout* channel_layout,
                                       int sample_rate, int nb_samples);
     bool open_spdif_context(void);
     bool open_spdif(void);
-    static void open_audio(AVFormatContext *oc, const AVCodec *codec,
-                           OutputStream *ost, AVDictionary *opt_arg);
-    AVFrame *get_pcm_audio_frame(OutputStream *ost);
+    static void open_audio(AVFormatContext* oc, const AVCodec* codec,
+                           OutputStream* ost, AVDictionary* opt_arg);
+    AVFrame* get_pcm_audio_frame(OutputStream* ost);
 
-    bool write_pcm_frame(AVFormatContext *oc, OutputStream *ost);
-    bool write_bitstream_frame(AVFormatContext *oc, OutputStream *ost);
-    bool write_audio_frame(AVFormatContext *oc, OutputStream *ost);
+    bool write_pcm_frame(AVFormatContext* oc, OutputStream* ost);
+    bool write_bitstream_frame(AVFormatContext* oc, OutputStream* ost);
+    bool write_audio_frame(AVFormatContext* oc, OutputStream* ost);
 
     // Video output
-    static AVFrame *alloc_picture(enum AVPixelFormat pix_fmt,
+    static AVFrame* alloc_picture(enum AVPixelFormat pix_fmt,
                                   int width, int height);
-    bool open_nvidia(const AVCodec *codec, OutputStream *ost,
-                     AVDictionary *opt_arg);
-    bool open_vaapi(const AVCodec *codec, OutputStream *ost,
-                    AVDictionary *opt_arg);
-    bool nv_encode(AVFormatContext *oc,
-                   OutputStream *ost, uint8_t * pImage,
+    bool open_nvidia(const AVCodec* codec, OutputStream* ost,
+                     AVDictionary* opt_arg);
+    bool open_vaapi(const AVCodec* codec, OutputStream* ost,
+                    AVDictionary* opt_arg);
+    bool nv_encode(AVFormatContext* oc,
+                   OutputStream* ost, uint8_t* pImage,
                    uint32_t imageSize, int64_t timestamp);
-    bool vaapi_encode(AVFormatContext *oc,
-                      OutputStream *ost, uint8_t * pImage,
+    bool vaapi_encode(AVFormatContext* oc,
+                      OutputStream* ost, uint8_t*  pImage,
                       uint32_t imageSize, int64_t timestamp);
-    bool write_video_frame(AVFormatContext *oc, OutputStream *ost,
-                           uint8_t * pImage, uint32_t imageSize,
+    bool write_video_frame(AVFormatContext* oc, OutputStream* ost,
+                           uint8_t*  pImage, uint32_t imageSize,
                            int64_t timestamp);
 
     EncoderType     m_encoderType  { UNKNOWN };
 
     PktQueue         m_packet_queue;
 
-    const AVOutputFormat *fmt   {nullptr};
-    AVFormatContext *m_output_format_context {nullptr};
+    const AVOutputFormat* fmt   {nullptr};
+    AVFormatContext* m_output_format_context {nullptr};
     OutputStream m_video_stream { 0 };
     OutputStream m_audio_stream { 0 };
     int have_video {0};
@@ -170,11 +170,11 @@ class OutputTS
     bool             m_error                {false};
     bool             m_audio_detect         {false};
 
-    AVFormatContext *m_spdif_format_context {nullptr};
-    AVIOContext     *m_spdif_avio_context   {nullptr};
-    uint8_t         *m_spdif_avio_context_buffer  {nullptr};
+    AVFormatContext* m_spdif_format_context {nullptr};
+    AVIOContext*     m_spdif_avio_context   {nullptr};
+    uint8_t*         m_spdif_avio_context_buffer  {nullptr};
     const size_t     m_spdif_avio_context_buffer_size {4096};
-    const AVCodec   *m_spdif_codec          {nullptr};
+    const AVCodec*   m_spdif_codec          {nullptr};
     AVCodecID        m_spdif_codec_id;
     std::string      m_audio_codec_name;
     AVChannelLayout  m_channel_layout;
