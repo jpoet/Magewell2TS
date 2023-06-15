@@ -135,9 +135,14 @@ sudo dnf install -y nasm yasm-devel x264-devel x265-devel \
      libvorbis-devel libvpx-devel numactl-devel faac-devel \
      ladspa-devel libass-devel libbluray-devel gsm-devel \
      opencv-devel openjpeg2-devel soxr-devel libtheora-devel \
-     opencl-headers libomxil-bellagio-devel gstreamer1-vaapi-devel \
-     libvdpau-devel \
+     opencl-headers gstreamer1-vaapi-devel libchromaprint-devel \
+     frei0r-devel \
      ccache gcc
+
+sudo dnf install oneVPL-devel oneVPL-samples intel-media-driver
+
+sudo dnf install libvdpau-devel
+
 sudo dnf install -y intel-media-driver libva libva-utils intel-gpu-tools mesa-dri-drivers
 
 git clone https://git.videolan.org/git/ffmpeg.git
@@ -174,8 +179,9 @@ PKG_CONFIG_PATH="/opt/ffmpeg/lib/pkgconfig" \
   --enable-libx264 \
   --enable-libx265 \
   --enable-openssl \
+  --enable-libvpl
+
   --enable-cuda \
-  --enable-omx
 
 make -j16
 sudo make install
@@ -293,4 +299,10 @@ vainfo: Supported profile and entrypoints
       VAProfileNone                   : VAEntrypointVideoProc
       VAProfileNone                   : VAEntrypointStats
 ... etc.
+```
+
+## Intel Arc
+The Intel Arc GPUs may need a new version of the linux firmware
+```bash
+git clone git://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git
 ```
