@@ -71,7 +71,7 @@ if(NOT PkgConfig_FOUND)
   message(FATAL_ERROR "pkg_config not found. Maybe try `sudo dnf install pkgconfig` or `sudo apt-get install pkg-config`")
 endif()
 
-pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
+pkg_check_modules(LIBAV IMPORTED_TARGET
     libavdevice>=57
     libavformat>=57
     libavcodec>=57
@@ -82,7 +82,7 @@ pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
     )
 
 if(NOT LIBAV_FOUND)
-  message(FATAL_ERROR "ffmpeg development headers not found. Maybe try `sudo dnf install ffmpeg-devel` or `sudo apt-get install ffmpeg-dev`")
+  message(FATAL_ERROR "ffmpeg development headers not found.\nMaybe try `sudo dnf install ffmpeg-devel` or `sudo apt-get install ffmpeg-dev`")
 endif()
 
 string(COMPARE LESS ${LIBAV_libavdevice_VERSION} "60" result)
@@ -93,7 +93,7 @@ endif()
 pkg_check_modules(VPL IMPORTED_TARGET vpl)
 
 if(NOT VPL_FOUND)
-  message("libvpl not found, Intel oneVPL will not be enabled. e.g. `sudo dnf install -y oneVPL-devel`. See: https://github.com/oneapi-src/oneVPL")
+  message("libvpl not found, Intel oneVPL will not be enabled.\nMaybe try `sudo dnf install -y oneVPL-devel`. See: https://github.com/oneapi-src/oneVPL")
 else()
   message(NOTICE "Note: To use oneVPL, ffmpeg needs to be compiled with '--enable-libvpl'")
   target_link_libraries(${TARGET} PkgConfig::VPL)
