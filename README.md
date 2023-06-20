@@ -256,10 +256,10 @@ Description=Load EDID and volume information into Magewell card inputs
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/magewellpro2ts -i 1 -s 85 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStart=/usr/local/bin/magewellpro2ts -i 2 -s 85 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStart=/usr/local/bin/magewellpro2ts -i 3 -s 85 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStart=/usr/local/bin/magewellpro2ts -i 4 -s 85 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStart=/usr/local/bin/magewellpro2ts --wait-for 1 -i 1 -s 85 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStart=/usr/local/bin/magewellpro2ts --wait-for 2 -i 2 -s 85 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStart=/usr/local/bin/magewellpro2ts --wait-for 3 -i 3 -s 85 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStart=/usr/local/bin/magewellpro2ts --wait-for 4 -i 4 -s 85 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
 RemainAfterExit=yes
 
 [Install]

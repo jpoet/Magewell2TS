@@ -1477,6 +1477,28 @@ void save_volume(HCHANNEL channel_handle, int verbose, int volume_level)
         cerr << "Volume set to " << volume_level << " for all channels.\n";
 }
 
+bool wait_for_inputs(int cnt)
+{
+    int idx = 10;
+
+    do
+    {
+        if (MWCaptureInitInstance())
+        {
+            if (MWGetChannelCount() >= cnt)
+            {
+                MWCaptureExitInstance();
+                return true;
+            }
+            MWCaptureExitInstance();
+        }
+        sleep(1);
+    }
+    while (--idx);
+
+    return false;
+}
+
 void show_help(string_view app)
 {
     cerr << app
@@ -1514,7 +1536,8 @@ void show_help(string_view app)
          << "--set-volume (-s)  : Set volume for all channels of the input\n"
          << "--verbose (-v)     : message verbose level. 0=completely quiet [1]\n"
          << "--video-codec (-c) : Video codec name (e.g. hevc_vaapi, h264_nvenc) [hevc_nvenc]\n"
-         << "--write-edid (-w)  : Write EDID info from file to input\n";
+         << "--write-edid (-w)  : Write EDID info from file to input\n"
+         << "--wait-for         : Wait for given number of inputs to be initialized. 10 second timeout\n";
 
     cerr << "\n"
          << "Video encoding is done at 'constant quality' and will adjust \n"
@@ -1645,6 +1668,13 @@ int main(int argc, char* argv[])
         {
             device = *(++iter);
         }
+        else if (*iter == "--wait-for")
+        {
+            int input_count;
+            if (!string_to_int(*(++iter), input_count, "input count"))
+                exit(1);
+            wait_for_inputs(input_count);
+        }
         else if (*iter == "-v" || *iter == "--verbose")
         {
             if (iter + 1 == args.end())
@@ -1662,7 +1692,7 @@ int main(int argc, char* argv[])
         }
     }
 
-    if(!MWCaptureInitInstance())
+    if (!MWCaptureInitInstance())
     {
         cerr << "have InitilizeFailed\n";
         return -1;
