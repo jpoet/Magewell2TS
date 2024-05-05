@@ -727,11 +727,10 @@ bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
         pkt->stream_index = ost->st->index;
 
         while (ost->prev_dts >= pkt->dts)
-        {
             ++pkt->dts;
-            ++pkt->pts;
-        }
         ost->prev_dts = pkt->dts;
+        if (pkt->pts < pkt->dts)
+            pkt->pts = pkt->dts;
 
         /* Write the compressed frame to the media file. */
 
@@ -1687,11 +1686,11 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     av_dict_copy(&opt, opt_arg, 0);
 
     av_opt_set_int(ctx->priv_data, "preset", 3, 0);
-//    av_opt_set(ctx->priv_data, "scenario", "livestreaming", 0);
-    av_opt_set_int(ctx->priv_data, "scenario", 7, 0);
+    av_opt_set(ctx->priv_data, "scenario", "livestreaming", 0);
+//    av_opt_set_int(ctx->priv_data, "scenario", 7, 0);
     av_opt_set_int(ctx->priv_data, "extbrc", 1, 0);
     av_opt_set_int(ctx->priv_data, "look_ahead_depth", 30, 0);
-    ctx->global_quality = 22;
+    ctx->global_quality = 20;
 
     vector<std::string> drivers{ "iHD", "i965" };
     vector<std::string>::iterator Idriver;
