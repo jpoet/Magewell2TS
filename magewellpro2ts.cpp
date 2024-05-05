@@ -920,7 +920,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
     LONGLONG llTotalTime = 0LL;
     DWORD dwFourcc = MWFOURCC_I420;
 
-    if (out2ts.encoderType() == OutputTS::VAAPI)
+    if (out2ts.encoderType() == OutputTS::QSV ||
+        out2ts.encoderType() == OutputTS::VAAPI)
         dwFourcc = MWFOURCC_NV12;
     else if (out2ts.encoderType() == OutputTS::NV)
         dwFourcc = MWFOURCC_I420;
@@ -1507,7 +1508,6 @@ void show_help(string_view app)
          << " --input id"
          << " <--board id> "
          << " <--device 'dev_name'>"
-         << " <--driver 'driver_name'>"
          << " <--get-volume>"
          << " <--list-inputs>"
          << " <--lookahead frames>"
@@ -1525,7 +1525,6 @@ void show_help(string_view app)
 
     cerr << "--board (-b)       : board id, if you have more than one [0]\n"
          << "--device (-e)      : vaapi device (e.g. /dev/dri/renderD129) [/dev/dri/renderD128]\n"
-         << "--driver (-d)      : vaapi driver (e.g. i965) [iHD]\n"
          << "--get-volume (-g)  : Display volume settings for each channel of input\n"
          << "--input (-i)       : input idx, *required*. Starts at 1\n"
          << "--list-inputs (l)  : List capture card inputs\n"
@@ -1557,7 +1556,7 @@ void show_help(string_view app)
          << "\t" << app << " -i 1 -s 100 -m\n"
          << "\n"
          << "\tUse the i965 vaapi driver to encode h264 video and pipe it to mpv:\n"
-         << "\t" << app << " ./magewellpro2ts -i 1 -m -n -c h264_vaapi -d i965 | mpv -\n";
+         << "\t" << app << " ./magewellpro2ts -i 1 -m -n -c h264_vaapi | mpv -\n";
 
     cerr << "\nNOTE: setting EDID does not survive a reboot.\n";
 }
@@ -1586,8 +1585,7 @@ int main(int argc, char* argv[])
     string_view app_name = argv[0];
     string      edid_file;
     string      video_codec = "hevc_nvenc";
-    string      driver      = "iHD";
-    string      device      = "/dev/dri/renderD128";
+    string      device      = "renderD128";
     int         verbose     = 1;
 
     bool        get_volume  = false;
@@ -1660,10 +1658,6 @@ int main(int argc, char* argv[])
         {
             no_audio = true;
         }
-        else if (*iter == "-d" || *iter == "--driver")
-        {
-            driver = *(++iter);
-        }
         else if (*iter == "-e" || *iter == "--device")
         {
             device = *(++iter);
@@ -1725,7 +1719,7 @@ int main(int argc, char* argv[])
     if (do_capture)
     {
         OutputTS out2ts(verbose, video_codec, look_ahead, no_audio,
-                        device, driver);
+                        device);
 
         if (!capture(channel_handle, verbose, out2ts, no_audio))
             return -1;

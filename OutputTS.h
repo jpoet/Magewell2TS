@@ -64,11 +64,11 @@ class PktQueue
 class OutputTS
 {
   public:
-    enum EncoderType { UNKNOWN, NV, VAAPI };
+    enum EncoderType { UNKNOWN, NV, VAAPI, QSV };
 
     OutputTS(int verbose, const std::string & video_codec_name,
              int look_ahead, bool no_audio,
-             const std::string & device, const std::string & driver);
+             const std::string & device);
     ~OutputTS(void);
 
     EncoderType encoderType(void) const { return m_encoderType; }
@@ -109,7 +109,7 @@ class OutputTS
     static std::string AVerr2str(int code);
 
     bool write_frame(AVFormatContext* fmt_ctx, AVCodecContext* c,
-                     AVStream* st, AVFrame* frame, OutputStream* ost);
+                     AVFrame* frame, OutputStream* ost);
     void add_stream(OutputStream* ost, AVFormatContext* oc,
                     const AVCodec* *codec);
     static void close_stream(AVFormatContext* oc, OutputStream* ost);
@@ -136,12 +136,17 @@ class OutputTS
                      AVDictionary* opt_arg);
     bool open_vaapi(const AVCodec* codec, OutputStream* ost,
                     AVDictionary* opt_arg);
+    bool open_qsv(const AVCodec* codec, OutputStream* ost,
+                  AVDictionary* opt_arg);
     bool nv_encode(AVFormatContext* oc,
                    OutputStream* ost, uint8_t* pImage,
                    uint32_t imageSize, int64_t timestamp);
     bool vaapi_encode(AVFormatContext* oc,
                       OutputStream* ost, uint8_t*  pImage,
                       uint32_t imageSize, int64_t timestamp);
+    bool qsv_encode(AVFormatContext* oc,
+                    OutputStream* ost, uint8_t*  pImage,
+                    uint32_t imageSize, int64_t timestamp);
     bool write_video_frame(AVFormatContext* oc, OutputStream* ost,
                            uint8_t*  pImage, uint32_t imageSize,
                            int64_t timestamp);
@@ -182,7 +187,7 @@ class OutputTS
 
     std::string      m_video_codec_name        {"hevc_nvenc"};
     std::string      m_device;
-    std::string      m_driver;
+//    std::string      m_driver;
     int              m_look_ahead              {-1};
     int              m_input_width             {1280};
     int              m_input_height            {720};
