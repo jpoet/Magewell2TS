@@ -1696,7 +1696,7 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     vector<std::string>::iterator Idriver;
     for (Idriver = drivers.begin(); Idriver != drivers.end(); ++Idriver)
     {
-        static string envstr = "LIBVA_DRIVER_NAME=" + *Idriver;
+        string envstr = "LIBVA_DRIVER_NAME=" + *Idriver;
         char* env = envstr.data();
         putenv(env);
 
