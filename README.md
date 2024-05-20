@@ -3,6 +3,7 @@
 [//]: # (Install retext from your distribution then ./README.md will look prettier.)
  
 # Magewell PRO capture to Transport Stream
+## Please note: I no longer own one of these devices and therfore am unable to continue develop this code. Hopefully someone will step forward to continue the development.
 
 This application reads audio and video from a Magewell PRO capture card and muxes them into a Transport Stream.
 
