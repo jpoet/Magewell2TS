@@ -1808,83 +1808,11 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
     return write_frame(oc, ost->enc, ost->frame, ost);
 }
 
-bool OutputTS::vaapi_encode(AVFormatContext* oc,
-                            OutputStream* ost,
-                            uint8_t* data,
-                            uint32_t imageSize,
-                            int64_t timestamp)
-{
-    int ret;
-    AVCodecContext* ctx = ost->enc;
-    AVFrame       * hw_frame = nullptr;
-
-#if 0
-    /* when we pass a frame to the encoder, it may keep a reference to it
-     * internally; make sure we do not overwrite it here */
-    if (av_frame_make_writable(ost->frame) < 0)
-    {
-        if (m_verbose > 0)
-        {
-            cerr << "get_video_frame: Make frame writable failed.\n";
-        }
-        exit(1);
-    }
-#endif
-
-    size_t size = ctx->width * ctx->height;
-    memcpy(ost->frame->data[0], data, size);
-    memcpy(ost->frame->data[1], data + size, size / 2);
-
-    if (!(hw_frame = av_frame_alloc()))
-    {
-        cerr << "Failed to allocate hw frame.";
-        m_error = true;
-        return false;
-    }
-
-    if ((ret = av_hwframe_get_buffer(ctx->hw_frames_ctx,
-                                     hw_frame, 0)) < 0)
-    {
-        cerr << "Failed to get hw buffer: "
-             << AV_ts2str(ret) << endl;
-        m_error = true;
-        return false;
-    }
-
-    if (!hw_frame->hw_frames_ctx)
-    {
-        cerr << "Failed to allocate hw frame CTX.\n";
-        m_error = true;
-        return false;
-    }
-
-    if ((ret = av_hwframe_transfer_data(hw_frame,
-                                        ost->frame, 0)) < 0)
-    {
-        cerr << "Error while transferring frame data to surface: "
-             << AV_ts2str(ret) << endl;
-        m_error = true;
-        return false;
-    }
-
-    hw_frame->pts = av_rescale_q_rnd(timestamp, m_input_time_base,
-                                     ctx->time_base,
-        static_cast<AVRounding>(AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX));
-
-    ost->next_timestamp = timestamp + 1;
-
-    ret = write_frame(oc, ost->enc, hw_frame, ost);
-
-    av_frame_free(&hw_frame);
-
-    return ret;
-}
-
-bool OutputTS::qsv_encode(AVFormatContext* oc,
-                          OutputStream* ost,
-                          uint8_t* data,
-                          uint32_t imageSize,
-                          int64_t timestamp)
+bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
+                                OutputStream* ost,
+                                uint8_t* data,
+                                uint32_t imageSize,
+                                int64_t timestamp)
 {
     int ret;
     static AVCodecContext* enc_ctx = ost->enc;
@@ -1982,9 +1910,9 @@ bool OutputTS::write_video_frame(AVFormatContext* oc, OutputStream* ost,
     if (m_encoderType == EncoderType::NV)
         return nv_encode(oc, ost, pImage, imageSize, timestamp);
     else if (m_encoderType == EncoderType::QSV)
-        return qsv_encode(oc, ost, pImage, imageSize, timestamp);
+        return qsv_vaapi_encode(oc, ost, pImage, imageSize, timestamp);
     else if (m_encoderType == EncoderType::VAAPI)
-        return vaapi_encode(oc, ost, pImage, imageSize, timestamp);
+        return qsv_vaapi_encode(oc, ost, pImage, imageSize, timestamp);
 
     return false;
 }

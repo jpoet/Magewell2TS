@@ -143,12 +143,9 @@ class OutputTS
     bool nv_encode(AVFormatContext* oc,
                    OutputStream* ost, uint8_t* pImage,
                    uint32_t imageSize, int64_t timestamp);
-    bool vaapi_encode(AVFormatContext* oc,
-                      OutputStream* ost, uint8_t*  pImage,
-                      uint32_t imageSize, int64_t timestamp);
-    bool qsv_encode(AVFormatContext* oc,
-                    OutputStream* ost, uint8_t*  pImage,
-                    uint32_t imageSize, int64_t timestamp);
+    bool qsv_vaapi_encode(AVFormatContext* oc,
+                          OutputStream* ost, uint8_t*  pImage,
+                          uint32_t imageSize, int64_t timestamp);
     bool write_video_frame(AVFormatContext* oc, OutputStream* ost,
                            uint8_t*  pImage, uint32_t imageSize,
                            int64_t timestamp);
