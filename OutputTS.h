@@ -76,6 +76,7 @@ class OutputTS
                         int samples_per_frame);
     void setVideoParams(int width, int height, bool interlaced,
                         AVRational time_base, AVRational frame_rate);
+
     bool AudioReady(void);
     void addPacket(uint8_t* buf, int buf_size, int64_t timestamp);
     bool Write(uint8_t*  pImage, uint32_t imageSize, int64_t timestamp);
@@ -89,6 +90,7 @@ class OutputTS
 
         /* pts of the next frame that will be generated */
         int64_t next_pts;
+        int64_t next_timestamp;
         int samples_count;
 
         AVFrame* frame;

@@ -426,7 +426,7 @@ static int read_packet(void* opaque, uint8_t* buf, int buf_size)
     return q->Pop(buf, buf_size);
 }
 
-static int write_packet(void* opaque, uint8_t* buf, int buf_size)
+static int write_packet(void* opaque, const uint8_t* buf, int buf_size)
 {
     cerr << "Write packet not implemented but it needs to be!\n";
     exit(1);
@@ -690,10 +690,6 @@ bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
     int ret;
     AVPacket* pkt = ost->tmp_pkt;
 
-    if (ost->prev_pts >= frame->pts)
-        ++frame->pts;
-    ost->prev_pts = frame->pts;
-
     // send the frame to the encoder
     ret = avcodec_send_frame(codec_ctx, frame);
     if (ret < 0)
@@ -720,23 +716,15 @@ bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
             return false;
         }
 
+        pkt->stream_index = ost->st->index;
         /* rescale output packet timestamp values from codec to stream
          * timebase */
         av_packet_rescale_ts(pkt, codec_ctx->time_base, ost->st->time_base);
 
-        pkt->stream_index = ost->st->index;
-
-        while (ost->prev_dts >= pkt->dts)
-            ++pkt->dts;
-        ost->prev_dts = pkt->dts;
-        if (pkt->pts < pkt->dts)
-            pkt->pts = pkt->dts;
-
-        /* Write the compressed frame to the media file. */
-
 #if 0
         log_packet("write_frame", fmt_ctx, pkt);
 #endif
+        /* Write the compressed frame to the media file. */
         ret = av_interleaved_write_frame(fmt_ctx, pkt);
         /* pkt is now blank (av_interleaved_write_frame() takes ownership of
          * its contents and resets pkt), so that no unreferencing is necessary.
@@ -793,7 +781,7 @@ void OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
     }
     ost->enc = codec_context;
 
-    ost->next_pts = 0;
+    ost->next_timestamp = 0;
     switch ((*codec)->type) {
         case AVMEDIA_TYPE_AUDIO:
           ost->enc->sample_fmt  = (*codec)->sample_fmts ?
@@ -1165,7 +1153,7 @@ bool OutputTS::open_spdif(void)
         {
             cerr << "--> Detected fmt '" << fmt->name
                  << "' '" << fmt->long_name
-                 << "' codec: " << fmt->raw_codec_id << endl;
+                ; //                 << "' codec: " << fmt->raw_codec_id << endl;
         }
 
         if (0 > avformat_find_stream_info(m_spdif_format_context, NULL))
@@ -1309,7 +1297,7 @@ AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
     ost->t     += (ost->tincr * frame->nb_samples);
     ost->tincr += (ost->tincr2 * frame->nb_samples);
 
-    ost->next_pts = frame->pts + frame->nb_samples;
+    ost->next_timestamp = frame->pts + frame->nb_samples;
 
     return frame;
 }
@@ -1416,7 +1404,7 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
     pkt->pts = av_rescale_q(m_packet_queue.TimeStamp(),
                             m_input_time_base,
                             ost->st->time_base);
-    ost->next_pts = m_packet_queue.TimeStamp() +
+    ost->next_timestamp = m_packet_queue.TimeStamp() +
                     (ost->frame->nb_samples /* * m_audio_channels */);
 
     pkt->duration = pkt->pts;
@@ -1690,6 +1678,7 @@ bool OutputTS::open_qsv(const AVCodec* codec,
 //    av_opt_set_int(ctx->priv_data, "scenario", 7, 0);
     av_opt_set_int(ctx->priv_data, "extbrc", 1, 0);
     av_opt_set_int(ctx->priv_data, "look_ahead_depth", 30, 0);
+//    av_opt_set_int(ctx->priv_data, "bf", 0, 0);
     ctx->global_quality = 20;
 
     vector<std::string> drivers{ "iHD", "i965" };
@@ -1814,7 +1803,7 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
                                        ctx->time_base,
                       static_cast<AVRounding>(AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX));
 
-    ost->next_pts = timestamp + 1;
+    ost->next_timestamp = timestamp + 1;
 
     return write_frame(oc, ost->enc, ost->frame, ost);
 }
@@ -1882,7 +1871,7 @@ bool OutputTS::vaapi_encode(AVFormatContext* oc,
                                      ctx->time_base,
         static_cast<AVRounding>(AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX));
 
-    ost->next_pts = timestamp + 1;
+    ost->next_timestamp = timestamp + 1;
 
     ret = write_frame(oc, ost->enc, hw_frame, ost);
 
@@ -1898,8 +1887,26 @@ bool OutputTS::qsv_encode(AVFormatContext* oc,
                           int64_t timestamp)
 {
     int ret;
-    AVCodecContext* enc_ctx = ost->enc;
-    AVFrame       * hw_frame = nullptr;
+    static AVCodecContext* enc_ctx = ost->enc;
+    static AVFrame       * hw_frame = nullptr;
+
+    /*
+     * We may need to repeat the previous frame to keep everything in sync
+     */
+    int64_t pts;
+    if (hw_frame != nullptr)
+    {
+        pts = av_rescale_q(timestamp, m_input_time_base,
+                           enc_ctx->time_base);
+        while (ost->next_pts < pts)
+        {
+            hw_frame->pts = ost->next_pts;
+            ++ost->next_pts;
+            ret = write_frame(oc, enc_ctx, hw_frame, ost);
+        }
+        av_frame_free(&hw_frame);
+    }
+
 
 #if 0
     /* when we pass a frame to the encoder, it may keep a reference to it
@@ -1950,13 +1957,16 @@ bool OutputTS::qsv_encode(AVFormatContext* oc,
         return false;
     }
 
-    hw_frame->pts = av_rescale_q(timestamp, m_input_time_base,
-                                 enc_ctx->time_base);
-    ost->next_pts = timestamp + 1;
+    if (ost->next_pts == 0)
+        hw_frame->pts = av_rescale_q(timestamp, m_input_time_base,
+                                     enc_ctx->time_base);
+    else
+        hw_frame->pts = ost->next_pts;
+
+    ost->next_timestamp = timestamp + 1;
+    ost->next_pts = hw_frame->pts + 1;
 
     ret = write_frame(oc, enc_ctx, hw_frame, ost);
-
-    av_frame_free(&hw_frame);
 
     return ret;
 }
