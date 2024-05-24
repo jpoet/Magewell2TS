@@ -426,11 +426,13 @@ static int read_packet(void* opaque, uint8_t* buf, int buf_size)
     return q->Pop(buf, buf_size);
 }
 
+#if 0
 static int write_packet(void* opaque, const uint8_t* buf, int buf_size)
 {
     cerr << "Write packet not implemented but it needs to be!\n";
     exit(1);
 }
+#endif
 
 static int64_t seek_packet(void* opaque, int64_t offset, int whence)
 {
@@ -1013,7 +1015,7 @@ bool OutputTS::open_spdif_context(void)
                                               0,
                                               reinterpret_cast<void* >(&m_packet_queue),
                                               read_packet,
-                                              write_packet,
+                                              0,
                                               seek_packet);
     if (!m_spdif_avio_context)
     {
