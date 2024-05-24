@@ -1248,7 +1248,7 @@ void OutputTS::detect_audio(void)
     }
     else
     {
-        m_audio_codec_name = "aac";
+        m_audio_codec_name = "eac3";
         m_channel_layout = AV_CHANNEL_LAYOUT_STEREO;
         if (m_verbose > 0)
         {
