@@ -1494,17 +1494,22 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
     av_opt_set(ctx->priv_data, "tune", "hq", 0);
     av_opt_set(ctx->priv_data, "rc", "constqp", 0);
 
-    av_opt_set_int(ctx->priv_data, "cq", 16, 0);
+    av_opt_set_int(ctx->priv_data, "cq", 8, 0);
+    av_opt_set_int(ctx->priv_data, "qmin", 0, 0);
+    av_opt_set_int(ctx->priv_data, "qmax", 16, 0);
+
     if (m_look_ahead >= 0)
         av_opt_set_int(ctx->priv_data, "rc-lookahead", m_look_ahead, 0);
     av_opt_set_int(ctx->priv_data, "b", 0, 0);
     av_opt_set_int(ctx->priv_data, "minrate", 4000000, 0);
-    av_opt_set_int(ctx->priv_data, "maxrate", 25000000, 0);
+    av_opt_set_int(ctx->priv_data, "maxrate", 50000000, 0);
     av_opt_set_int(ctx->priv_data, "bufsize", 400000000, 0);
     av_opt_set_int(ctx->priv_data, "surfaces", 50, 0);
 
     av_opt_set_int(ctx->priv_data, "bf", 0, 0);
     av_opt_set_int(ctx->priv_data, "b_ref_mode", 0, 0);
+
+    av_opt_set_int(ctx->priv_data, "temporal-aq", 1, 0);
 
     /* open the codec */
     ret = avcodec_open2(ctx, codec, &opt);
