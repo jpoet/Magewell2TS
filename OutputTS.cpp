@@ -1692,7 +1692,7 @@ bool OutputTS::open_qsv(const AVCodec* codec,
         if ((ret = av_hwdevice_ctx_create(&ost->hw_device_ctx,
                                           AV_HWDEVICE_TYPE_QSV,
                                           m_device.c_str(), opt, 0)) < 0)
-            cerr << "Failed to open VAAPI driver '" << *Idriver << "'\n";
+            cerr << "Failed to open QSV driver '" << *Idriver << "'\n";
         else
             break;
     }
@@ -1779,18 +1779,19 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
 {
     AVCodecContext* ctx = ost->enc;
 
-#if 0
-    /* when we pass a frame to the encoder, it may keep a reference to it
-     * internally; make sure we do not overwrite it here */
-    if (av_frame_make_writable(ost->frame) < 0)
+    int64_t pts = av_rescale_q(timestamp, m_input_time_base,
+                               ctx->time_base);
+    if (ost->next_pts > 0)
     {
-        if (m_verbose > 0)
+        while (ost->next_pts < pts)
         {
-            cerr << "get_video_frame: Make frame writable failed.\n";
+            ost->frame->pts = ost->next_pts++;
+            write_frame(oc, ost->enc, ost->frame, ost);
         }
-        exit(1);
+        ost->frame->pts = ost->next_pts;
     }
-#endif
+    else
+        ost->frame->pts = pts;
 
     // YUV 4:2:0
     size_t size = ctx->width * ctx->height;
@@ -1799,11 +1800,8 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
            data + size, size / 4);
     memcpy(ost->frame->data[2], data + size * 5 / 4, size  / 4);
 
-    ost->frame->pts = av_rescale_q_rnd(timestamp, m_input_time_base,
-                                       ctx->time_base,
-                      static_cast<AVRounding>(AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX));
-
     ost->next_timestamp = timestamp + 1;
+    ost->next_pts = ost->frame->pts + 1;
 
     return write_frame(oc, ost->enc, ost->frame, ost);
 }
@@ -1814,9 +1812,9 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
                                 uint32_t imageSize,
                                 int64_t timestamp)
 {
-    int ret;
-    static AVCodecContext* enc_ctx = ost->enc;
-    static AVFrame       * hw_frame = nullptr;
+    AVCodecContext* enc_ctx = ost->enc;
+    static AVFrame* hw_frame = nullptr;
+    int    ret;
 
     /*
      * We may need to repeat the previous frame to keep everything in sync
@@ -1830,24 +1828,10 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
         {
             hw_frame->pts = ost->next_pts;
             ++ost->next_pts;
-            ret = write_frame(oc, enc_ctx, hw_frame, ost);
+            write_frame(oc, enc_ctx, hw_frame, ost);
         }
         av_frame_free(&hw_frame);
     }
-
-
-#if 0
-    /* when we pass a frame to the encoder, it may keep a reference to it
-     * internally; make sure we do not overwrite it here */
-    if (av_frame_make_writable(ost->frame) < 0)
-    {
-        if (m_verbose > 0)
-        {
-            cerr << "get_video_frame: Make frame writable failed.\n";
-        }
-        exit(1);
-    }
-#endif
 
     size_t size = enc_ctx->width * enc_ctx->height;
     memcpy(ost->frame->data[0], data, size);
@@ -1894,9 +1878,7 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
     ost->next_timestamp = timestamp + 1;
     ost->next_pts = hw_frame->pts + 1;
 
-    ret = write_frame(oc, enc_ctx, hw_frame, ost);
-
-    return ret;
+    return write_frame(oc, enc_ctx, hw_frame, ost);
 }
 
 /*
