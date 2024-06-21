@@ -1157,7 +1157,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 cerr << "Time: " << llTotalTime << endl;
             }
 
-            out2ts.Write(pbImage, dwImageSize, llCurrent);
+            out2ts.VideoFrame(pbImage, dwImageSize, llCurrent);
         }
 
         MWUnpinVideoBuffer(hChannel, (LPBYTE)pbImage);

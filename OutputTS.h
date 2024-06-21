@@ -79,7 +79,8 @@ class OutputTS
 
     bool AudioReady(void);
     void addPacket(uint8_t* buf, int buf_size, int64_t timestamp);
-    bool Write(uint8_t*  pImage, uint32_t imageSize, int64_t timestamp);
+    void Write(void);
+    bool VideoFrame(uint8_t*  pImage, uint32_t imageSize, int64_t timestamp);
 
   private:
     // a wrapper around a single output AVStream
@@ -105,6 +106,14 @@ class OutputTS
         struct SwsContext* sws_ctx;
         struct SwrContext* swr_ctx;
     };
+
+    using vec_t    = std::vector<uint8_t>;
+    using vidpkt_t = struct {
+        int64_t m_timestamp;
+        vec_t   m_data;
+    };
+    using vidque_t = std::deque<vidpkt_t>;
+    vidque_t m_vidqueue;
 
     void open_streams(void);
 
@@ -141,13 +150,16 @@ class OutputTS
     bool open_qsv(const AVCodec* codec, OutputStream* ost,
                   AVDictionary* opt_arg);
     bool nv_encode(AVFormatContext* oc,
-                   OutputStream* ost, uint8_t* pImage,
-                   uint32_t imageSize, int64_t timestamp);
+                   OutputStream* ost,
+                   vec_t& pImage,
+                   int64_t timestamp);
     bool qsv_vaapi_encode(AVFormatContext* oc,
-                          OutputStream* ost, uint8_t*  pImage,
-                          uint32_t imageSize, int64_t timestamp);
-    bool write_video_frame(AVFormatContext* oc, OutputStream* ost,
-                           uint8_t*  pImage, uint32_t imageSize,
+                          OutputStream* ost,
+                          vec_t& pImage,
+                          int64_t timestamp);
+    bool write_video_frame(AVFormatContext* oc,
+                           OutputStream* ost,
+                           vec_t& pImage,
                            int64_t timestamp);
 
     EncoderType     m_encoderType  { UNKNOWN };
@@ -166,8 +178,6 @@ class OutputTS
     int              m_audio_samples_per_frame    {-1};
     int              m_audio_block_size           {-1};
 //    int              m_audio_detect_blocks        {3};
-
-    std::thread      m_audio_detect_thread;
 
     bool             m_bitstream            {false};
     bool             m_init                 {false};
@@ -197,11 +207,17 @@ class OutputTS
 
     int              m_verbose;
 
+    std::thread             m_audio_detect_thread;
     std::condition_variable m_audio_detected;
     std::mutex              m_detect_mutex;
     std::mutex              m_detecting_mutex;
 
     std::mutex              m_mutex;
+
+    std::thread             m_video_ready_thread;
+    std::mutex              m_vidpkt_mutex;
+    std::mutex              m_vid_mutex;
+    std::condition_variable m_vidpkt_ready;
 };
 
 #endif

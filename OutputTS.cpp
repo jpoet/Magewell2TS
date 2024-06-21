@@ -651,6 +651,11 @@ void OutputTS::setVideoParams(int width, int height, bool interlaced,
         cerr << "Video Params set\n";
 
     open_streams();
+
+
+    if (m_video_ready_thread.joinable())
+        m_video_ready_thread.join();
+    m_video_ready_thread = std::thread(&OutputTS::Write, this);
 }
 
 OutputTS::~OutputTS(void)
@@ -1677,11 +1682,12 @@ bool OutputTS::open_qsv(const AVCodec* codec,
 
     av_opt_set_int(ctx->priv_data, "preset", 3, 0);
     av_opt_set(ctx->priv_data, "scenario", "livestreaming", 0);
-//    av_opt_set_int(ctx->priv_data, "scenario", 7, 0);
     av_opt_set_int(ctx->priv_data, "extbrc", 1, 0);
-    av_opt_set_int(ctx->priv_data, "look_ahead_depth", 30, 0);
+    av_opt_set_int(ctx->priv_data, "look_ahead_depth", m_look_ahead, 0);
 //    av_opt_set_int(ctx->priv_data, "bf", 0, 0);
-    ctx->global_quality = 20;
+
+//    ctx->global_quality = 20;
+    ctx->global_quality = 21;
 
     vector<std::string> drivers{ "iHD", "i965" };
     vector<std::string>::iterator Idriver;
@@ -1775,14 +1781,14 @@ bool OutputTS::open_qsv(const AVCodec* codec,
 
 bool OutputTS::nv_encode(AVFormatContext* oc,
                          OutputStream* ost,
-                         uint8_t* data,
-                         uint32_t imageSize,
+                         vec_t& image,
                          int64_t timestamp)
 {
     AVCodecContext* ctx = ost->enc;
 
     int64_t pts = av_rescale_q(timestamp, m_input_time_base,
                                ctx->time_base);
+#if 0
     if (ost->next_pts > 0)
     {
         while (ost->next_pts < pts)
@@ -1793,9 +1799,11 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
         ost->frame->pts = ost->next_pts;
     }
     else
+#endif
         ost->frame->pts = pts;
 
     // YUV 4:2:0
+    uint8_t* data = image.data();
     size_t size = ctx->width * ctx->height;
     memcpy(ost->frame->data[0], data, size);
     memcpy(ost->frame->data[1],
@@ -1810,31 +1818,33 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
 
 bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
                                 OutputStream* ost,
-                                uint8_t* data,
-                                uint32_t imageSize,
+                                vec_t& image,
                                 int64_t timestamp)
 {
     AVCodecContext* enc_ctx = ost->enc;
     static AVFrame* hw_frame = nullptr;
     int    ret;
 
+#if 0
     /*
      * We may need to repeat the previous frame to keep everything in sync
      */
-    int64_t pts;
     if (hw_frame != nullptr)
     {
-        pts = av_rescale_q(timestamp, m_input_time_base,
+        int64_t pts = av_rescale_q(timestamp, m_input_time_base,
                            enc_ctx->time_base);
         while (ost->next_pts < pts)
         {
             hw_frame->pts = ost->next_pts;
             ++ost->next_pts;
             write_frame(oc, enc_ctx, hw_frame, ost);
+            cerr << "Duplicate\n";
         }
         av_frame_free(&hw_frame);
     }
+#endif
 
+    uint8_t* data = image.data();
     size_t size = enc_ctx->width * enc_ctx->height;
     memcpy(ost->frame->data[0], data, size);
     memcpy(ost->frame->data[1], data + size, size / 2);
@@ -1871,6 +1881,21 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
         return false;
     }
 
+#if 1
+    if (ost->next_pts > 0)
+    {
+        int64_t pts = av_rescale_q(timestamp, m_input_time_base,
+                           enc_ctx->time_base);
+        while (ost->next_pts < pts)
+        {
+            hw_frame->pts = ost->next_pts;
+            ++ost->next_pts;
+            write_frame(oc, enc_ctx, hw_frame, ost);
+            cerr << "Duplicate\n";
+        }
+    }
+#endif
+
     if (ost->next_pts == 0)
         hw_frame->pts = av_rescale_q(timestamp, m_input_time_base,
                                      enc_ctx->time_base);
@@ -1880,40 +1905,80 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
     ost->next_timestamp = timestamp + 1;
     ost->next_pts = hw_frame->pts + 1;
 
-    return write_frame(oc, enc_ctx, hw_frame, ost);
+    ret = write_frame(oc, enc_ctx, hw_frame, ost);
+#if 1
+    av_frame_free(&hw_frame);
+#endif
+    return ret;
 }
 
 /*
  * encode one video frame and send it to the muxer
  * return 1 when encoding is finished, 0 otherwise
  */
-bool OutputTS::write_video_frame(AVFormatContext* oc, OutputStream* ost,
-                                uint8_t* pImage, uint32_t imageSize,
-                                int64_t timestamp)
+bool OutputTS::write_video_frame(AVFormatContext* oc,
+                                 OutputStream* ost,
+                                 vec_t& pImage,
+                                 int64_t timestamp)
 {
     if (m_encoderType == EncoderType::NV)
-        return nv_encode(oc, ost, pImage, imageSize, timestamp);
+        return nv_encode(oc, ost, pImage, timestamp);
     else if (m_encoderType == EncoderType::QSV)
-        return qsv_vaapi_encode(oc, ost, pImage, imageSize, timestamp);
+        return qsv_vaapi_encode(oc, ost, pImage, timestamp);
     else if (m_encoderType == EncoderType::VAAPI)
-        return qsv_vaapi_encode(oc, ost, pImage, imageSize, timestamp);
+        return qsv_vaapi_encode(oc, ost, pImage, timestamp);
 
     return false;
 }
 
-bool OutputTS::Write(uint8_t* pImage, uint32_t imageSize,
-                     int64_t timestamp)
+void OutputTS::Write(void)
 {
-    if (!m_no_audio)
+    std::unique_lock<std::mutex> lock(m_vid_mutex);
+    vidpkt_t pkt;
+
+    for (;;)
     {
-        while (m_video_stream.next_pts > m_audio_stream.next_pts)
-            if (!write_audio_frame(m_output_format_context, &m_audio_stream))
-                break;
+        m_vidpkt_ready.wait_for(lock, std::chrono::milliseconds(100));
+
+        while (!m_vidqueue.empty())
+        {
+            if (!m_no_audio)
+            {
+                while (m_video_stream.next_pts > m_audio_stream.next_pts)
+                {
+                    cerr << "Writing audio\n";
+                    if (!write_audio_frame(m_output_format_context,
+                                           &m_audio_stream))
+                        break;
+                }
+            }
+
+            {
+                const std::unique_lock<std::mutex> lock(m_vidpkt_mutex);
+                pkt = m_vidqueue.front();
+                m_vidqueue.pop_front();
+            }
+
+            write_video_frame(m_output_format_context,
+                              &m_video_stream, pkt.m_data,
+                              pkt.m_timestamp);
+        }
+    }
+}
+
+bool OutputTS::VideoFrame(uint8_t* pImage, uint32_t imageSize,
+                          int64_t timestamp)
+{
+    {
+        const std::unique_lock<std::mutex> lock(m_vidpkt_mutex);
+        m_vidqueue.push_back(vidpkt_t{timestamp,
+                                      vec_t(pImage, pImage + imageSize)});
+        if (m_vidqueue.size() > 100 && m_vidqueue.size() % 50 == 0)
+            cerr << "WARNING: vid queue size: " << m_vidqueue.size()
+                 << endl;
     }
 
-    write_video_frame(m_output_format_context,
-                      &m_video_stream, pImage, imageSize,
-                      timestamp);
+    m_vidpkt_ready.notify_one();
 
-    return false;
+    return true;
 }
