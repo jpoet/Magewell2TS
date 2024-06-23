@@ -1946,7 +1946,6 @@ void OutputTS::Write(void)
             {
                 while (m_video_stream.next_pts > m_audio_stream.next_pts)
                 {
-                    cerr << "Writing audio\n";
                     if (!write_audio_frame(m_output_format_context,
                                            &m_audio_stream))
                         break;
