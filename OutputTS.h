@@ -202,6 +202,8 @@ class OutputTS
     int              m_input_height            {720};
     AVRational       m_input_frame_rate        {10000000, 166817};
     AVRational       m_input_time_base         {1, 10000000};
+    int              m_vidqueue_size           {600};
+    size_t           m_vidqueue_dropped        {0};
 
     bool             m_interlaced             {false};
 

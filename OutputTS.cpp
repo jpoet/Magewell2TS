@@ -633,11 +633,12 @@ void OutputTS::setVideoParams(int width, int height, bool interlaced,
 {
     m_interlaced = interlaced;
 
+    double fps = static_cast<double>(frame_rate.num) / frame_rate.den;
+
     if (m_verbose > 1)
     {
         cerr << "Video: " << width << "x" << height
-             << " fps: "
-             << static_cast<double>(frame_rate.num) / frame_rate.den
+             << " fps: " << fps
              << (m_interlaced ? 'i' : 'p')
              << "\n";
     }
@@ -646,6 +647,7 @@ void OutputTS::setVideoParams(int width, int height, bool interlaced,
     m_input_height = height;
     m_input_frame_rate = frame_rate;
     m_input_time_base = time_base;
+    m_vidqueue_size = fps * 10;
 
     if (m_verbose > 2)
         cerr << "Video Params set\n";
@@ -1825,7 +1827,6 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
     static AVFrame* hw_frame = nullptr;
     int    ret;
 
-#if 0
     /*
      * We may need to repeat the previous frame to keep everything in sync
      */
@@ -1835,14 +1836,12 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
                            enc_ctx->time_base);
         while (ost->next_pts < pts)
         {
-            hw_frame->pts = ost->next_pts;
-            ++ost->next_pts;
+            hw_frame->pts = (ost->next_pts)++;
             write_frame(oc, enc_ctx, hw_frame, ost);
-            cerr << "Duplicate\n";
+            cerr << "Duplicated video frame\n";
         }
         av_frame_free(&hw_frame);
     }
-#endif
 
     uint8_t* data = image.data();
     size_t size = enc_ctx->width * enc_ctx->height;
@@ -1880,21 +1879,6 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
         m_error = true;
         return false;
     }
-
-#if 1
-    if (ost->next_pts > 0)
-    {
-        int64_t pts = av_rescale_q(timestamp, m_input_time_base,
-                           enc_ctx->time_base);
-        while (ost->next_pts < pts)
-        {
-            hw_frame->pts = ost->next_pts;
-            ++ost->next_pts;
-            write_frame(oc, enc_ctx, hw_frame, ost);
-            cerr << "Duplicate\n";
-        }
-    }
-#endif
 
     if (ost->next_pts == 0)
         hw_frame->pts = av_rescale_q(timestamp, m_input_time_base,
@@ -1970,11 +1954,20 @@ bool OutputTS::VideoFrame(uint8_t* pImage, uint32_t imageSize,
 {
     {
         const std::unique_lock<std::mutex> lock(m_vidpkt_mutex);
+        if (m_vidqueue_size < m_vidqueue.size())
+        {
+            if (++m_vidqueue_dropped % 10 == 0)
+                cerr << "WARNING: " << m_vidqueue_dropped << " frames dropped.\n";
+            return false;
+        }
+
         m_vidqueue.push_back(vidpkt_t{timestamp,
                                       vec_t(pImage, pImage + imageSize)});
-        if (m_vidqueue.size() > 100 && m_vidqueue.size() % 50 == 0)
+#if 0
+        if (m_vidqueue.size() > 10 && m_vidqueue.size() % 10 == 0)
             cerr << "WARNING: vid queue size: " << m_vidqueue.size()
                  << endl;
+#endif
     }
 
     m_vidpkt_ready.notify_one();
