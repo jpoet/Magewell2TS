@@ -1157,7 +1157,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 cerr << "Time: " << llTotalTime << endl;
             }
 
-            out2ts.Write(pbImage, dwImageSize, llCurrent);
+            out2ts.VideoFrame(pbImage, dwImageSize, llCurrent);
         }
 
         MWUnpinVideoBuffer(hChannel, (LPBYTE)pbImage);
@@ -1534,7 +1534,7 @@ void show_help(string_view app)
          << "--read-edid (-r)   : Read EDID info for input to file\n"
          << "--set-volume (-s)  : Set volume for all channels of the input\n"
          << "--verbose (-v)     : message verbose level. 0=completely quiet [1]\n"
-         << "--video-codec (-c) : Video codec name (e.g. hevc_vaapi, h264_nvenc) [hevc_nvenc]\n"
+         << "--video-codec (-c) : Video codec name (e.g. hevc_vaapi, h264_nvenc) [h264_nvenc]\n"
          << "--write-edid (-w)  : Write EDID info from file to input\n"
          << "--wait-for         : Wait for given number of inputs to be initialized. 10 second timeout\n";
 
@@ -1584,7 +1584,7 @@ int main(int argc, char* argv[])
 
     string_view app_name = argv[0];
     string      edid_file;
-    string      video_codec = "hevc_nvenc";
+    string      video_codec = "h264_nvenc";
     string      device      = "renderD128";
     int         verbose     = 1;
 
