@@ -1586,14 +1586,19 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     av_opt_set_int(ctx->priv_data, "bf", 0, 0);
     av_opt_set_int(ctx->priv_data, "qp", 25, 0); // 25 is default
 
+    // Make sure env doesn't prevent VAAPi init.
+    static string envstr = "LIBVA_DRIVER_NAME";
+    char* env = envstr.data();
+    unsetenv(env);
+
     vector<std::string> drivers{ "iHD", "i965" };
     vector<std::string>::iterator Idriver;
     for (Idriver = drivers.begin(); Idriver != drivers.end(); ++Idriver)
     {
-        static string envstr = "LIBVA_DRIVER_NAME=" + *Idriver;
-        char* env = envstr.data();
-        putenv(env);
+        av_dict_set(&opt, "kernel_driver", (*Idriver).c_str(), 0);
+        av_dict_set(&opt, "driver",        (*Idriver).c_str(), 0);
 
+        cerr << m_device << endl;
         if ((ret = av_hwdevice_ctx_create(&ost->hw_device_ctx,
                                           AV_HWDEVICE_TYPE_VAAPI,
                                           m_device.c_str(), opt, 0)) < 0)
@@ -1691,36 +1696,29 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     av_opt_set(ctx->priv_data, "scenario", "livestreaming", 0);
     av_opt_set_int(ctx->priv_data, "extbrc", 1, 0);
     av_opt_set_int(ctx->priv_data, "look_ahead_depth", m_look_ahead, 0);
+    av_opt_set_int(ctx->priv_data, "extra_hw_frames", m_look_ahead, 0);
+    av_opt_set_int(ctx->priv_data, "adaptive_i", 1, 0);
+
 //    av_opt_set_int(ctx->priv_data, "bf", 0, 0);
 
-//    ctx->global_quality = 20;
     ctx->global_quality = 21;
 
-    vector<std::string> drivers{ "iHD", "i965" };
-    vector<std::string>::iterator Idriver;
-    for (Idriver = drivers.begin(); Idriver != drivers.end(); ++Idriver)
-    {
-        string envstr = "LIBVA_DRIVER_NAME=" + *Idriver;
-        char* env = envstr.data();
-        putenv(env);
+    // Make sure env doesn't prevent QSV init.
+    static string envstr = "LIBVA_DRIVER_NAME";
+    char* env = envstr.data();
+    unsetenv(env);
 
-        if ((ret = av_hwdevice_ctx_create(&ost->hw_device_ctx,
-                                          AV_HWDEVICE_TYPE_QSV,
-                                          m_device.c_str(), opt, 0)) < 0)
-            cerr << "Failed to open QSV driver '" << *Idriver << "'\n";
-        else
-            break;
-    }
-    if (Idriver == drivers.end())
+    av_dict_set(&opt, "child_device", m_device.c_str(), 0);
+    if ((ret = av_hwdevice_ctx_create(&ost->hw_device_ctx,
+                                      AV_HWDEVICE_TYPE_QSV,
+                                      m_device.c_str(), opt, 0)) != 0)
     {
-        cerr << "Failed to create a QSV device. Error code: "
-             << AVerr2str(ret) << endl;
-        m_error = true;
+        cerr << "Failed to open QSV on " << m_device << "\n";
         return false;
     }
 
     if (m_verbose > 0)
-        cerr << "Using QSV driver '" << *Idriver << "'\n";
+        cerr << "Using QSV\n";
 
     /* set hw_frames_ctx for encoder's AVCodecContext */
     if (!(hw_frames_ref = av_hwframe_ctx_alloc(ost->hw_device_ctx)))

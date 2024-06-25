@@ -1596,7 +1596,7 @@ int main(int argc, char* argv[])
     bool        read_edid   = false;
     bool        write_edid  = false;
 
-    int         look_ahead  = 32;
+    int         look_ahead  = 40;
     bool        no_audio    = false;
 
     vector<string_view> args(argv + 1, argv + argc);
