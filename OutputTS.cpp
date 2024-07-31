@@ -443,11 +443,12 @@ static int64_t seek_packet(void* opaque, int64_t offset, int whence)
 
 
 OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
-                   int look_ahead, bool no_audio,
+                   int quality, int look_ahead, bool no_audio,
                    const string & device)
     : m_packet_queue(verbose_level)
     , m_verbose(verbose_level)
     , m_video_codec_name(video_codec_name)
+    , m_quality(quality)
     , m_look_ahead(look_ahead)
     , m_no_audio(no_audio)
     , m_device("/dev/dri/" + device)
@@ -790,6 +791,7 @@ void OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
     }
     ost->enc = codec_context;
 
+    ost->next_pts = 0;
     ost->next_timestamp = 0;
     switch ((*codec)->type) {
         case AVMEDIA_TYPE_AUDIO:
@@ -1307,6 +1309,7 @@ AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
     ost->tincr += (ost->tincr2 * frame->nb_samples);
 
     ost->next_timestamp = frame->pts + frame->nb_samples;
+    ost->next_pts = ost->next_timestamp;
 
     return frame;
 }
@@ -1414,7 +1417,8 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
                             m_input_time_base,
                             ost->st->time_base);
     ost->next_timestamp = m_packet_queue.TimeStamp() +
-                    (ost->frame->nb_samples /* * m_audio_channels */);
+                          (ost->frame->nb_samples /* * m_audio_channels */);
+    ost->next_pts = ost->next_timestamp;
 
     pkt->duration = pkt->pts;
     pkt->dts = pkt->pts;
@@ -1497,17 +1501,18 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
 
     av_dict_copy(&opt, opt_arg, 0);
 
-    av_opt_set(ctx->priv_data, "preset", "p7", 0);
+    av_opt_set(ctx->priv_data, "preset", "p6", 0);
     av_opt_set(ctx->priv_data, "tune", "hq", 0);
     av_opt_set(ctx->priv_data, "rc", "constqp", 0);
-
-    av_opt_set_int(ctx->priv_data, "cq", 8, 0);
-    av_opt_set_int(ctx->priv_data, "qmin", 0, 0);
-    av_opt_set_int(ctx->priv_data, "qmax", 16, 0);
+// -rc constqp -qp 34
+    av_opt_set_int(ctx->priv_data, "cp", m_quality, 0);
+//    av_opt_set_int(ctx->priv_data, "qmin", 0, 0);
+//    av_opt_set_int(ctx->priv_data, "qmax", m_quality, 0);
 
     if (m_look_ahead >= 0)
         av_opt_set_int(ctx->priv_data, "rc-lookahead", m_look_ahead, 0);
     av_opt_set_int(ctx->priv_data, "b", 0, 0);
+#if 0
     av_opt_set_int(ctx->priv_data, "minrate", 4000000, 0);
     av_opt_set_int(ctx->priv_data, "maxrate", 50000000, 0);
     av_opt_set_int(ctx->priv_data, "bufsize", 400000000, 0);
@@ -1515,7 +1520,7 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
 
     av_opt_set_int(ctx->priv_data, "bf", 0, 0);
     av_opt_set_int(ctx->priv_data, "b_ref_mode", 0, 0);
-
+#endif
     av_opt_set_int(ctx->priv_data, "temporal-aq", 1, 0);
 
     /* open the codec */
@@ -1584,7 +1589,7 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     av_opt_set_int(ctx->priv_data, "maxrate", 25000000, 0);
     av_opt_set_int(ctx->priv_data, "bufsize", 400000000, 0);
     av_opt_set_int(ctx->priv_data, "bf", 0, 0);
-    av_opt_set_int(ctx->priv_data, "qp", 25, 0); // 25 is default
+    av_opt_set_int(ctx->priv_data, "qp", m_quality, 0); // 25 is default
 
     // Make sure env doesn't prevent VAAPi init.
     static string envstr = "LIBVA_DRIVER_NAME";
@@ -1692,16 +1697,22 @@ bool OutputTS::open_qsv(const AVCodec* codec,
 
     av_dict_copy(&opt, opt_arg, 0);
 
+#if 0
     av_opt_set_int(ctx->priv_data, "preset", 3, 0);
     av_opt_set(ctx->priv_data, "scenario", "livestreaming", 0);
     av_opt_set_int(ctx->priv_data, "extbrc", 1, 0);
-    av_opt_set_int(ctx->priv_data, "look_ahead_depth", m_look_ahead, 0);
-    av_opt_set_int(ctx->priv_data, "extra_hw_frames", m_look_ahead, 0);
     av_opt_set_int(ctx->priv_data, "adaptive_i", 1, 0);
 
 //    av_opt_set_int(ctx->priv_data, "bf", 0, 0);
-
-    ctx->global_quality = 21;
+#endif
+    if (m_look_ahead >= 0)
+    {
+        av_opt_set_int(ctx->priv_data, "look_ahead", 1, 0);
+        av_opt_set_int(ctx->priv_data, "look_ahead_depth", m_look_ahead, 0);
+    }
+    av_opt_set_int(ctx->priv_data, "extra_hw_frames", m_look_ahead, 0);
+    if (m_quality > 0)
+        ctx->global_quality = m_quality;
 
     // Make sure env doesn't prevent QSV init.
     static string envstr = "LIBVA_DRIVER_NAME";
@@ -1830,6 +1841,7 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
     static AVFrame* hw_frame = nullptr;
     int    ret;
 
+#if 1
     /*
      * We may need to repeat the previous frame to keep everything in sync
      */
@@ -1841,10 +1853,11 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
         {
             hw_frame->pts = (ost->next_pts)++;
             write_frame(oc, enc_ctx, hw_frame, ost);
-            cerr << "Duplicated video frame\n";
+            cerr << "\nDuplicated video frame\n";
         }
         av_frame_free(&hw_frame);
     }
+#endif
 
     uint8_t* data = image.data();
     size_t size = enc_ctx->width * enc_ctx->height;
@@ -1883,17 +1896,22 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
         return false;
     }
 
+#if 1
     if (ost->next_pts == 0)
         hw_frame->pts = av_rescale_q(timestamp, m_input_time_base,
                                      enc_ctx->time_base);
     else
         hw_frame->pts = ost->next_pts;
+#else
+    hw_frame->pts = av_rescale_q(timestamp, m_input_time_base,
+                                 enc_ctx->time_base);
+#endif
 
     ost->next_timestamp = timestamp + 1;
     ost->next_pts = hw_frame->pts + 1;
 
     ret = write_frame(oc, enc_ctx, hw_frame, ost);
-#if 1
+#if 0
     av_frame_free(&hw_frame);
 #endif
     return ret;
@@ -1925,13 +1943,13 @@ void OutputTS::Write(void)
 
     for (;;)
     {
-        m_vidpkt_ready.wait_for(lock, std::chrono::milliseconds(100));
+        m_vidpkt_ready.wait_for(lock, std::chrono::milliseconds(5));
 
-        while (!m_vidqueue.empty())
+        for (;;)
         {
             if (!m_no_audio)
             {
-                while (m_video_stream.next_pts > m_audio_stream.next_pts)
+                while (m_video_stream.next_timestamp > m_audio_stream.next_timestamp)
                 {
                     if (!write_audio_frame(m_output_format_context,
                                            &m_audio_stream))
@@ -1941,6 +1959,9 @@ void OutputTS::Write(void)
 
             {
                 const std::unique_lock<std::mutex> lock(m_vidpkt_mutex);
+                if (m_vidqueue.empty())
+                    break;
+
                 pkt = m_vidqueue.front();
                 m_vidqueue.pop_front();
             }

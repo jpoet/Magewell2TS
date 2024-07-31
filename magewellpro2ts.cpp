@@ -854,8 +854,6 @@ void* audio_capture(void* param1, int param2, void* param3)
                 continue;
             }
 
-            uint64_t timestamp = macf.llTimestamp;
-
             /*
               L1L2L3L4R1R2R3R4L5L6L7L8R5R6R7R8(4byte)
               to 2channel 16bit
@@ -879,6 +877,13 @@ void* audio_capture(void* param1, int param2, void* param3)
                            &right, bytes_per_sample);
                 }
             }
+
+#if 1
+            uint64_t timestamp = macf.llTimestamp;
+#else
+            LONGLONG timestamp = 0LL;
+            MWGetDeviceTime(channel_handle, &timestamp);
+#endif
 
             out2ts->addPacket(capture_buf, frame_size, timestamp);
         }
@@ -1524,7 +1529,8 @@ void show_help(string_view app)
          << "\n";
 
     cerr << "--board (-b)       : board id, if you have more than one [0]\n"
-         << "--device (-e)      : vaapi device (e.g. /dev/dri/renderD129) [/dev/dri/renderD128]\n"
+         << "--quality (-q)     : quality setting [25]\n"
+         << "--device (-d)      : vaapi device (e.g. /dev/dri/renderD129) [/dev/dri/renderD128]\n"
          << "--get-volume (-g)  : Display volume settings for each channel of input\n"
          << "--input (-i)       : input idx, *required*. Starts at 1\n"
          << "--list-inputs (l)  : List capture card inputs\n"
@@ -1596,7 +1602,8 @@ int main(int argc, char* argv[])
     bool        read_edid   = false;
     bool        write_edid  = false;
 
-    int         look_ahead  = 40;
+    int         quality     = 25;
+    int         look_ahead  = 60;
     bool        no_audio    = false;
 
     vector<string_view> args(argv + 1, argv + argc);
@@ -1611,6 +1618,11 @@ int main(int argc, char* argv[])
         else if (*iter == "-l" || *iter == "--list-inputs")
         {
             list_inputs = true;
+        }
+        else if (*iter == "-q" || *iter == "--quality")
+        {
+            if (!string_to_int(*(++iter), quality, "quality"))
+                exit(1);
         }
         else if (*iter == "-a" || *iter == "--lookahead")
         {
@@ -1658,7 +1670,7 @@ int main(int argc, char* argv[])
         {
             no_audio = true;
         }
-        else if (*iter == "-e" || *iter == "--device")
+        else if (*iter == "-d" || *iter == "--device")
         {
             device = *(++iter);
         }
@@ -1718,7 +1730,7 @@ int main(int argc, char* argv[])
 
     if (do_capture)
     {
-        OutputTS out2ts(verbose, video_codec, look_ahead, no_audio,
+        OutputTS out2ts(verbose, video_codec, quality, look_ahead, no_audio,
                         device);
 
         if (!capture(channel_handle, verbose, out2ts, no_audio))
