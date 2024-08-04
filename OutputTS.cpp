@@ -444,7 +444,7 @@ static int64_t seek_packet(void* opaque, int64_t offset, int whence)
 
 OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
                    int quality, int look_ahead, bool no_audio,
-                   const string & device)
+                   const string & device, MagCallback image_buffer_avail)
     : m_packet_queue(verbose_level)
     , m_verbose(verbose_level)
     , m_video_codec_name(video_codec_name)
@@ -452,6 +452,7 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     , m_look_ahead(look_ahead)
     , m_no_audio(no_audio)
     , m_device("/dev/dri/" + device)
+    , m_image_buffer_available(image_buffer_avail)
 {
     if (m_video_codec_name.find("qsv") != string::npos)
         m_encoderType = EncoderType::QSV;
@@ -630,7 +631,8 @@ void OutputTS::setAudioParams(int num_channels, int bytes_per_sample,
 }
 
 void OutputTS::setVideoParams(int width, int height, bool interlaced,
-                              AVRational time_base, AVRational frame_rate)
+                              AVRational time_base, double frame_duration,
+                              AVRational frame_rate)
 {
     m_interlaced = interlaced;
 
@@ -646,19 +648,19 @@ void OutputTS::setVideoParams(int width, int height, bool interlaced,
 
     m_input_width = width;
     m_input_height = height;
+    m_input_frame_duration = frame_duration;
+    m_input_frame_wait_ms = frame_duration / 10000 + 1;
     m_input_frame_rate = frame_rate;
     m_input_time_base = time_base;
-    m_vidqueue_size = fps * 10;
 
     if (m_verbose > 2)
         cerr << "Video Params set\n";
 
     open_streams();
 
-
-    if (m_video_ready_thread.joinable())
-        m_video_ready_thread.join();
-    m_video_ready_thread = std::thread(&OutputTS::Write, this);
+    if (m_image_ready_thread.joinable())
+        m_image_ready_thread.join();
+    m_image_ready_thread = std::thread(&OutputTS::Write, this);
 }
 
 OutputTS::~OutputTS(void)
@@ -683,6 +685,7 @@ OutputTS::~OutputTS(void)
 void OutputTS::addPacket(uint8_t* buf, int buf_size, int64_t timestamp)
 {
     m_packet_queue.Push(buf, buf_size, timestamp);
+    m_image_ready.notify_one();
 }
 
 std::string OutputTS::AVerr2str(int code)
@@ -1697,9 +1700,9 @@ bool OutputTS::open_qsv(const AVCodec* codec,
 
     av_dict_copy(&opt, opt_arg, 0);
 
+    av_opt_set(ctx->priv_data, "scenario", "livestreaming", 0);
 #if 0
     av_opt_set_int(ctx->priv_data, "preset", 3, 0);
-    av_opt_set(ctx->priv_data, "scenario", "livestreaming", 0);
     av_opt_set_int(ctx->priv_data, "extbrc", 1, 0);
     av_opt_set_int(ctx->priv_data, "adaptive_i", 1, 0);
 
@@ -1797,8 +1800,8 @@ bool OutputTS::open_qsv(const AVCodec* codec,
 
 bool OutputTS::nv_encode(AVFormatContext* oc,
                          OutputStream* ost,
-                         vec_t& image,
-                         int64_t timestamp)
+                         uint8_t* pImage,
+                         int64_t  timestamp)
 {
     AVCodecContext* ctx = ost->enc;
 
@@ -1819,12 +1822,12 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
         ost->frame->pts = pts;
 
     // YUV 4:2:0
-    uint8_t* data = image.data();
     size_t size = ctx->width * ctx->height;
-    memcpy(ost->frame->data[0], data, size);
+    memcpy(ost->frame->data[0], pImage, size);
     memcpy(ost->frame->data[1],
-           data + size, size / 4);
-    memcpy(ost->frame->data[2], data + size * 5 / 4, size  / 4);
+           pImage + size, size / 4);
+    memcpy(ost->frame->data[2], pImage + size * 5 / 4, size  / 4);
+    m_image_buffer_available(pImage);
 
     ost->next_timestamp = timestamp + 1;
     ost->next_pts = ost->frame->pts + 1;
@@ -1834,35 +1837,34 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
 
 bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
                                 OutputStream* ost,
-                                vec_t& image,
-                                int64_t timestamp)
+                                uint8_t* pImage,
+                                int64_t  timestamp)
 {
     AVCodecContext* enc_ctx = ost->enc;
     static AVFrame* hw_frame = nullptr;
     int    ret;
 
-#if 1
+    int64_t pts = av_rescale_q(timestamp, m_input_time_base,
+                               enc_ctx->time_base);
+
     /*
      * We may need to repeat the previous frame to keep everything in sync
      */
     if (hw_frame != nullptr)
     {
-        int64_t pts = av_rescale_q(timestamp, m_input_time_base,
-                           enc_ctx->time_base);
         while (ost->next_pts < pts)
         {
             hw_frame->pts = (ost->next_pts)++;
             write_frame(oc, enc_ctx, hw_frame, ost);
-            cerr << "\nDuplicated video frame\n";
+            cerr << "Duplicated video frame\n";
         }
         av_frame_free(&hw_frame);
     }
-#endif
 
-    uint8_t* data = image.data();
     size_t size = enc_ctx->width * enc_ctx->height;
-    memcpy(ost->frame->data[0], data, size);
-    memcpy(ost->frame->data[1], data + size, size / 2);
+    memcpy(ost->frame->data[0], pImage, size);
+    memcpy(ost->frame->data[1], pImage + size, size / 2);
+    m_image_buffer_available(pImage);
 
     if (!(hw_frame = av_frame_alloc()))
     {
@@ -1896,24 +1898,16 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
         return false;
     }
 
-#if 1
     if (ost->next_pts == 0)
-        hw_frame->pts = av_rescale_q(timestamp, m_input_time_base,
-                                     enc_ctx->time_base);
+        hw_frame->pts = pts;
     else
         hw_frame->pts = ost->next_pts;
-#else
-    hw_frame->pts = av_rescale_q(timestamp, m_input_time_base,
-                                 enc_ctx->time_base);
-#endif
 
     ost->next_timestamp = timestamp + 1;
     ost->next_pts = hw_frame->pts + 1;
 
     ret = write_frame(oc, enc_ctx, hw_frame, ost);
-#if 0
-    av_frame_free(&hw_frame);
-#endif
+
     return ret;
 }
 
@@ -1923,8 +1917,8 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
  */
 bool OutputTS::write_video_frame(AVFormatContext* oc,
                                  OutputStream* ost,
-                                 vec_t& pImage,
-                                 int64_t timestamp)
+                                 uint8_t* pImage,
+                                 int64_t  timestamp)
 {
     if (m_encoderType == EncoderType::NV)
         return nv_encode(oc, ost, pImage, timestamp);
@@ -1938,12 +1932,15 @@ bool OutputTS::write_video_frame(AVFormatContext* oc,
 
 void OutputTS::Write(void)
 {
-    std::unique_lock<std::mutex> lock(m_vid_mutex);
-    vidpkt_t pkt;
+    std::unique_lock<std::mutex> lock(m_imagepkt_mutex);
+
+    uint8_t* pImage;
+    uint64_t timestamp;
 
     for (;;)
     {
-        m_vidpkt_ready.wait_for(lock, std::chrono::milliseconds(5));
+        m_image_ready.wait_for(lock,
+                               std::chrono::milliseconds(m_input_frame_wait_ms));
 
         for (;;)
         {
@@ -1958,17 +1955,18 @@ void OutputTS::Write(void)
             }
 
             {
-                const std::unique_lock<std::mutex> lock(m_vidpkt_mutex);
-                if (m_vidqueue.empty())
+                const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
+                if (m_imagequeue.empty())
                     break;
 
-                pkt = m_vidqueue.front();
-                m_vidqueue.pop_front();
+                pImage    = m_imagequeue.front().image;
+                timestamp = m_imagequeue.front().timestamp;
+                m_imagequeue.pop_front();
             }
 
             write_video_frame(m_output_format_context,
-                              &m_video_stream, pkt.m_data,
-                              pkt.m_timestamp);
+                              &m_video_stream, pImage,
+                              timestamp);
         }
     }
 }
@@ -1976,25 +1974,10 @@ void OutputTS::Write(void)
 bool OutputTS::VideoFrame(uint8_t* pImage, uint32_t imageSize,
                           int64_t timestamp)
 {
-    {
-        const std::unique_lock<std::mutex> lock(m_vidpkt_mutex);
-        if (m_vidqueue_size < m_vidqueue.size())
-        {
-            if (++m_vidqueue_dropped % 10 == 0)
-                cerr << "WARNING: " << m_vidqueue_dropped << " frames dropped.\n";
-            return false;
-        }
+    const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
+    m_imagequeue.push_back(imagepkt_t{timestamp, pImage});
 
-        m_vidqueue.push_back(vidpkt_t{timestamp,
-                                      vec_t(pImage, pImage + imageSize)});
-#if 0
-        if (m_vidqueue.size() > 10 && m_vidqueue.size() % 10 == 0)
-            cerr << "WARNING: vid queue size: " << m_vidqueue.size()
-                 << endl;
-#endif
-    }
-
-    m_vidpkt_ready.notify_one();
+    m_image_ready.notify_one();
 
     return true;
 }

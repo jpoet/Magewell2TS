@@ -912,11 +912,61 @@ void* audio_capture(void* param1, int param2, void* param3)
     return nullptr;
 }
 
+const int total_image_buffers = 3;
+using imageque_t = std::deque<uint8_t*>;
+imageque_t image_buffers;
+imageque_t avail_image_buffers;
+std::mutex image_buffer_mutex;
+std::condition_variable image_buffer_ready;
+
+bool create_image_buffers(HCHANNEL hChannel, DWORD dwImageSize)
+{
+    for (int idx = 0; idx < total_image_buffers; ++idx)
+    {
+        uint8_t* pbImage       = nullptr;
+
+        pbImage = new uint8_t[dwImageSize];
+        if (pbImage == nullptr)
+        {
+            cerr << "ERROR: image buffer alloc fail!\n";
+            return false;
+        }
+
+        MWPinVideoBuffer(hChannel, (MWCAP_PTR)pbImage, dwImageSize);
+
+        image_buffers.push_back(pbImage);
+        avail_image_buffers.push_back(pbImage);
+    }
+
+    return true;
+}
+
+void free_image_buffers(HCHANNEL hChannel)
+{
+    imageque_t::iterator Iimage;
+
+    for (Iimage = image_buffers.begin(); Iimage != image_buffers.end(); ++Iimage)
+    {
+        MWUnpinVideoBuffer(hChannel, (LPBYTE)(*Iimage));
+        delete[] (*Iimage);
+    }
+
+    image_buffers.clear();
+    avail_image_buffers.clear();
+}
+
+void image_buffer_available(uint8_t* pbImage)
+{
+    std::unique_lock<std::mutex> lock(image_buffer_mutex);
+    avail_image_buffers.push_back(pbImage);
+    image_buffer_ready.notify_one();
+}
+
+
 bool video_capture_loop(HCHANNEL  hChannel,
                         HNOTIFY   hNotify,
                         MWCAP_PTR hNotifyEvent,
                         MWCAP_PTR hCaptureEvent,
-                        uint8_t* pbImage,
                         int       verbose,
                         OutputTS & out2ts)
 {
@@ -924,6 +974,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
     DWORD notifyBufferMode;
     LONGLONG llTotalTime = 0LL;
     DWORD dwFourcc = MWFOURCC_I420;
+    uint8_t* pbImage = nullptr;
+    int input_frame_wait_ms = 17;
 
     if (out2ts.encoderType() == OutputTS::QSV ||
         out2ts.encoderType() == OutputTS::VAAPI)
@@ -997,6 +1049,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             frame_rate = (AVRational){10000000LL, (int)frame_duration};
             time_base = (AVRational){1, 10000000LL};
         }
+        input_frame_wait_ms = frame_duration / 10000 + 1;
 
         // 100ns / frame_duration
         if (verbose > 2)
@@ -1018,23 +1071,14 @@ bool video_capture_loop(HCHANNEL  hChannel,
             cerr << "========\n";
         }
 
-        if (pbImage)
-        {
-            delete[] pbImage;
-            pbImage == nullptr;
-        }
-        pbImage = new uint8_t[dwImageSize];
-        if (pbImage == nullptr)
-        {
-            if (verbose > 0)
-                cerr << "ERROR: image buffer alloc fail!\n";
+        free_image_buffers(hChannel);
+        if (!create_image_buffers(hChannel, dwImageSize))
             return false;
-        }
 
         out2ts.setVideoParams(videoSignalStatus.cx,
                               videoSignalStatus.cy,
                               videoSignalStatus.bInterlaced,
-                              time_base, frame_rate);
+                              time_base, frame_duration, frame_rate);
 
         notifyBufferMode = videoSignalStatus.bInterlaced ?
                            MWCAP_NOTIFY_VIDEO_FIELD_BUFFERED :
@@ -1047,7 +1091,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 cerr << "ERROR: Register Notify error.\n";
             return false;
         }
-        MWPinVideoBuffer(hChannel, (MWCAP_PTR)pbImage, dwImageSize);
 
         while (g_running)
         {
@@ -1105,10 +1148,24 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 mode = MWCAP_VIDEO_DEINTERLACE_BLEND;
             }
 
+            {
+                std::unique_lock<std::mutex> lock(image_buffer_mutex);
+
+                while (avail_image_buffers.empty())
+                {
+                    cerr << "video_capture_loop: waiting for image buffer\n";
+                    image_buffer_ready.wait_for(lock,
+                                        std::chrono::milliseconds(input_frame_wait_ms));
+                }
+
+                pbImage = avail_image_buffers.front();
+                avail_image_buffers.pop_front();
+            }
+
             MW_RESULT ret = MWCaptureVideoFrameToVirtualAddressEx
                             (hChannel,
                              videoBufferInfo.iNewestBufferedFullFrame,
-                             reinterpret_cast<unsigned char* >(pbImage),
+                             reinterpret_cast<uint8_t*>(pbImage),
                              dwImageSize,
                              dwMinStride,
                              0,
@@ -1164,10 +1221,9 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
             out2ts.VideoFrame(pbImage, dwImageSize, llCurrent);
         }
-
-        MWUnpinVideoBuffer(hChannel, (LPBYTE)pbImage);
     }
 
+    free_image_buffers(hChannel);
     return true;
 }
 
@@ -1176,7 +1232,6 @@ bool video_capture(HCHANNEL hChannel, int verbose, OutputTS & out2ts)
     HNOTIFY   hNotify       = 0;
     MWCAP_PTR hNotifyEvent  = 0;
     MWCAP_PTR hCaptureEvent = 0;
-    uint8_t* pbImage       = nullptr;
 
     hCaptureEvent = MWCreateEvent();
     if (hCaptureEvent == 0)
@@ -1205,17 +1260,11 @@ bool video_capture(HCHANNEL hChannel, int verbose, OutputTS & out2ts)
     {
         if (!video_capture_loop(hChannel, hNotify,
                                 hNotifyEvent, hCaptureEvent,
-                                pbImage, verbose, out2ts))
+                                verbose, out2ts))
             break;
     }
 
     g_running = false;
-
-    if(pbImage)
-    {
-        delete[] pbImage;
-        pbImage = nullptr;
-    }
 
     MWUnregisterNotify(hChannel, hNotify);
     hNotify=0;
@@ -1731,7 +1780,7 @@ int main(int argc, char* argv[])
     if (do_capture)
     {
         OutputTS out2ts(verbose, video_codec, quality, look_ahead, no_audio,
-                        device);
+                        device, image_buffer_available);
 
         if (!capture(channel_handle, verbose, out2ts, no_audio))
             return -1;
