@@ -1583,7 +1583,7 @@ void show_help(string_view app)
          << "--get-volume (-g)  : Display volume settings for each channel of input\n"
          << "--input (-i)       : input idx, *required*. Starts at 1\n"
          << "--list-inputs (l)  : List capture card inputs\n"
-         << "--lookahead (-a)   : How many frames to 'look ahead' [32]\n"
+         << "--lookahead (-a)   : How many frames to 'look ahead' [55]\n"
          << "--mux (-m)         : capture audio and video and mux into TS [false]\n"
          << "--no-audio (-n)    : Only capture video. [false]\n"
          << "--read-edid (-r)   : Read EDID info for input to file\n"
@@ -1652,7 +1652,7 @@ int main(int argc, char* argv[])
     bool        write_edid  = false;
 
     int         quality     = 25;
-    int         look_ahead  = 60;
+    int         look_ahead  = 55;
     bool        no_audio    = false;
 
     vector<string_view> args(argv + 1, argv + argc);
