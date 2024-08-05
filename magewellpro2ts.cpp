@@ -974,9 +974,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
     LONGLONG llTotalTime = 0LL;
     DWORD dwFourcc = MWFOURCC_I420;
     uint8_t* pbImage = nullptr;
-    int input_frame_wait_ms = 6;
-    const int buffer_cnt = 5;
-    int waited_for_buffer = 0;
+    int input_frame_wait_ms = 17;
+    int buffer_cnt = 1;
     int idx;
     bool force_sleep = false;
 
@@ -984,11 +983,12 @@ bool video_capture_loop(HCHANNEL  hChannel,
         out2ts.encoderType() == OutputTS::VAAPI)
     {
         dwFourcc = MWFOURCC_NV12;
+        buffer_cnt = 4;
     }
     else if (out2ts.encoderType() == OutputTS::NV)
     {
         dwFourcc = MWFOURCC_I420;
-        force_sleep = true;
+        buffer_cnt = 1;
     }
     else
     {
@@ -1060,7 +1060,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             frame_rate = (AVRational){10000000LL, (int)frame_duration};
             time_base = (AVRational){1, 10000000LL};
         }
-        input_frame_wait_ms = frame_duration / 10000 / 3 + 1;
+        input_frame_wait_ms = frame_duration / 10000 + 1;
 
         // 100ns / frame_duration
         if (verbose > 2)
@@ -1167,10 +1167,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
                     image_buffer_ready.wait_for(lock,
                                std::chrono::milliseconds(input_frame_wait_ms));
                 }
-                if (idx > 4)
-                    if (++waited_for_buffer % 20 == 0)
-                        cerr << "video_capture_loop: waited for image buffer "
-                             << waited_for_buffer << " times.\n";
+                if (idx > 1)
+                    cerr << "video_capture_loop: waited for image buffer\n";
 
                 pbImage = avail_image_buffers.front();
                 avail_image_buffers.pop_front();
@@ -1234,8 +1232,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
             }
 
             out2ts.VideoFrame(pbImage, dwImageSize, llCurrent);
-            if (force_sleep)
-                std::this_thread::sleep_for(std::chrono::milliseconds(input_frame_wait_ms));
         }
     }
 
