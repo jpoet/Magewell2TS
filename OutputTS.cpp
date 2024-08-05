@@ -1710,7 +1710,8 @@ bool OutputTS::open_qsv(const AVCodec* codec,
 #endif
     if (m_look_ahead >= 0)
     {
-        av_opt_set_int(ctx->priv_data, "look_ahead", 1, 0);
+        if (m_video_codec_name == "hevc_qsv")
+            av_opt_set_int(ctx->priv_data, "look_ahead", 1, 0);
         av_opt_set_int(ctx->priv_data, "look_ahead_depth", m_look_ahead, 0);
     }
     av_opt_set_int(ctx->priv_data, "extra_hw_frames", m_look_ahead, 0);
