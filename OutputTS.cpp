@@ -1807,15 +1807,6 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
 
     int64_t pts = av_rescale_q(timestamp, m_input_time_base,
                                ctx->time_base);
-    if (ost->next_pts > 0)
-    {
-        while (ost->next_pts < pts)
-        {
-            ost->frame->pts = (ost->next_pts)++;
-            write_frame(oc, ost->enc, ost->frame, ost);
-            cerr << "Duplicated video frame\n";
-        }
-    }
 
     // YUV 4:2:0
     size_t size = ctx->width * ctx->height;

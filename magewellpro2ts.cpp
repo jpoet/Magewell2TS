@@ -912,16 +912,15 @@ void* audio_capture(void* param1, int param2, void* param3)
     return nullptr;
 }
 
-const int total_image_buffers = 3;
 using imageque_t = std::deque<uint8_t*>;
 imageque_t image_buffers;
 imageque_t avail_image_buffers;
 std::mutex image_buffer_mutex;
 std::condition_variable image_buffer_ready;
 
-bool create_image_buffers(HCHANNEL hChannel, DWORD dwImageSize)
+bool create_image_buffers(HCHANNEL hChannel, DWORD dwImageSize, int num_buffers)
 {
-    for (int idx = 0; idx < total_image_buffers; ++idx)
+    for (int idx = 0; idx < num_buffers; ++idx)
     {
         uint8_t* pbImage       = nullptr;
 
@@ -976,17 +975,28 @@ bool video_capture_loop(HCHANNEL  hChannel,
     DWORD dwFourcc = MWFOURCC_I420;
     uint8_t* pbImage = nullptr;
     int input_frame_wait_ms = 17;
+    int buffer_cnt = 1;
+    int idx;
 
     if (out2ts.encoderType() == OutputTS::QSV ||
         out2ts.encoderType() == OutputTS::VAAPI)
+    {
         dwFourcc = MWFOURCC_NV12;
+        buffer_cnt = 3;
+    }
     else if (out2ts.encoderType() == OutputTS::NV)
+    {
         dwFourcc = MWFOURCC_I420;
+        buffer_cnt = 1;
+    }
     else
     {
         cerr << "Failed to determine best magewell pixel format.\n";
         return false;
     }
+
+    if (verbose > 0)
+        cerr << "Using " << buffer_cnt << " image buffers.\n";
 
     while (g_running)
     {
@@ -1072,7 +1082,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
         }
 
         free_image_buffers(hChannel);
-        if (!create_image_buffers(hChannel, dwImageSize))
+        if (!create_image_buffers(hChannel, dwImageSize, buffer_cnt))
             return false;
 
         out2ts.setVideoParams(videoSignalStatus.cx,
@@ -1151,12 +1161,13 @@ bool video_capture_loop(HCHANNEL  hChannel,
             {
                 std::unique_lock<std::mutex> lock(image_buffer_mutex);
 
-                while (avail_image_buffers.empty())
+                for (idx = 0; avail_image_buffers.empty(); ++idx)
                 {
-                    cerr << "video_capture_loop: waiting for image buffer\n";
                     image_buffer_ready.wait_for(lock,
-                                        std::chrono::milliseconds(input_frame_wait_ms));
+                               std::chrono::milliseconds(input_frame_wait_ms));
                 }
+                if (idx > 1)
+                    cerr << "video_capture_loop: waited for image buffer\n";
 
                 pbImage = avail_image_buffers.front();
                 avail_image_buffers.pop_front();
