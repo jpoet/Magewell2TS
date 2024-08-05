@@ -978,6 +978,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
     const int buffer_cnt = 5;
     int waited_for_buffer = 0;
     int idx;
+    bool force_sleep = false;
 
     if (out2ts.encoderType() == OutputTS::QSV ||
         out2ts.encoderType() == OutputTS::VAAPI)
@@ -987,6 +988,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
     else if (out2ts.encoderType() == OutputTS::NV)
     {
         dwFourcc = MWFOURCC_I420;
+        force_sleep = true;
     }
     else
     {
@@ -1232,7 +1234,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
             }
 
             out2ts.VideoFrame(pbImage, dwImageSize, llCurrent);
-            std::this_thread::sleep_for(std::chrono::milliseconds(input_frame_wait_ms));
+            if (force_sleep)
+                std::this_thread::sleep_for(std::chrono::milliseconds(input_frame_wait_ms));
         }
     }
 
