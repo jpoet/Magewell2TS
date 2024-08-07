@@ -1504,7 +1504,7 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
 
     av_dict_copy(&opt, opt_arg, 0);
 
-    av_opt_set(ctx->priv_data, "preset", "p6", 0);
+    av_opt_set(ctx->priv_data, "preset", "p5", 0);
     av_opt_set(ctx->priv_data, "tune", "hq", 0);
     av_opt_set(ctx->priv_data, "rc", "constqp", 0);
 // -rc constqp -qp 34

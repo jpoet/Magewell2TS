@@ -23,7 +23,7 @@ work. The other advantage is that a raw bitstream can be captured. Unfortunately
 
 The Magewell PRO capture cards capture raw audio and video. The video (at least) needs compressed and it is up to the Linux PC to do that. The only practical way of accomplishing this is with GPU assist. Intel QSV & VAAPI and nVidia nvenc are supported.
 
-As of 05-Aug-2024 the master branch does **not** work well with nVidia, and the nvenc branch should be used instead. Meanwhile QSV (especially on a Intel Arc GPU) works very well.
+NOTE (05-Aug-2024): The master branch tries very hard not to miss any frames. This means that the audio and video can get out of sync if the encoder cannot keep up. For example, an Intel A380 can record four HEVC streams easily as long as the qualiy setting is not set much lower than 25. Even at quality 25, the result looks very good!
 
 ***
 ## Magewell driver

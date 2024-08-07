@@ -700,10 +700,10 @@ void* audio_capture(void* param1, int param2, void* param3)
     }
 
     notify_audio  = MWRegisterNotify(channel_handle, notify_event,
-                                     MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
-                                     MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE |
-                                     MWCAP_NOTIFY_AUDIO_INPUT_RESET |
-                                     MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO
+                                     (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
+                                     (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE |
+                                     (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET |
+                                     (DWORD)MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO
                                      );
 
     if (notify_audio == 0)
@@ -988,7 +988,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
     else if (out2ts.encoderType() == OutputTS::NV)
     {
         dwFourcc = MWFOURCC_I420;
-        buffer_cnt = 1;
+        buffer_cnt = 4;
     }
     else
     {
@@ -1060,7 +1060,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             frame_rate = (AVRational){10000000LL, (int)frame_duration};
             time_base = (AVRational){1, 10000000LL};
         }
-        input_frame_wait_ms = frame_duration / 10000 + 1;
+        input_frame_wait_ms = frame_duration / 10000 / buffer_cnt;
 
         // 100ns / frame_duration
         if (verbose > 2)
@@ -1140,6 +1140,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
             if (0 == (ullStatusBits & notifyBufferMode))
             {
+                if (verbose > 0)
+                    cerr << "Frame not ready.\n";
                 continue;
             }
 
@@ -1167,8 +1169,9 @@ bool video_capture_loop(HCHANNEL  hChannel,
                     image_buffer_ready.wait_for(lock,
                                std::chrono::milliseconds(input_frame_wait_ms));
                 }
-                if (idx > 1)
-                    cerr << "video_capture_loop: waited for image buffer\n";
+                if (idx > 0)
+                    cerr << "video_capture_loop: waited for image buffer "
+                         << idx << " times. Encoder is too slow!\n";
 
                 pbImage = avail_image_buffers.front();
                 avail_image_buffers.pop_front();
@@ -1206,6 +1209,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
             if (ret != MW_SUCCEEDED)
             {
+                if (verbose > 0)
+                    cerr << "Frame not ready.\n";
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
                 continue;
             }
