@@ -70,8 +70,8 @@ class OutputTS
     enum EncoderType { UNKNOWN, NV, VAAPI, QSV };
 
     OutputTS(int verbose, const std::string & video_codec_name,
-             int quality, int look_ahead, bool no_audio,
-             const std::string & device,
+             const std::string & preset, int quality, int look_ahead,
+             bool no_audio, const std::string & device,
              MagCallback image_buffer_avail);
     ~OutputTS(void);
 
@@ -200,6 +200,7 @@ class OutputTS
 
     std::string      m_video_codec_name        {"hevc_nvenc"};
     std::string      m_device;
+    std::string      m_preset;
     int              m_quality                 {-1};
     int              m_look_ahead              {-1};
     int              m_input_width             {1280};

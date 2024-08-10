@@ -983,12 +983,12 @@ bool video_capture_loop(HCHANNEL  hChannel,
         out2ts.encoderType() == OutputTS::VAAPI)
     {
         dwFourcc = MWFOURCC_NV12;
-        buffer_cnt = 4;
+        buffer_cnt = 3;
     }
     else if (out2ts.encoderType() == OutputTS::NV)
     {
         dwFourcc = MWFOURCC_I420;
-        buffer_cnt = 4;
+        buffer_cnt = 3;
     }
     else
     {
@@ -1164,11 +1164,21 @@ bool video_capture_loop(HCHANNEL  hChannel,
             {
                 std::unique_lock<std::mutex> lock(image_buffer_mutex);
 
+#if 0
                 for (idx = 0; avail_image_buffers.empty(); ++idx)
                 {
                     image_buffer_ready.wait_for(lock,
                                std::chrono::milliseconds(input_frame_wait_ms));
                 }
+#else
+                for(idx = 0;; ++idx)
+                {
+                    image_buffer_ready.wait_for(lock,
+                                                std::chrono::milliseconds(input_frame_wait_ms));
+                    if (!avail_image_buffers.empty())
+                        break;
+                }
+#endif
                 if (idx > 0)
                     cerr << "video_capture_loop: waited for image buffer "
                          << idx << " times. Encoder is too slow!\n";
@@ -1573,48 +1583,28 @@ bool wait_for_inputs(int cnt)
 
 void show_help(string_view app)
 {
-    cerr << app
-         << " <--help> "
-         << " <--verbose level>"
-         << " --input id"
-         << " <--board id> "
-         << " <--device 'dev_name'>"
-         << " <--get-volume>"
-         << " <--list-inputs>"
-         << " <--lookahead frames>"
-         << " <--mux>"
-         << " <--no-audio>"
-         << " <--read-edid 'filename'>"
-         << " <--set-volume val>"
-         << " <--video-codec 'codec_name'>"
-         << " <--write-edid 'filename'>"
-         << endl;
+    cerr << app << endl;
 
     cerr << "\n"
          << "Defaults in []:\n"
          << "\n";
 
     cerr << "--board (-b)       : board id, if you have more than one [0]\n"
-         << "--quality (-q)     : quality setting [25]\n"
-         << "--device (-d)      : vaapi device (e.g. /dev/dri/renderD129) [/dev/dri/renderD128]\n"
+         << "--device (-d)      : vaapi/qsv device (e.g. renderD129) [renderD128]\n"
          << "--get-volume (-g)  : Display volume settings for each channel of input\n"
          << "--input (-i)       : input idx, *required*. Starts at 1\n"
          << "--list-inputs (l)  : List capture card inputs\n"
-         << "--lookahead (-a)   : How many frames to 'look ahead' [55]\n"
          << "--mux (-m)         : capture audio and video and mux into TS [false]\n"
          << "--no-audio (-n)    : Only capture video. [false]\n"
          << "--read-edid (-r)   : Read EDID info for input to file\n"
          << "--set-volume (-s)  : Set volume for all channels of the input\n"
          << "--verbose (-v)     : message verbose level. 0=completely quiet [1]\n"
-         << "--video-codec (-c) : Video codec name (e.g. hevc_vaapi, h264_nvenc) [h264_nvenc]\n"
+         << "--video-codec (-c) : Video codec name (e.g. hevc_qsv, h264_nvenc) [hevc_nvenc]\n"
+         << "--lookahead (-a)   : How many frames to 'look ahead' [35]\n"
+         << "--quality (-q)     : quality setting [25]\n"
+         << "--preset (-p)      : encoder preset\n"
          << "--write-edid (-w)  : Write EDID info from file to input\n"
          << "--wait-for         : Wait for given number of inputs to be initialized. 10 second timeout\n";
-
-    cerr << "\n"
-         << "Video encoding is done at 'constant quality' and will adjust \n"
-         << "the bitrate automatically. 'lookahead' allows for more efficient\n"
-         << "use of bits while maintaining the quality at the expense of RAM.\n"
-         << "Set lookahead to 0 to disable, or -1 to use the encoder default.\n";
 
     cerr << "\n"
          << "Examples:\n"
@@ -1627,8 +1617,8 @@ void show_help(string_view app)
          << "\tSet Volume of input 1 to max and capture to TS:\n"
          << "\t" << app << " -i 1 -s 100 -m\n"
          << "\n"
-         << "\tUse the i965 vaapi driver to encode h264 video and pipe it to mpv:\n"
-         << "\t" << app << " ./magewellpro2ts -i 1 -m -n -c h264_vaapi | mpv -\n";
+         << "\tUse the iHD vaapi driver to encode h264 video and pipe it to mpv:\n"
+         << "\t" << app << " ./magewellpro2ts -i 1 -m -n -c h264_qsv | mpv -\n";
 
     cerr << "\nNOTE: setting EDID does not survive a reboot.\n";
 }
@@ -1656,7 +1646,7 @@ int main(int argc, char* argv[])
 
     string_view app_name = argv[0];
     string      edid_file;
-    string      video_codec = "h264_nvenc";
+    string      video_codec = "hevc_nvenc";
     string      device      = "renderD128";
     int         verbose     = 1;
 
@@ -1668,8 +1658,9 @@ int main(int argc, char* argv[])
     bool        read_edid   = false;
     bool        write_edid  = false;
 
-    int         quality     = 25;
-    int         look_ahead  = 55;
+    string      preset;
+    int         quality     = 45;
+    int         look_ahead  = -1;
     bool        no_audio    = false;
 
     vector<string_view> args(argv + 1, argv + argc);
@@ -1684,6 +1675,10 @@ int main(int argc, char* argv[])
         else if (*iter == "-l" || *iter == "--list-inputs")
         {
             list_inputs = true;
+        }
+        else if (*iter == "-p" || *iter == "--preset")
+        {
+            preset = *(++iter);
         }
         else if (*iter == "-q" || *iter == "--quality")
         {
@@ -1796,7 +1791,7 @@ int main(int argc, char* argv[])
 
     if (do_capture)
     {
-        OutputTS out2ts(verbose, video_codec, quality, look_ahead, no_audio,
+        OutputTS out2ts(verbose, video_codec, preset, quality, look_ahead, no_audio,
                         device, image_buffer_available);
 
         if (!capture(channel_handle, verbose, out2ts, no_audio))

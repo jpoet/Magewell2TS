@@ -443,11 +443,12 @@ static int64_t seek_packet(void* opaque, int64_t offset, int whence)
 
 
 OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
-                   int quality, int look_ahead, bool no_audio,
+                   const string & preset, int quality, int look_ahead, bool no_audio,
                    const string & device, MagCallback image_buffer_avail)
     : m_packet_queue(verbose_level)
     , m_verbose(verbose_level)
     , m_video_codec_name(video_codec_name)
+    , m_preset(preset)
     , m_quality(quality)
     , m_look_ahead(look_ahead)
     , m_no_audio(no_audio)
@@ -649,7 +650,7 @@ void OutputTS::setVideoParams(int width, int height, bool interlaced,
     m_input_width = width;
     m_input_height = height;
     m_input_frame_duration = frame_duration;
-    m_input_frame_wait_ms = frame_duration / 10000 + 1;
+    m_input_frame_wait_ms = frame_duration / 10000 / 2;
     m_input_frame_rate = frame_rate;
     m_input_time_base = time_base;
 
@@ -1499,31 +1500,42 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
                            OutputStream* ost, AVDictionary* opt_arg)
 {
     int ret;
+
     AVCodecContext* ctx = ost->enc;
-    AVDictionary* opt = NULL;
+    AVDictionary*   opt = NULL;
 
     av_dict_copy(&opt, opt_arg, 0);
 
-    av_opt_set(ctx->priv_data, "preset", "p5", 0);
-    av_opt_set(ctx->priv_data, "tune", "hq", 0);
-    av_opt_set(ctx->priv_data, "rc", "constqp", 0);
-// -rc constqp -qp 34
-    av_opt_set_int(ctx->priv_data, "cp", m_quality, 0);
-//    av_opt_set_int(ctx->priv_data, "qmin", 0, 0);
-//    av_opt_set_int(ctx->priv_data, "qmax", m_quality, 0);
+    if (!m_preset.empty())
+    {
+        av_opt_set(ctx->priv_data, "preset", m_preset.c_str(), 0);
+        if (m_verbose > 0)
+            cerr << "Using preset " << m_preset << " for "
+                 << m_video_codec_name << endl;
+    }
 
-    if (m_look_ahead >= 0)
+    av_opt_set(ctx->priv_data, "rc", "vbr", 0);
+
+    if (m_look_ahead > 0)
+    {
         av_opt_set_int(ctx->priv_data, "rc-lookahead", m_look_ahead, 0);
+        av_opt_set_int(ctx->priv_data, "surfaces", 50, 0);
+    }
     av_opt_set_int(ctx->priv_data, "b", 0, 0);
-#if 0
-    av_opt_set_int(ctx->priv_data, "minrate", 4000000, 0);
-    av_opt_set_int(ctx->priv_data, "maxrate", 50000000, 0);
-    av_opt_set_int(ctx->priv_data, "bufsize", 400000000, 0);
-    av_opt_set_int(ctx->priv_data, "surfaces", 50, 0);
+    av_opt_set_int(ctx->priv_data, "bufsize", 0, 0);
 
+#if 1
+    av_opt_set_int(ctx->priv_data, "cq", m_quality, 0);
+#else
+    av_opt_set_int(ctx->priv_data, "qp", m_quality, 0);
+#endif
+
+#if 1
     av_opt_set_int(ctx->priv_data, "bf", 0, 0);
     av_opt_set_int(ctx->priv_data, "b_ref_mode", 0, 0);
+    av_opt_set_int(ctx->priv_data, "g", 60, 0);
 #endif
+
     av_opt_set_int(ctx->priv_data, "temporal-aq", 1, 0);
 
     /* open the codec */
@@ -1579,7 +1591,8 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
 bool OutputTS::open_vaapi(const AVCodec* codec,
                           OutputStream* ost, AVDictionary* opt_arg)
 {
-    int ret;
+    int    ret;
+
     AVCodecContext* ctx = ost->enc;
     AVDictionary* opt = nullptr;
     AVBufferRef* hw_frames_ref;
@@ -1587,6 +1600,15 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
 
     av_dict_copy(&opt, opt_arg, 0);
 
+    if (!m_preset.empty())
+    {
+        av_opt_set(ctx->priv_data, "preset", m_preset.c_str(), 0);
+        if (m_verbose > 0)
+            cerr << "Using preset " << m_preset << " for "
+                 << m_video_codec_name << endl;
+    }
+
+    av_opt_set(ctx->priv_data, "scenario", "livestreaming", 0);
     av_opt_set(ctx->priv_data, "rc_mode", "ICQ", 0);
 //    av_opt_set_int(ctx->priv_data, "minrate", 1000, 0);
     av_opt_set_int(ctx->priv_data, "maxrate", 25000000, 0);
@@ -1692,7 +1714,8 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
 bool OutputTS::open_qsv(const AVCodec* codec,
                           OutputStream* ost, AVDictionary* opt_arg)
 {
-    int ret;
+    int    ret;
+
     AVCodecContext* ctx = ost->enc;
     AVDictionary* opt = nullptr;
     AVBufferRef* hw_frames_ref;
@@ -1700,14 +1723,24 @@ bool OutputTS::open_qsv(const AVCodec* codec,
 
     av_dict_copy(&opt, opt_arg, 0);
 
+    if (!m_preset.empty())
+    {
+        av_opt_set(ctx->priv_data, "preset", m_preset.c_str(), 0);
+        if (m_verbose > 0)
+            cerr << "Using preset " << m_preset << " for "
+                 << m_video_codec_name << endl;
+    }
+
     av_opt_set(ctx->priv_data, "scenario", "livestreaming", 0);
 #if 0
-    av_opt_set_int(ctx->priv_data, "preset", 3, 0);
     av_opt_set_int(ctx->priv_data, "extbrc", 1, 0);
     av_opt_set_int(ctx->priv_data, "adaptive_i", 1, 0);
 
 //    av_opt_set_int(ctx->priv_data, "bf", 0, 0);
 #endif
+
+    ctx->global_quality = m_quality;
+
     if (m_look_ahead >= 0)
     {
         if (m_video_codec_name == "hevc_qsv")
@@ -1715,8 +1748,10 @@ bool OutputTS::open_qsv(const AVCodec* codec,
         av_opt_set_int(ctx->priv_data, "look_ahead_depth", m_look_ahead, 0);
     }
     av_opt_set_int(ctx->priv_data, "extra_hw_frames", m_look_ahead, 0);
-    if (m_quality > 0)
-        ctx->global_quality = m_quality;
+
+#if 1
+    av_opt_set(ctx->priv_data, "skip_frame", "insert_dummy", 0);
+#endif
 
     // Make sure env doesn't prevent QSV init.
     static string envstr = "LIBVA_DRIVER_NAME";
@@ -1845,12 +1880,14 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
      */
     if (hw_frame != nullptr)
     {
+#if 0 // Using av_opt_set(ctx->priv_data, "skip_frame", "insert_nothing", 0) seems to remove the need for this
         while (ost->next_pts < pts)
         {
             hw_frame->pts = (ost->next_pts)++;
             write_frame(oc, enc_ctx, hw_frame, ost);
             cerr << "Duplicated video frame\n";
         }
+#endif
         av_frame_free(&hw_frame);
     }
 
@@ -1939,7 +1976,7 @@ void OutputTS::Write(void)
         {
             if (!m_no_audio)
             {
-                while (m_video_stream.next_timestamp > m_audio_stream.next_timestamp)
+                while (m_audio_stream.next_timestamp < m_video_stream.next_timestamp)
                 {
                     if (!write_audio_frame(m_output_format_context,
                                            &m_audio_stream))
@@ -1960,6 +1997,9 @@ void OutputTS::Write(void)
             write_video_frame(m_output_format_context,
                               &m_video_stream, pImage,
                               timestamp);
+
+            m_image_ready.wait_for(lock,
+                                   std::chrono::milliseconds(1));
         }
     }
 }
