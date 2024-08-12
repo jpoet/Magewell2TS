@@ -547,8 +547,7 @@ void ListInputs(void)
             }
             cerr << ", LPCM: " << (aStatus.bLPCM ? "Yes" : "No")
                  << ", BPS: " << static_cast<int>(aStatus.cBitsPerSample)
-                 << ", Sample Rate: "
-                 << aStatus.dwSampleRate
+                 << ", Sample Rate: " << aStatus.dwSampleRate
                  << "\n";
         }
     }
@@ -797,8 +796,8 @@ void* audio_capture(void* param1, int param2, void* param3)
 
 // Channels: 2 SampleRate: 48000 FrameRate: 9216000 BytesPerSample: 2
 // perFrame 192
-        out2ts->setAudioParams(cur_channels, bytes_per_sample,
-                               MWCAP_AUDIO_SAMPLES_PER_FRAME,
+        out2ts->setAudioParams(cur_channels, audio_signal_status.bLPCM,
+                               bytes_per_sample, MWCAP_AUDIO_SAMPLES_PER_FRAME,
                                audio_signal_status.dwSampleRate);
 
         cnt = 0;
@@ -1002,6 +1001,22 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
     while (g_running)
     {
+        MWCAP_INPUT_SPECIFIC_STATUS input_status;
+        if (MWGetInputSpecificStatus(hChannel, &input_status) != MW_SUCCEEDED)
+        {
+            cerr << "Invalid video input.\n";
+            return false;
+        }
+        if (!input_status.bValid)
+        {
+            cerr << "No signal!\n";
+            return false;
+        }
+
+        MWCAP_VIDEO_SIGNAL_STATUS videoSignalStatus;
+        MWGetVideoSignalStatus(hChannel, &videoSignalStatus);
+
+
         if (!out2ts.AudioReady())
             continue;
 
@@ -1012,9 +1027,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
         MWGetVideoFrameInfo(hChannel,
                             videoBufferInfo.iNewestBufferedFullFrame,
                             &videoFrameInfo);
-
-        MWCAP_VIDEO_SIGNAL_STATUS videoSignalStatus;
-        MWGetVideoSignalStatus(hChannel, &videoSignalStatus);
 
         DWORD dwMinStride = FOURCC_CalcMinStride(dwFourcc,
                                                  videoSignalStatus.cx, 4);

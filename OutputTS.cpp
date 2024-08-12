@@ -592,7 +592,7 @@ void OutputTS::open_streams(void)
     }
 }
 
-void OutputTS::setAudioParams(int num_channels, int bytes_per_sample,
+void OutputTS::setAudioParams(int num_channels, bool is_lpcm, int bytes_per_sample,
                               int samples_per_frame, int sample_rate)
 {
     std::unique_lock<std::mutex> lock(m_detect_mutex);
@@ -616,8 +616,26 @@ void OutputTS::setAudioParams(int num_channels, int bytes_per_sample,
 
     if (m_verbose > 1)
     {
-        cerr << "Audio Params set;  channels: " << m_audio_channels
-             << " bytes_per_sample: " << m_audio_bytes_per_sample
+        cerr << "Audio Params set;  channels: " << m_audio_channels;
+        if (is_lpcm)
+        {
+            cerr << " lpcm";
+#if 1
+            if (m_audio_sample_rate == 48000)
+            {
+                // Work around bug: Force 44.1kHz
+                m_audio_sample_rate = 44100;
+                cerr << " WARNING, forcing sample rate to "
+                     << m_audio_sample_rate
+                     << " (due to bug? in Magewell driver )" << endl;
+            }
+#endif
+        }
+        else
+        {
+            cerr << " bistream";
+        }
+        cerr << " bytes_per_sample: " << m_audio_bytes_per_sample
              << " samples_per_frame: " << m_audio_samples_per_frame
              << " sample_rate: " << m_audio_sample_rate << "\n";
     }
