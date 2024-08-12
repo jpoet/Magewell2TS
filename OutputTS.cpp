@@ -620,7 +620,7 @@ void OutputTS::setAudioParams(int num_channels, bool is_lpcm, int bytes_per_samp
         if (is_lpcm)
         {
             cerr << " lpcm";
-#if 1
+#if 0
             if (m_audio_sample_rate == 48000)
             {
                 // Work around bug: Force 44.1kHz

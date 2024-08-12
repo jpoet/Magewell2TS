@@ -1672,7 +1672,7 @@ int main(int argc, char* argv[])
     bool        write_edid  = false;
 
     string      preset;
-    int         quality     = 45;
+    int         quality     = 25;
     int         look_ahead  = -1;
     bool        no_audio    = false;
 
