@@ -798,7 +798,8 @@ void* audio_capture(void* param1, int param2, void* param3)
 // Channels: 2 SampleRate: 48000 FrameRate: 9216000 BytesPerSample: 2
 // perFrame 192
         out2ts->setAudioParams(cur_channels, bytes_per_sample,
-                               MWCAP_AUDIO_SAMPLES_PER_FRAME);
+                               MWCAP_AUDIO_SAMPLES_PER_FRAME,
+                               audio_signal_status.dwSampleRate);
 
         cnt = 0;
         err_cnt = 0;

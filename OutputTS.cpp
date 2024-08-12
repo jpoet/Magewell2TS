@@ -593,7 +593,7 @@ void OutputTS::open_streams(void)
 }
 
 void OutputTS::setAudioParams(int num_channels, int bytes_per_sample,
-                              int samples_per_frame)
+                              int samples_per_frame, int sample_rate)
 {
     std::unique_lock<std::mutex> lock(m_detect_mutex);
 
@@ -608,6 +608,7 @@ void OutputTS::setAudioParams(int num_channels, int bytes_per_sample,
     m_audio_channels = num_channels;
     m_audio_bytes_per_sample = bytes_per_sample;
     m_audio_samples_per_frame = samples_per_frame;
+    m_audio_sample_rate = sample_rate;
 
     /* 8 channels */
     m_audio_block_size = 8 * bytes_per_sample * m_audio_samples_per_frame;
@@ -617,7 +618,8 @@ void OutputTS::setAudioParams(int num_channels, int bytes_per_sample,
     {
         cerr << "Audio Params set;  channels: " << m_audio_channels
              << " bytes_per_sample: " << m_audio_bytes_per_sample
-             << " samples_per_frame: " << m_audio_samples_per_frame << "\n";
+             << " samples_per_frame: " << m_audio_samples_per_frame
+             << " sample_rate: " << m_audio_sample_rate << "\n";
     }
 
     if (m_verbose > 2)
@@ -808,13 +810,14 @@ void OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
               ost->enc->sample_rate = (*codec)->supported_samplerates[0];
               for (idx = 0; (*codec)->supported_samplerates[idx]; ++idx)
               {
-                  if ((*codec)->supported_samplerates[idx] == 48000)
+                  if ((*codec)->supported_samplerates[idx] == m_audio_sample_rate)
                   {
-                      ost->enc->sample_rate = 48000;
+                      ost->enc->sample_rate = m_audio_sample_rate;
                       break;
                   }
               }
           }
+
           av_channel_layout_copy(&ost->enc->ch_layout, &m_channel_layout);
           ost->st->time_base = (AVRational){ 1, ost->enc->sample_rate };
 

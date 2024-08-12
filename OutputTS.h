@@ -77,7 +77,7 @@ class OutputTS
 
     EncoderType encoderType(void) const { return m_encoderType; }
     void setAudioParams(int num_channels, int bytes_per_sample,
-                        int samples_per_frame);
+                        int samples_per_frame, int sample_rate);
     void setVideoParams(int width, int height, bool interlaced,
                         AVRational time_base, double frame_duration,
                         AVRational frame_rate);
@@ -180,6 +180,7 @@ class OutputTS
     int              m_audio_channels             {-1};
     int              m_audio_bytes_per_sample     {-1};
     int              m_audio_samples_per_frame    {-1};
+    int              m_audio_sample_rate          {-1};
     int              m_audio_block_size           {-1};
 //    int              m_audio_detect_blocks        {3};
 
