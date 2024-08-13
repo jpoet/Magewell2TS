@@ -878,14 +878,7 @@ void* audio_capture(void* param1, int param2, void* param3)
                 }
             }
 
-#if 1
-            uint64_t timestamp = macf.llTimestamp;
-#else
-            LONGLONG timestamp = 0LL;
-            MWGetDeviceTime(channel_handle, &timestamp);
-#endif
-
-            out2ts->addPacket(capture_buf, frame_size, timestamp);
+            out2ts->addPacket(capture_buf, frame_size, macf.llTimestamp);
         }
     }
 
@@ -975,21 +968,21 @@ bool video_capture_loop(HCHANNEL  hChannel,
     DWORD dwFourcc = MWFOURCC_I420;
     uint8_t* pbImage = nullptr;
     int input_frame_wait_ms = 17;
-    int buffer_cnt = 1;
+    int buffer_cnt = 2;
     int idx;
     bool force_sleep = false;
 
+    MWCAP_VIDEO_CAPTURE_STATUS captureStatus;
+
+    uint64_t timestamp = 0LL;
+
+    std::chrono::time_point<std::chrono::steady_clock> start, end;
+
     if (out2ts.encoderType() == OutputTS::QSV ||
         out2ts.encoderType() == OutputTS::VAAPI)
-    {
         dwFourcc = MWFOURCC_NV12;
-        buffer_cnt = 3;
-    }
     else if (out2ts.encoderType() == OutputTS::NV)
-    {
         dwFourcc = MWFOURCC_I420;
-        buffer_cnt = 3;
-    }
     else
     {
         cerr << "Failed to determine best magewell pixel format.\n";
@@ -1175,60 +1168,37 @@ bool video_capture_loop(HCHANNEL  hChannel,
             }
 
             {
+                start = std::chrono::steady_clock::now();
                 std::unique_lock<std::mutex> lock(image_buffer_mutex);
 
-#if 0
                 for (idx = 0; avail_image_buffers.empty(); ++idx)
                 {
                     image_buffer_ready.wait_for(lock,
                                std::chrono::milliseconds(input_frame_wait_ms));
                 }
-#else
-                for(idx = 0;; ++idx)
+                if (idx > buffer_cnt)
                 {
-                    image_buffer_ready.wait_for(lock,
-                                                std::chrono::milliseconds(input_frame_wait_ms));
-                    if (!avail_image_buffers.empty())
-                        break;
+                    end = std::chrono::steady_clock::now();
+                    cerr << "video_capture_loop: waited "
+                         << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count()
+                         << "ms for image buffer. Encoder is too slow!\n";
                 }
-#endif
-                if (idx > 0)
-                    cerr << "video_capture_loop: waited for image buffer "
-                         << idx << " times. Encoder is too slow!\n";
 
                 pbImage = avail_image_buffers.front();
                 avail_image_buffers.pop_front();
             }
 
-            MW_RESULT ret = MWCaptureVideoFrameToVirtualAddressEx
+            MW_RESULT ret = MWCaptureVideoFrameToVirtualAddress
                             (hChannel,
                              videoBufferInfo.iNewestBufferedFullFrame,
-                             reinterpret_cast<uint8_t*>(pbImage),
+                             reinterpret_cast<MWCAP_PTR>(pbImage),
                              dwImageSize,
                              dwMinStride,
                              0,
                              0,
                              dwFourcc,
                              videoSignalStatus.cx,
-                             videoSignalStatus.cy,
-                             0,
-                             0,
-                             0,
-                             0,
-                             0,
-                             100,
-                             0,
-                             100,
-                             0,
-                             mode,
-                             MWCAP_VIDEO_ASPECT_RATIO_CROPPING,
-                             0,
-                             0,
-                             0,
-                             0,
-                             MWCAP_VIDEO_COLOR_FORMAT_UNKNOWN,
-                             MWCAP_VIDEO_QUANTIZATION_UNKNOWN,
-                             MWCAP_VIDEO_SATURATION_UNKNOWN);
+                             videoSignalStatus.cy);
 
             if (ret != MW_SUCCEEDED)
             {
@@ -1237,29 +1207,15 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
                 continue;
             }
-            if (MWWaitEvent(hCaptureEvent,1000) <= 0)
-            {
-                if (verbose > 0)
-                    cerr << "Error:wait capture event error or timeout\n";
-                break;
-            }
 
-            MWCAP_VIDEO_CAPTURE_STATUS captureStatus;
+            // gets the capture state while cleaning up the occupied system storage.
             MWGetVideoCaptureStatus(hChannel, &captureStatus);
 
-            LONGLONG llCurrent = 0LL;
-            MWGetDeviceTime(hChannel, &llCurrent);
+            timestamp = videoSignalStatus.bInterlaced
+                        ? videoFrameInfo.allFieldBufferedTimes[1]
+                        : videoFrameInfo.allFieldBufferedTimes[0];
 
-            if (verbose > 4)
-            {
-                llTotalTime += (llCurrent -
-                                (videoSignalStatus.bInterlaced
-                                 ? videoFrameInfo.allFieldBufferedTimes[1]
-                                 : videoFrameInfo.allFieldBufferedTimes[0]));
-                cerr << "Time: " << llTotalTime << endl;
-            }
-
-            out2ts.VideoFrame(pbImage, dwImageSize, llCurrent);
+            out2ts.VideoFrame(pbImage, dwImageSize, timestamp);
         }
     }
 
