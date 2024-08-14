@@ -850,7 +850,7 @@ void* audio_capture(void* param1, int param2, void* param3)
 
             if (MW_ENODATA == MWCaptureAudioFrame(channel_handle, &macf))
             {
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
 
@@ -968,7 +968,9 @@ bool video_capture_loop(HCHANNEL  hChannel,
     DWORD dwFourcc = MWFOURCC_I420;
     uint8_t* pbImage = nullptr;
     int input_frame_wait_ms = 17;
-    int buffer_cnt = 2;
+    int buffer_cnt = 5;
+    int frame_idx = 0;
+    int frame_wrap_idx = 4;
     int idx;
     bool force_sleep = false;
 
@@ -1020,6 +1022,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
         MWGetVideoFrameInfo(hChannel,
                             videoBufferInfo.iNewestBufferedFullFrame,
                             &videoFrameInfo);
+
+        frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
 
         DWORD dwMinStride = FOURCC_CalcMinStride(dwFourcc,
                                                  videoSignalStatus.cx, 4);
@@ -1135,87 +1139,101 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 continue;
             }
 
-            if (MWGetVideoFrameInfo(hChannel,
-                                    videoBufferInfo.iNewestBufferedFullFrame,
-                                    &videoFrameInfo) != MW_SUCCEEDED)
-            {
-                if (verbose > 0)
-                    cerr << "Failed to get video frame info.\n";
-                continue;
-            }
+            if (videoBufferInfo.iNewestBufferedFullFrame >= frame_wrap_idx)
+                frame_wrap_idx = videoBufferInfo.iNewestBufferedFullFrame + 1;
 
-            if (0 == (ullStatusBits & notifyBufferMode))
+            for (;;)
             {
-                if (verbose > 0)
-                    cerr << "Frame not ready.\n";
-                continue;
-            }
+                if (++frame_idx == frame_wrap_idx)
+                    frame_idx = 0;
 
-            if(videoSignalStatus.bInterlaced)
-            {
-                if (0 == videoBufferInfo.iBufferedFieldIndex)
+                if (MWGetVideoFrameInfo(hChannel, frame_idx,
+                                        &videoFrameInfo) != MW_SUCCEEDED)
                 {
-                    mode = MWCAP_VIDEO_DEINTERLACE_TOP_FIELD;
+                    if (verbose > 0)
+                        cerr << "Failed to get video frame info.\n";
+                    continue;
+                }
+
+                if (0 == (ullStatusBits & notifyBufferMode))
+                {
+                    if (verbose > 0)
+                        cerr << "Frame not ready.\n";
+                    continue;
+                }
+
+                if(videoSignalStatus.bInterlaced)
+                {
+                    if (0 == videoBufferInfo.iBufferedFieldIndex)
+                    {
+                        mode = MWCAP_VIDEO_DEINTERLACE_TOP_FIELD;
+                    }
+                    else
+                    {
+                        mode = MWCAP_VIDEO_DEINTERLACE_BOTTOM_FIELD;
+                    }
                 }
                 else
                 {
-                    mode = MWCAP_VIDEO_DEINTERLACE_BOTTOM_FIELD;
+                    mode = MWCAP_VIDEO_DEINTERLACE_BLEND;
                 }
-            }
-            else
-            {
-                mode = MWCAP_VIDEO_DEINTERLACE_BLEND;
-            }
 
-            {
-                start = std::chrono::steady_clock::now();
-                std::unique_lock<std::mutex> lock(image_buffer_mutex);
-
-                for (idx = 0; avail_image_buffers.empty(); ++idx)
                 {
-                    image_buffer_ready.wait_for(lock,
-                               std::chrono::milliseconds(input_frame_wait_ms));
+                    start = std::chrono::steady_clock::now();
+                    std::unique_lock<std::mutex> lock(image_buffer_mutex);
+
+                    for (idx = 0; avail_image_buffers.empty(); ++idx)
+                    {
+                        image_buffer_ready.wait_for(lock,
+                                      std::chrono::milliseconds(input_frame_wait_ms));
+                    }
+                    if (idx > buffer_cnt - 1)
+                    {
+                        end = std::chrono::steady_clock::now();
+                        cerr << "video_capture_loop: waited "
+                             << std::chrono::duration_cast<std::chrono::milliseconds>
+                                                       (end - start).count()
+                             << "ms for image buffer. Encoder is too slow!\n";
+                    }
+
+                    pbImage = avail_image_buffers.front();
+                    avail_image_buffers.pop_front();
                 }
-                if (idx > buffer_cnt)
+
+                MW_RESULT ret = MWCaptureVideoFrameToVirtualAddress
+                                (hChannel,
+                                 frame_idx,
+                                 reinterpret_cast<MWCAP_PTR>(pbImage),
+                                 dwImageSize,
+                                 dwMinStride,
+                                 0,
+                                 0,
+                                 dwFourcc,
+                                 videoSignalStatus.cx,
+                                 videoSignalStatus.cy);
+
+                if (ret != MW_SUCCEEDED)
                 {
-                    end = std::chrono::steady_clock::now();
-                    cerr << "video_capture_loop: waited "
-                         << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count()
-                         << "ms for image buffer. Encoder is too slow!\n";
+                    if (verbose > 0)
+                        cerr << "Frame not ready.\n";
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    continue;
                 }
 
-                pbImage = avail_image_buffers.front();
-                avail_image_buffers.pop_front();
+                // gets the capture state while cleaning up the occupied system storage.
+                MWGetVideoCaptureStatus(hChannel, &captureStatus);
+
+                timestamp = videoSignalStatus.bInterlaced
+                            ? videoFrameInfo.allFieldBufferedTimes[1]
+                            : videoFrameInfo.allFieldBufferedTimes[0];
+
+                out2ts.VideoFrame(pbImage, dwImageSize, timestamp);
+
+                if (frame_idx == (int)videoBufferInfo.iNewestBufferedFullFrame)
+                    break;
+                else
+                    cerr << "Processing driver buffered frame.\n";
             }
-
-            MW_RESULT ret = MWCaptureVideoFrameToVirtualAddress
-                            (hChannel,
-                             videoBufferInfo.iNewestBufferedFullFrame,
-                             reinterpret_cast<MWCAP_PTR>(pbImage),
-                             dwImageSize,
-                             dwMinStride,
-                             0,
-                             0,
-                             dwFourcc,
-                             videoSignalStatus.cx,
-                             videoSignalStatus.cy);
-
-            if (ret != MW_SUCCEEDED)
-            {
-                if (verbose > 0)
-                    cerr << "Frame not ready.\n";
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                continue;
-            }
-
-            // gets the capture state while cleaning up the occupied system storage.
-            MWGetVideoCaptureStatus(hChannel, &captureStatus);
-
-            timestamp = videoSignalStatus.bInterlaced
-                        ? videoFrameInfo.allFieldBufferedTimes[1]
-                        : videoFrameInfo.allFieldBufferedTimes[0];
-
-            out2ts.VideoFrame(pbImage, dwImageSize, timestamp);
         }
     }
 

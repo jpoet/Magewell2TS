@@ -161,10 +161,6 @@ class OutputTS
                           OutputStream* ost,
                           uint8_t* pImage,
                           int64_t timestamp);
-    bool write_video_frame(AVFormatContext* oc,
-                           OutputStream* ost,
-                           uint8_t* pImage,
-                           int64_t timestamp);
 
     EncoderType     m_encoderType  { UNKNOWN };
 

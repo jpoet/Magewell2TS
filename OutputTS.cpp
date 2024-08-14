@@ -1896,22 +1896,6 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
     int64_t pts = av_rescale_q(timestamp, m_input_time_base,
                                enc_ctx->time_base);
 
-    /*
-     * We may need to repeat the previous frame to keep everything in sync
-     */
-    if (hw_frame != nullptr)
-    {
-#if 0 // Using av_opt_set(ctx->priv_data, "skip_frame", "insert_nothing", 0) seems to remove the need for this
-        while (ost->next_pts < pts)
-        {
-            hw_frame->pts = (ost->next_pts)++;
-            write_frame(oc, enc_ctx, hw_frame, ost);
-            cerr << "Duplicated video frame\n";
-        }
-#endif
-        av_frame_free(&hw_frame);
-    }
-
     size_t size = enc_ctx->width * enc_ctx->height;
     memcpy(ost->frame->data[0], pImage, size);
     memcpy(ost->frame->data[1], pImage + size, size / 2);
@@ -1958,27 +1942,9 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
     ost->next_pts = hw_frame->pts + 1;
 
     ret = write_frame(oc, enc_ctx, hw_frame, ost);
+    av_frame_free(&hw_frame);
 
     return ret;
-}
-
-/*
- * encode one video frame and send it to the muxer
- * return 1 when encoding is finished, 0 otherwise
- */
-bool OutputTS::write_video_frame(AVFormatContext* oc,
-                                 OutputStream* ost,
-                                 uint8_t* pImage,
-                                 int64_t  timestamp)
-{
-    if (m_encoderType == EncoderType::NV)
-        return nv_encode(oc, ost, pImage, timestamp);
-    else if (m_encoderType == EncoderType::QSV)
-        return qsv_vaapi_encode(oc, ost, pImage, timestamp);
-    else if (m_encoderType == EncoderType::VAAPI)
-        return qsv_vaapi_encode(oc, ost, pImage, timestamp);
-
-    return false;
 }
 
 void OutputTS::Write(void)
@@ -2015,12 +1981,18 @@ void OutputTS::Write(void)
                 m_imagequeue.pop_front();
             }
 
-            write_video_frame(m_output_format_context,
-                              &m_video_stream, pImage,
-                              timestamp);
-
-            m_image_ready.wait_for(lock,
-                                   std::chrono::milliseconds(1));
+            if (m_encoderType == EncoderType::NV)
+                nv_encode(m_output_format_context, &m_video_stream,
+                          pImage, timestamp);
+            else if (m_encoderType == EncoderType::QSV ||
+                     m_encoderType == EncoderType::VAAPI)
+                qsv_vaapi_encode(m_output_format_context, &m_video_stream,
+                                 pImage, timestamp);
+            else
+            {
+                cerr << "Unknown encoderType.\n";
+                return;
+            }
         }
     }
 }
