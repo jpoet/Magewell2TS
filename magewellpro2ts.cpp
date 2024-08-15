@@ -968,10 +968,10 @@ bool video_capture_loop(HCHANNEL  hChannel,
     DWORD dwFourcc = MWFOURCC_I420;
     uint8_t* pbImage = nullptr;
     int input_frame_wait_ms = 17;
-    int buffer_cnt = 5;
+    int buffer_cnt = 10;
     int frame_idx = 0;
     int frame_wrap_idx = 4;
-    int idx;
+    int idx, cnt;
     bool force_sleep = false;
 
     MWCAP_VIDEO_CAPTURE_STATUS captureStatus;
@@ -1142,6 +1142,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             if (videoBufferInfo.iNewestBufferedFullFrame >= frame_wrap_idx)
                 frame_wrap_idx = videoBufferInfo.iNewestBufferedFullFrame + 1;
 
+            cnt = 0;
             for (;;)
             {
                 if (++frame_idx == frame_wrap_idx)
@@ -1232,7 +1233,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 if (frame_idx == (int)videoBufferInfo.iNewestBufferedFullFrame)
                     break;
                 else
-                    cerr << "Processing driver buffered frame.\n";
+                    cerr << "Processing driver buffered frame "
+                         << ++cnt << " of " << frame_wrap_idx << ".\n";
             }
         }
     }
