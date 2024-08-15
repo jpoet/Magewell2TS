@@ -1188,7 +1188,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
                         image_buffer_ready.wait_for(lock,
                                       std::chrono::milliseconds(input_frame_wait_ms));
                     }
-                    if (idx > buffer_cnt - 1)
+                    if (idx > buffer_cnt)
                     {
                         end = std::chrono::steady_clock::now();
                         cerr << "video_capture_loop: waited "

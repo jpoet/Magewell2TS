@@ -96,7 +96,7 @@ class OutputTS
 
         /* pts of the next frame that will be generated */
         int64_t next_pts;
-        int64_t next_timestamp;
+        int64_t timestamp;
         int samples_count;
 
         AVFrame* frame;
@@ -215,8 +215,6 @@ class OutputTS
     std::condition_variable m_audio_detected;
     std::mutex              m_detect_mutex;
     std::mutex              m_detecting_mutex;
-
-    std::mutex              m_mutex;
 
     MagCallback             m_image_buffer_available;
     std::thread             m_image_ready_thread;

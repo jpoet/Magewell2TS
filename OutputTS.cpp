@@ -620,16 +620,6 @@ void OutputTS::setAudioParams(int num_channels, bool is_lpcm, int bytes_per_samp
         if (is_lpcm)
         {
             cerr << " lpcm";
-#if 0
-            if (m_audio_sample_rate == 48000)
-            {
-                // Work around bug: Force 44.1kHz
-                m_audio_sample_rate = 44100;
-                cerr << " WARNING, forcing sample rate to "
-                     << m_audio_sample_rate
-                     << " (due to bug? in Magewell driver )" << endl;
-            }
-#endif
         }
         else
         {
@@ -816,7 +806,7 @@ void OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
     ost->enc = codec_context;
 
     ost->next_pts = 0;
-    ost->next_timestamp = 0;
+    ost->timestamp = 0;
     switch ((*codec)->type) {
         case AVMEDIA_TYPE_AUDIO:
           ost->enc->sample_fmt  = (*codec)->sample_fmts ?
@@ -1326,6 +1316,7 @@ AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
         return nullptr;
 
     frame->pts = m_packet_queue.TimeStamp();
+    ost->timestamp = frame->pts;
 
     ost->frame->pts = av_rescale_q(frame->pts, m_input_time_base,
                                    ost->enc->time_base);
@@ -1333,8 +1324,7 @@ AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
     ost->t     += (ost->tincr * frame->nb_samples);
     ost->tincr += (ost->tincr2 * frame->nb_samples);
 
-    ost->next_timestamp = frame->pts + frame->nb_samples;
-    ost->next_pts = ost->next_timestamp;
+    ost->next_pts = frame->pts + frame->nb_samples;
 
     return frame;
 }
@@ -1352,20 +1342,11 @@ bool OutputTS::write_pcm_frame(AVFormatContext* oc, OutputStream* ost)
     /* convert samples from native format to destination codec format,
      * using the resampler */
     /* compute destination number of samples */
-#if 0
-    dst_nb_samples = av_rescale_rnd(swr_get_delay(ost->swr_ctx,
-                                                  enc_ctx->sample_rate)
-                                    + frame->nb_samples,
-                                    enc_ctx->sample_rate,
-                                    enc_ctx->sample_rate,
-                                    AV_ROUND_UP);
-#else
     dst_nb_samples = av_rescale(swr_get_delay(ost->swr_ctx,
                                               enc_ctx->sample_rate)
                                 + frame->nb_samples,
                                 enc_ctx->sample_rate,
                                 enc_ctx->sample_rate);
-#endif
     av_assert0(dst_nb_samples == frame->nb_samples);
 
     /* when we pass a frame to the encoder, it may keep a reference to it
@@ -1441,9 +1422,9 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
     pkt->pts = av_rescale_q(m_packet_queue.TimeStamp(),
                             m_input_time_base,
                             ost->st->time_base);
-    ost->next_timestamp = m_packet_queue.TimeStamp() +
-                          (ost->frame->nb_samples /* * m_audio_channels */);
-    ost->next_pts = ost->next_timestamp;
+    ost->timestamp = m_packet_queue.TimeStamp();
+    ost->next_pts = ost->timestamp +
+                    (ost->frame->nb_samples /* * m_audio_channels */);
 
     pkt->duration = pkt->pts;
     pkt->dts = pkt->pts;
@@ -1878,7 +1859,7 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
     else
         ost->frame->pts = ost->next_pts;
 
-    ost->next_timestamp = timestamp + 1;
+    ost->timestamp = timestamp;
     ost->next_pts = ost->frame->pts + 1;
 
     return write_frame(oc, ost->enc, ost->frame, ost);
@@ -1938,7 +1919,7 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
     else
         hw_frame->pts = ost->next_pts;
 
-    ost->next_timestamp = timestamp + 1;
+    ost->timestamp = timestamp;
     ost->next_pts = hw_frame->pts + 1;
 
     ret = write_frame(oc, enc_ctx, hw_frame, ost);
@@ -1961,16 +1942,6 @@ void OutputTS::Write(void)
 
         for (;;)
         {
-            if (!m_no_audio)
-            {
-                while (m_audio_stream.next_timestamp < m_video_stream.next_timestamp)
-                {
-                    if (!write_audio_frame(m_output_format_context,
-                                           &m_audio_stream))
-                        break;
-                }
-            }
-
             {
                 const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
                 if (m_imagequeue.empty())
@@ -1979,6 +1950,16 @@ void OutputTS::Write(void)
                 pImage    = m_imagequeue.front().image;
                 timestamp = m_imagequeue.front().timestamp;
                 m_imagequeue.pop_front();
+            }
+
+            if (!m_no_audio)
+            {
+                while (m_audio_stream.timestamp < timestamp)
+                {
+                    if (!write_audio_frame(m_output_format_context,
+                                           &m_audio_stream))
+                        break;
+                }
             }
 
             if (m_encoderType == EncoderType::NV)
