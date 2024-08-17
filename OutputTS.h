@@ -85,7 +85,7 @@ class OutputTS
     bool AudioReady(void);
     void addPacket(uint8_t* buf, int buf_size, int64_t timestamp);
     void Write(void);
-    bool VideoFrame(uint8_t*  pImage, uint32_t imageSize, int64_t timestamp);
+    bool AddVideo(uint8_t*  pImage, uint32_t imageSize, int64_t timestamp);
 
   private:
     // a wrapper around a single output AVStream

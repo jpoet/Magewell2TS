@@ -964,7 +964,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
 {
     MWCAP_VIDEO_DEINTERLACE_MODE mode;
     DWORD notifyBufferMode;
-    LONGLONG llTotalTime = 0LL;
     DWORD dwFourcc = MWFOURCC_I420;
     uint8_t* pbImage = nullptr;
     int input_frame_wait_ms = 17;
@@ -1059,7 +1058,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
         }
 
         double frame_duration = videoSignalStatus.dwFrameDuration;
-        AVRational frame_rate, time_base;
+
+        AVRational frame_rate, frame_rate_calc, time_base;
         if (videoSignalStatus.bInterlaced == TRUE)
         {
             frame_rate = (AVRational){20000000LL, (int)frame_duration};
@@ -1067,7 +1067,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
         }
         else
         {
-            frame_rate = (AVRational){10000000LL, (int)frame_duration};
+            frame_rate_calc = (AVRational){10000000LL, (int)frame_duration};
+            frame_rate = (AVRational){60000, 1001};
             time_base = (AVRational){1, 10000000LL};
         }
         input_frame_wait_ms = frame_duration / 10000 / buffer_cnt;
@@ -1076,14 +1077,19 @@ bool video_capture_loop(HCHANNEL  hChannel,
         if (verbose > 2)
         {
             cerr << "========\n";
+            double fps_calc = (videoSignalStatus.bInterlaced == TRUE) ?
+                              (double)20000000LL / frame_duration :
+                              (double)10000000LL / frame_duration;
             double fps = (videoSignalStatus.bInterlaced == TRUE) ?
-                         (double)20000000LL / frame_duration :
-                         (double)10000000LL / frame_duration;
+                         (double)30000 / 1001 :
+                         (double)60000 / 1001;
             cerr << "Input signal resolution: " << videoSignalStatus.cx
                  << "x" << videoSignalStatus.cy << "\n";
-            cerr << "Input signal fps: " << fps
-                 << "  " << frame_rate.num << "/" << frame_rate.den << "\n";
+            cerr << "Input signal fps: " << fps_calc
+                 << "  " << frame_rate_calc.num << "/" << frame_rate_calc.den << "\n";
             cerr << "Frame duration: " << frame_duration << "\n";
+            cerr << "Input signal fps (adjusted): " << fps
+                 << "  " << frame_rate.num << "/" << frame_rate.den << "\n";
             cerr << "Time base: " << time_base.num << "/" << time_base.den << "\n";
             cerr << "Input signal interlaced: "
                  << static_cast<bool>(videoSignalStatus.bInterlaced) << "\n";
@@ -1228,7 +1234,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
                             ? videoFrameInfo.allFieldBufferedTimes[1]
                             : videoFrameInfo.allFieldBufferedTimes[0];
 
-                out2ts.VideoFrame(pbImage, dwImageSize, timestamp);
+                out2ts.AddVideo(pbImage, dwImageSize, timestamp);
 
                 if (frame_idx == (int)videoBufferInfo.iNewestBufferedFullFrame)
                     break;

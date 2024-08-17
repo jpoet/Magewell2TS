@@ -1978,8 +1978,8 @@ void OutputTS::Write(void)
     }
 }
 
-bool OutputTS::VideoFrame(uint8_t* pImage, uint32_t imageSize,
-                          int64_t timestamp)
+bool OutputTS::AddVideo(uint8_t* pImage, uint32_t imageSize,
+                        int64_t timestamp)
 {
     const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
     m_imagequeue.push_back(imagepkt_t{timestamp, pImage});
