@@ -968,7 +968,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
     uint8_t* pbImage = nullptr;
     int input_frame_wait_ms = 17;
     int buffer_cnt = 10;
-    int frame_idx = 0;
+    int frame_idx = -1;
     int frame_wrap_idx = 4;
     int idx, cnt;
     bool force_sleep = false;
@@ -1021,8 +1021,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
         MWGetVideoFrameInfo(hChannel,
                             videoBufferInfo.iNewestBufferedFullFrame,
                             &videoFrameInfo);
-
-        frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
 
         DWORD dwMinStride = FOURCC_CalcMinStride(dwFourcc,
                                                  videoSignalStatus.cx, 4);
@@ -1151,7 +1149,9 @@ bool video_capture_loop(HCHANNEL  hChannel,
             cnt = 0;
             for (;;)
             {
-                if (++frame_idx == frame_wrap_idx)
+                if (frame_idx == -1)
+                    frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
+                else if (++frame_idx == frame_wrap_idx)
                     frame_idx = 0;
 
                 if (MWGetVideoFrameInfo(hChannel, frame_idx,
