@@ -920,6 +920,9 @@ bool video_capture_loop(HCHANNEL  hChannel,
     LONGLONG llTotalTime = 0LL;
     DWORD dwFourcc = MWFOURCC_I420;
 
+    int frame_idx = -1;
+    int frame_wrap_idx = 4;
+
     if (out2ts.encoderType() == OutputTS::QSV ||
         out2ts.encoderType() == OutputTS::VAAPI)
         dwFourcc = MWFOURCC_NV12;
@@ -1070,86 +1073,107 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 continue;
             }
 
-            if (MWGetVideoFrameInfo(hChannel,
-                                    videoBufferInfo.iNewestBufferedFullFrame,
-                                    &videoFrameInfo) != MW_SUCCEEDED)
-            {
-                if (verbose > 0)
-                    cerr << "Failed to get video frame info.\n";
-                continue;
-            }
+#if 1
+            if (videoBufferInfo.iNewestBufferedFullFrame >= frame_wrap_idx)
+                frame_wrap_idx = videoBufferInfo.iNewestBufferedFullFrame + 1;
 
-            if (0 == (ullStatusBits & notifyBufferMode))
+            for (;;)
             {
-                continue;
-            }
+                if (frame_idx == -1)
+                    frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
+                else if (++frame_idx == frame_wrap_idx)
+                    frame_idx = 0;
 
-            if(videoSignalStatus.bInterlaced)
-            {
-                if (0 == videoBufferInfo.iBufferedFieldIndex)
+#else
+                frame_idx = frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
+#endif
+                if (MWGetVideoFrameInfo(hChannel, frame_idx,
+                                        &videoFrameInfo) != MW_SUCCEEDED)
                 {
-                    mode = MWCAP_VIDEO_DEINTERLACE_TOP_FIELD;
+                    if (verbose > 0)
+                        cerr << "Failed to get video frame info.\n";
+                    continue;
+                }
+
+                if (0 == (ullStatusBits & notifyBufferMode))
+                {
+                    continue;
+                }
+
+                if(videoSignalStatus.bInterlaced)
+                {
+                    if (0 == videoBufferInfo.iBufferedFieldIndex)
+                    {
+                        mode = MWCAP_VIDEO_DEINTERLACE_TOP_FIELD;
+                    }
+                    else
+                    {
+                        mode = MWCAP_VIDEO_DEINTERLACE_BOTTOM_FIELD;
+                    }
                 }
                 else
                 {
-                    mode = MWCAP_VIDEO_DEINTERLACE_BOTTOM_FIELD;
+                    mode = MWCAP_VIDEO_DEINTERLACE_BLEND;
                 }
+
+                MW_RESULT ret = MWCaptureVideoFrameToVirtualAddressEx
+                                (hChannel,
+                                 frame_idx,
+                                 reinterpret_cast<unsigned char* >(pbImage),
+                                 dwImageSize,
+                                 dwMinStride,
+                                 0,
+                                 0,
+                                 dwFourcc,
+                                 videoSignalStatus.cx,
+                                 videoSignalStatus.cy,
+                                 0,
+                                 0,
+                                 0,
+                                 0,
+                                 0,
+                                 100,
+                                 0,
+                                 100,
+                                 0,
+                                 mode,
+                                 MWCAP_VIDEO_ASPECT_RATIO_CROPPING,
+                                 0,
+                                 0,
+                                 0,
+                                 0,
+                                 MWCAP_VIDEO_COLOR_FORMAT_UNKNOWN,
+                                 MWCAP_VIDEO_QUANTIZATION_UNKNOWN,
+                                 MWCAP_VIDEO_SATURATION_UNKNOWN);
+
+                if (ret != MW_SUCCEEDED)
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    continue;
+                }
+                if (MWWaitEvent(hCaptureEvent,1000) <= 0)
+                {
+                    if (verbose > 0)
+                        cerr << "Error:wait capture event error or timeout\n";
+                    break;
+                }
+
+                MWCAP_VIDEO_CAPTURE_STATUS captureStatus;
+                MWGetVideoCaptureStatus(hChannel, &captureStatus);
+
+                LONGLONG llCurrent = videoSignalStatus.bInterlaced
+                                     ? videoFrameInfo.allFieldBufferedTimes[1]
+                                     : videoFrameInfo.allFieldBufferedTimes[0];
+
+                out2ts.Write(pbImage, dwImageSize, llCurrent);
+#if 1
+                if (frame_idx == (int)videoBufferInfo.iNewestBufferedFullFrame)
+                    break;
+                else
+                    cerr << "Processing driver buffered frame "
+                         << ++cnt << " of " << frame_wrap_idx << ".\n";
             }
-            else
-            {
-                mode = MWCAP_VIDEO_DEINTERLACE_BLEND;
-            }
-
-            MW_RESULT ret = MWCaptureVideoFrameToVirtualAddressEx
-                            (hChannel,
-                             videoBufferInfo.iNewestBufferedFullFrame,
-                             reinterpret_cast<unsigned char* >(pbImage),
-                             dwImageSize,
-                             dwMinStride,
-                             0,
-                             0,
-                             dwFourcc,
-                             videoSignalStatus.cx,
-                             videoSignalStatus.cy,
-                             0,
-                             0,
-                             0,
-                             0,
-                             0,
-                             100,
-                             0,
-                             100,
-                             0,
-                             mode,
-                             MWCAP_VIDEO_ASPECT_RATIO_CROPPING,
-                             0,
-                             0,
-                             0,
-                             0,
-                             MWCAP_VIDEO_COLOR_FORMAT_UNKNOWN,
-                             MWCAP_VIDEO_QUANTIZATION_UNKNOWN,
-                             MWCAP_VIDEO_SATURATION_UNKNOWN);
-
-            if (ret != MW_SUCCEEDED)
-            {
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                continue;
-            }
-            if (MWWaitEvent(hCaptureEvent,1000) <= 0)
-            {
-                if (verbose > 0)
-                    cerr << "Error:wait capture event error or timeout\n";
-                break;
-            }
-
-            MWCAP_VIDEO_CAPTURE_STATUS captureStatus;
-            MWGetVideoCaptureStatus(hChannel, &captureStatus);
-
-            LONGLONG llCurrent = videoSignalStatus.bInterlaced
-                                 ? videoFrameInfo.allFieldBufferedTimes[1]
-                                 : videoFrameInfo.allFieldBufferedTimes[0];
-
-            out2ts.Write(pbImage, dwImageSize, llCurrent);
+#endif
         }
 
         MWUnpinVideoBuffer(hChannel, (LPBYTE)pbImage);
