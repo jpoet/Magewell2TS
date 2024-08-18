@@ -67,8 +67,8 @@ class OutputTS
     enum EncoderType { UNKNOWN, NV, VAAPI, QSV };
 
     OutputTS(int verbose, const std::string & video_codec_name,
-             int look_ahead, bool no_audio,
-             const std::string & device);
+             const std::string & preset, int quality, int look_ahead,
+             bool no_audio, const std::string & device);
     ~OutputTS(void);
 
     EncoderType encoderType(void) const { return m_encoderType; }
@@ -141,12 +141,9 @@ class OutputTS
     bool nv_encode(AVFormatContext* oc,
                    OutputStream* ost, uint8_t* pImage,
                    uint32_t imageSize, int64_t timestamp);
-    bool vaapi_encode(AVFormatContext* oc,
+    bool qsv_vaapi_encode(AVFormatContext* oc,
                       OutputStream* ost, uint8_t*  pImage,
                       uint32_t imageSize, int64_t timestamp);
-    bool qsv_encode(AVFormatContext* oc,
-                    OutputStream* ost, uint8_t*  pImage,
-                    uint32_t imageSize, int64_t timestamp);
     bool write_video_frame(AVFormatContext* oc, OutputStream* ost,
                            uint8_t*  pImage, uint32_t imageSize,
                            int64_t timestamp);
@@ -187,7 +184,8 @@ class OutputTS
 
     std::string      m_video_codec_name        {"hevc_nvenc"};
     std::string      m_device;
-//    std::string      m_driver;
+    std::string      m_preset;
+    int              m_quality                 {-1};
     int              m_look_ahead              {-1};
     int              m_input_width             {1280};
     int              m_input_height            {720};

@@ -426,12 +426,6 @@ static int read_packet(void* opaque, uint8_t* buf, int buf_size)
     return q->Pop(buf, buf_size);
 }
 
-static int write_packet(void* opaque, uint8_t* buf, int buf_size)
-{
-    cerr << "Write packet not implemented but it needs to be!\n";
-    exit(1);
-}
-
 static int64_t seek_packet(void* opaque, int64_t offset, int whence)
 {
     PktQueue* q = reinterpret_cast<PktQueue* >(opaque);
@@ -441,11 +435,13 @@ static int64_t seek_packet(void* opaque, int64_t offset, int whence)
 
 
 OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
-                   int look_ahead, bool no_audio,
-                   const string & device)
+                   const string & preset, int quality, int look_ahead,
+                   bool no_audio, const string & device)
     : m_packet_queue(verbose_level)
     , m_verbose(verbose_level)
     , m_video_codec_name(video_codec_name)
+    , m_preset(preset)
+    , m_quality(quality)
     , m_look_ahead(look_ahead)
     , m_no_audio(no_audio)
     , m_device("/dev/dri/" + device)
@@ -1025,7 +1021,7 @@ bool OutputTS::open_spdif_context(void)
                                               0,
                                               reinterpret_cast<void* >(&m_packet_queue),
                                               read_packet,
-                                              write_packet,
+                                              nullptr,
                                               seek_packet);
     if (!m_spdif_avio_context)
     {
@@ -1164,8 +1160,7 @@ bool OutputTS::open_spdif(void)
         if (m_verbose > 1)
         {
             cerr << "--> Detected fmt '" << fmt->name
-                 << "' '" << fmt->long_name
-                 << "' codec: " << fmt->raw_codec_id << endl;
+                 << "' '" << fmt->long_name << "'\n";
         }
 
         if (0 > avformat_find_stream_info(m_spdif_format_context, NULL))
@@ -1258,7 +1253,7 @@ void OutputTS::detect_audio(void)
     }
     else
     {
-        m_audio_codec_name = "aac";
+        m_audio_codec_name = "eac3";
         m_channel_layout = AV_CHANNEL_LAYOUT_STEREO;
         if (m_verbose > 0)
         {
@@ -1500,11 +1495,18 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
 
     av_dict_copy(&opt, opt_arg, 0);
 
-    av_opt_set(ctx->priv_data, "preset", "p7", 0);
+    if (!m_preset.empty())
+    {
+        av_opt_set(ctx->priv_data, "preset", m_preset.c_str(), 0);
+        if (m_verbose > 0)
+            cerr << "Using preset " << m_preset << " for "
+                 << m_video_codec_name << endl;
+    }
+
     av_opt_set(ctx->priv_data, "tune", "hq", 0);
     av_opt_set(ctx->priv_data, "rc", "constqp", 0);
 
-    av_opt_set_int(ctx->priv_data, "cq", 16, 0);
+    av_opt_set_int(ctx->priv_data, "cq", m_quality, 0);
     if (m_look_ahead >= 0)
         av_opt_set_int(ctx->priv_data, "rc-lookahead", m_look_ahead, 0);
     av_opt_set_int(ctx->priv_data, "b", 0, 0);
@@ -1677,7 +1679,8 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
 bool OutputTS::open_qsv(const AVCodec* codec,
                           OutputStream* ost, AVDictionary* opt_arg)
 {
-    int ret;
+    int    ret;
+
     AVCodecContext* ctx = ost->enc;
     AVDictionary* opt = nullptr;
     AVBufferRef* hw_frames_ref;
@@ -1685,38 +1688,50 @@ bool OutputTS::open_qsv(const AVCodec* codec,
 
     av_dict_copy(&opt, opt_arg, 0);
 
-    av_opt_set_int(ctx->priv_data, "preset", 3, 0);
-    av_opt_set(ctx->priv_data, "scenario", "livestreaming", 0);
-//    av_opt_set_int(ctx->priv_data, "scenario", 7, 0);
-    av_opt_set_int(ctx->priv_data, "extbrc", 1, 0);
-    av_opt_set_int(ctx->priv_data, "look_ahead_depth", 30, 0);
-    ctx->global_quality = 20;
-
-    vector<std::string> drivers{ "iHD", "i965" };
-    vector<std::string>::iterator Idriver;
-    for (Idriver = drivers.begin(); Idriver != drivers.end(); ++Idriver)
+    if (!m_preset.empty())
     {
-        string envstr = "LIBVA_DRIVER_NAME=" + *Idriver;
-        char* env = envstr.data();
-        putenv(env);
-
-        if ((ret = av_hwdevice_ctx_create(&ost->hw_device_ctx,
-                                          AV_HWDEVICE_TYPE_QSV,
-                                          m_device.c_str(), opt, 0)) < 0)
-            cerr << "Failed to open VAAPI driver '" << *Idriver << "'\n";
-        else
-            break;
+        av_opt_set(ctx->priv_data, "preset", m_preset.c_str(), 0);
+        if (m_verbose > 0)
+            cerr << "Using preset " << m_preset << " for "
+                 << m_video_codec_name << endl;
     }
-    if (Idriver == drivers.end())
+
+    av_opt_set(ctx->priv_data, "scenario", "livestreaming", 0);
+#if 0
+    av_opt_set_int(ctx->priv_data, "extbrc", 1, 0);
+    av_opt_set_int(ctx->priv_data, "adaptive_i", 1, 0);
+
+//    av_opt_set_int(ctx->priv_data, "bf", 0, 0);
+#endif
+
+    ctx->global_quality = m_quality;
+
+    if (m_look_ahead >= 0)
     {
-        cerr << "Failed to create a QSV device. Error code: "
-             << AVerr2str(ret) << endl;
-        m_error = true;
+        if (m_video_codec_name == "hevc_qsv")
+            av_opt_set_int(ctx->priv_data, "look_ahead", 1, 0);
+        av_opt_set_int(ctx->priv_data, "look_ahead_depth", m_look_ahead, 0);
+    }
+    av_opt_set_int(ctx->priv_data, "extra_hw_frames", m_look_ahead, 0);
+
+    av_opt_set(ctx->priv_data, "skip_frame", "insert_dummy", 0);
+
+    // Make sure env doesn't prevent QSV init.
+    static string envstr = "LIBVA_DRIVER_NAME";
+    char* env = envstr.data();
+    unsetenv(env);
+
+    av_dict_set(&opt, "child_device", m_device.c_str(), 0);
+    if ((ret = av_hwdevice_ctx_create(&ost->hw_device_ctx,
+                                      AV_HWDEVICE_TYPE_QSV,
+                                      m_device.c_str(), opt, 0)) != 0)
+    {
+        cerr << "Failed to open QSV on " << m_device << "\n";
         return false;
     }
 
     if (m_verbose > 0)
-        cerr << "Using QSV driver '" << *Idriver << "'\n";
+        cerr << "Using QSV\n";
 
     /* set hw_frames_ctx for encoder's AVCodecContext */
     if (!(hw_frames_ref = av_hwframe_ctx_alloc(ost->hw_device_ctx)))
@@ -1819,104 +1834,20 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
     return write_frame(oc, ost->enc, ost->frame, ost);
 }
 
-bool OutputTS::vaapi_encode(AVFormatContext* oc,
-                            OutputStream* ost,
-                            uint8_t* data,
-                            uint32_t imageSize,
-                            int64_t timestamp)
+bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
+                                OutputStream* ost, uint8_t*  pImage,
+                                uint32_t imageSize, int64_t timestamp)
 {
-    int ret;
-    AVCodecContext* ctx = ost->enc;
-    AVFrame       * hw_frame = nullptr;
-
-#if 0
-    /* when we pass a frame to the encoder, it may keep a reference to it
-     * internally; make sure we do not overwrite it here */
-    if (av_frame_make_writable(ost->frame) < 0)
-    {
-        if (m_verbose > 0)
-        {
-            cerr << "get_video_frame: Make frame writable failed.\n";
-        }
-        exit(1);
-    }
-#endif
-
-    size_t size = ctx->width * ctx->height;
-    memcpy(ost->frame->data[0], data, size);
-    memcpy(ost->frame->data[1], data + size, size / 2);
-
-    if (!(hw_frame = av_frame_alloc()))
-    {
-        cerr << "Failed to allocate hw frame.";
-        m_error = true;
-        return false;
-    }
-
-    if ((ret = av_hwframe_get_buffer(ctx->hw_frames_ctx,
-                                     hw_frame, 0)) < 0)
-    {
-        cerr << "Failed to get hw buffer: "
-             << AV_ts2str(ret) << endl;
-        m_error = true;
-        return false;
-    }
-
-    if (!hw_frame->hw_frames_ctx)
-    {
-        cerr << "Failed to allocate hw frame CTX.\n";
-        m_error = true;
-        return false;
-    }
-
-    if ((ret = av_hwframe_transfer_data(hw_frame,
-                                        ost->frame, 0)) < 0)
-    {
-        cerr << "Error while transferring frame data to surface: "
-             << AV_ts2str(ret) << endl;
-        m_error = true;
-        return false;
-    }
-
-    hw_frame->pts = av_rescale_q_rnd(timestamp, m_input_time_base,
-                                     ctx->time_base,
-        static_cast<AVRounding>(AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX));
-
-    ost->next_pts = timestamp + 1;
-
-    ret = write_frame(oc, ost->enc, hw_frame, ost);
-
-    av_frame_free(&hw_frame);
-
-    return ret;
-}
-
-bool OutputTS::qsv_encode(AVFormatContext* oc,
-                          OutputStream* ost,
-                          uint8_t* data,
-                          uint32_t imageSize,
-                          int64_t timestamp)
-{
-    int ret;
     AVCodecContext* enc_ctx = ost->enc;
-    AVFrame       * hw_frame = nullptr;
+    static AVFrame* hw_frame = nullptr;
+    int    ret;
 
-#if 0
-    /* when we pass a frame to the encoder, it may keep a reference to it
-     * internally; make sure we do not overwrite it here */
-    if (av_frame_make_writable(ost->frame) < 0)
-    {
-        if (m_verbose > 0)
-        {
-            cerr << "get_video_frame: Make frame writable failed.\n";
-        }
-        exit(1);
-    }
-#endif
+    int64_t pts = av_rescale_q(timestamp, m_input_time_base,
+                               enc_ctx->time_base);
 
     size_t size = enc_ctx->width * enc_ctx->height;
-    memcpy(ost->frame->data[0], data, size);
-    memcpy(ost->frame->data[1], data + size, size / 2);
+    memcpy(ost->frame->data[0], pImage, size);
+    memcpy(ost->frame->data[1], pImage + size, size / 2);
 
     if (!(hw_frame = av_frame_alloc()))
     {
@@ -1950,12 +1881,20 @@ bool OutputTS::qsv_encode(AVFormatContext* oc,
         return false;
     }
 
-    hw_frame->pts = av_rescale_q(timestamp, m_input_time_base,
-                                 enc_ctx->time_base);
+#if 0
+    if (ost->next_pts == 0)
+        hw_frame->pts = pts;
+    else
+        hw_frame->pts = ost->next_pts;
+
+//    ost->next_timestamp = timestamp + 1;
+    ost->next_pts = hw_frame->pts + 1;
+#else
+    hw_frame->pts = pts;
     ost->next_pts = timestamp + 1;
+#endif
 
     ret = write_frame(oc, enc_ctx, hw_frame, ost);
-
     av_frame_free(&hw_frame);
 
     return ret;
@@ -1971,10 +1910,9 @@ bool OutputTS::write_video_frame(AVFormatContext* oc, OutputStream* ost,
 {
     if (m_encoderType == EncoderType::NV)
         return nv_encode(oc, ost, pImage, imageSize, timestamp);
-    else if (m_encoderType == EncoderType::QSV)
-        return qsv_encode(oc, ost, pImage, imageSize, timestamp);
-    else if (m_encoderType == EncoderType::VAAPI)
-        return vaapi_encode(oc, ost, pImage, imageSize, timestamp);
+    else if (m_encoderType == EncoderType::QSV ||
+             m_encoderType == EncoderType::VAAPI)
+        return qsv_vaapi_encode(oc, ost, pImage, imageSize, timestamp);
 
     return false;
 }
