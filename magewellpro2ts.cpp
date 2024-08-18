@@ -797,8 +797,9 @@ void* audio_capture(void* param1, int param2, void* param3)
 
 // Channels: 2 SampleRate: 48000 FrameRate: 9216000 BytesPerSample: 2
 // perFrame 192
-        out2ts->setAudioParams(cur_channels, bytes_per_sample,
-                               MWCAP_AUDIO_SAMPLES_PER_FRAME);
+        out2ts->setAudioParams(cur_channels, audio_signal_status.bLPCM,
+                               bytes_per_sample, MWCAP_AUDIO_SAMPLES_PER_FRAME,
+                               audio_signal_status.dwSampleRate);
 
         cnt = 0;
         err_cnt = 0;
@@ -1077,6 +1078,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             if (videoBufferInfo.iNewestBufferedFullFrame >= frame_wrap_idx)
                 frame_wrap_idx = videoBufferInfo.iNewestBufferedFullFrame + 1;
 
+            int cnt = 0;
             for (;;)
             {
                 if (frame_idx == -1)
