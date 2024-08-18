@@ -825,7 +825,6 @@ void OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
                   }
               }
           }
-
           av_channel_layout_copy(&ost->enc->ch_layout, &m_channel_layout);
           ost->st->time_base = (AVRational){ 1, ost->enc->sample_rate };
 
@@ -890,7 +889,9 @@ void OutputTS::close_stream(AVFormatContext* oc, OutputStream* ost)
     av_frame_free(&ost->frame);
     av_frame_free(&ost->tmp_frame);
     av_packet_free(&ost->tmp_pkt);
+#if 0
     sws_freeContext(ost->sws_ctx);
+#endif
     swr_free(&ost->swr_ctx);
 }
 
@@ -928,69 +929,64 @@ AVFrame* OutputTS::alloc_audio_frame(enum AVSampleFormat sample_fmt,
 void OutputTS::open_audio(AVFormatContext* oc, const AVCodec* codec,
                           OutputStream* ost, AVDictionary* opt_arg)
 {
-    AVCodecContext* c;
     int nb_samples;
     int ret;
     AVDictionary* opt = NULL;
 
-    c = ost->enc;
-
     /* open it */
     av_dict_copy(&opt, opt_arg, 0);
-    ret = avcodec_open2(c, codec, &opt);
+    ret = avcodec_open2(ost->enc, codec, &opt);
     av_dict_free(&opt);
-    if (ret < 0) {
-        fprintf(stderr, "Could not open audio codec: %s\n", AVerr2str(ret));
+    if (ret < 0)
+    {
+        cerr << "Could not open audio codec: " << AVerr2str(ret) << "\n";
         exit(1);
     }
 
-    /* init signal generator */
-    ost->t     = 0;
-    ost->tincr = 2 * M_PI * 110.0 / c->sample_rate;
-    /* increment frequency by 110 Hz per second */
-    ost->tincr2 = 2 * M_PI * 110.0 / c->sample_rate / c->sample_rate;
-
-    if (c->codec->capabilities & AV_CODEC_CAP_VARIABLE_FRAME_SIZE)
+    if (ost->enc->codec->capabilities & AV_CODEC_CAP_VARIABLE_FRAME_SIZE)
         nb_samples = 10000;
     else
-        nb_samples = c->frame_size;
+        nb_samples = ost->enc->frame_size;
 
-    ost->frame     = alloc_audio_frame(c->sample_fmt, &c->ch_layout,
-                                       c->sample_rate, nb_samples);
-    ost->tmp_frame = alloc_audio_frame(AV_SAMPLE_FMT_S16, &c->ch_layout,
-                                       c->sample_rate, nb_samples);
+    ost->frame     = alloc_audio_frame(ost->enc->sample_fmt, &ost->enc->ch_layout,
+                                       ost->enc->sample_rate, nb_samples);
+    ost->tmp_frame = alloc_audio_frame(AV_SAMPLE_FMT_S16, &ost->enc->ch_layout,
+                                       ost->enc->sample_rate, nb_samples);
 
     /* copy the stream parameters to the muxer */
-    ret = avcodec_parameters_from_context(ost->st->codecpar, c);
-    if (ret < 0) {
-        fprintf(stderr, "Could not copy the stream parameters\n");
+    ret = avcodec_parameters_from_context(ost->st->codecpar, ost->enc);
+    if (ret < 0)
+    {
+        cerr << "Could not copy the stream parameters\n";
         exit(1);
     }
 
     /* create resampler context */
     ost->swr_ctx = swr_alloc();
-    if (!ost->swr_ctx) {
-        fprintf(stderr, "Could not allocate resampler context\n");
+    if (!ost->swr_ctx)
+    {
+        cerr << "Could not allocate resampler context\n";
         exit(1);
     }
 
     /* set options */
     av_opt_set_chlayout  (ost->swr_ctx, "in_chlayout",
-                          &c->ch_layout,     0);
+                          &ost->enc->ch_layout,     0);
     av_opt_set_int       (ost->swr_ctx, "in_sample_rate",
-                          c->sample_rate,    0);
+                          ost->enc->sample_rate,    0);
     av_opt_set_sample_fmt(ost->swr_ctx, "in_sample_fmt",
                           AV_SAMPLE_FMT_S16, 0);
     av_opt_set_chlayout  (ost->swr_ctx, "out_chlayout",
-                          &c->ch_layout,     0);
+                          &ost->enc->ch_layout,     0);
     av_opt_set_int       (ost->swr_ctx, "out_sample_rate",
-                          c->sample_rate,    0);
+                          ost->enc->sample_rate,    0);
     av_opt_set_sample_fmt(ost->swr_ctx, "out_sample_fmt",
-                          c->sample_fmt,     0);
+                          ost->enc->sample_fmt,     0);
 
     /* initialize the resampling context */
-    if ((ret = swr_init(ost->swr_ctx)) < 0) {
-        fprintf(stderr, "Failed to initialize the resampling context\n");
+    if ((ret = swr_init(ost->swr_ctx)) < 0)
+    {
+        cerr << "Failed to initialize the resampling context\n";
         exit(1);
     }
 }
@@ -1305,14 +1301,13 @@ AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
     AVFrame* frame = ost->tmp_frame;
 
     int j, i;
-    uint8_t* q = (uint8_t*)frame->data[0];
+    uint8_t* q = reinterpret_cast<uint8_t*>(frame->data[0]);
     size_t bytes;
-    size_t got;
 
     bytes = ost->enc->ch_layout.nb_channels * frame->nb_samples * 2;
     if (m_packet_queue.Size() < bytes)
         return nullptr;
-    if ((got = m_packet_queue.Pop(q, bytes)) == 0)
+    if (m_packet_queue.Pop(q, bytes) == 0)
         return nullptr;
 
     frame->pts = m_packet_queue.TimeStamp();
@@ -1320,9 +1315,6 @@ AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
 
     ost->frame->pts = av_rescale_q(frame->pts, m_input_time_base,
                                    ost->enc->time_base);
-
-    ost->t     += (ost->tincr * frame->nb_samples);
-    ost->tincr += (ost->tincr2 * frame->nb_samples);
 
     ost->next_pts = frame->pts + frame->nb_samples;
 
