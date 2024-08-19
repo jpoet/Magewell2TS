@@ -51,7 +51,9 @@ extern "C" {
 #include <libavutil/imgutils.h>
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#if 0
 #include <libswscale/swscale.h>
+#endif
 #include <libswresample/swresample.h>
 }
 
@@ -480,11 +482,8 @@ void OutputTS::open_streams(void)
     }
     else
     {
-        if (m_verbose > 0)
-        {
-            cerr << "Could not find video encoder for '"
-                 << m_video_codec_name << "'\n";
-        }
+        cerr << "Could not find video encoder for '"
+             << m_video_codec_name << "'\n";
         m_error = true;
         return;
     }
@@ -497,10 +496,7 @@ void OutputTS::open_streams(void)
 
         if (!audio_codec)
         {
-            if (m_verbose > 0)
-            {
-                cerr << "Could not find audio encoder for AC3\n";
-            }
+            cerr << "Could not find audio encoder for AC3\n";
             m_error = true;
             return;
         }
@@ -513,10 +509,7 @@ void OutputTS::open_streams(void)
                                    NULL, "mpegts", filename);
     if (!m_output_format_context)
     {
-        if (m_verbose > 0)
-        {
-            cerr << "Could not create output format context.\n";
-        }
+        cerr << "Could not create output format context.\n";
         m_error = true;
         return;
     }
@@ -777,26 +770,30 @@ void OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
     int idx;
 
     ost->tmp_pkt = av_packet_alloc();
-    if (!ost->tmp_pkt) {
-        fprintf(stderr, "Could not allocate AVPacket\n");
+    if (!ost->tmp_pkt)
+    {
+        cerr << "Could not allocate AVPacket\n";
         exit(1);
     }
 
     ost->st = avformat_new_stream(oc, NULL);
-    if (!ost->st) {
-        fprintf(stderr, "Could not allocate stream\n");
+    if (!ost->st)
+    {
+        cerr << "Could not allocate stream\n";
         exit(1);
     }
     ost->st->id = oc->nb_streams-1;
     codec_context = avcodec_alloc_context3(*codec);
-    if (!codec_context) {
-        fprintf(stderr, "Could not alloc an encoding context\n");
+    if (!codec_context)
+    {
+        cerr << "Could not alloc an encoding context\n";
         exit(1);
     }
     ost->enc = codec_context;
 
     ost->next_pts = 0;
-    switch ((*codec)->type) {
+    switch ((*codec)->type)
+    {
         case AVMEDIA_TYPE_AUDIO:
           ost->enc->sample_fmt  = (*codec)->sample_fmts ?
                                   (*codec)->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
@@ -860,8 +857,6 @@ void OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
                    << (m_interlaced ? 'i' : 'p')
                    << "\n";
           }
-
-
           break;
 
         default:
@@ -879,7 +874,9 @@ void OutputTS::close_stream(AVFormatContext* oc, OutputStream* ost)
     av_frame_free(&ost->frame);
     av_frame_free(&ost->tmp_frame);
     av_packet_free(&ost->tmp_pkt);
+#if 0
     sws_freeContext(ost->sws_ctx);
+#endif
     swr_free(&ost->swr_ctx);
 }
 
@@ -893,8 +890,9 @@ AVFrame* OutputTS::alloc_audio_frame(enum AVSampleFormat sample_fmt,
     AVFrame* frame = av_frame_alloc();
     int ret;
 
-    if (!frame) {
-        fprintf(stderr, "Error allocating an audio frame\n");
+    if (!frame)
+    {
+        cerr << "Error allocating an audio frame\n";
         exit(1);
     }
 
@@ -903,10 +901,12 @@ AVFrame* OutputTS::alloc_audio_frame(enum AVSampleFormat sample_fmt,
     frame->sample_rate = sample_rate;
     frame->nb_samples = nb_samples;
 
-    if (nb_samples) {
+    if (nb_samples)
+    {
         ret = av_frame_get_buffer(frame, 0);
-        if (ret < 0) {
-            fprintf(stderr, "Error allocating an audio buffer\n");
+        if (ret < 0)
+        {
+            cerr << "Error allocating an audio buffer\n";
             exit(1);
         }
     }
@@ -928,16 +928,19 @@ void OutputTS::open_audio(AVFormatContext* oc, const AVCodec* codec,
     av_dict_copy(&opt, opt_arg, 0);
     ret = avcodec_open2(c, codec, &opt);
     av_dict_free(&opt);
-    if (ret < 0) {
-        fprintf(stderr, "Could not open audio codec: %s\n", AVerr2str(ret));
+    if (ret < 0)
+    {
+        cerr << "Could not open audio codec: " << AVerr2str(ret) << endl;
         exit(1);
     }
 
+#if 0
     /* init signal generator */
     ost->t     = 0;
     ost->tincr = 2 * M_PI * 110.0 / c->sample_rate;
     /* increment frequency by 110 Hz per second */
     ost->tincr2 = 2 * M_PI * 110.0 / c->sample_rate / c->sample_rate;
+#endif
 
     if (c->codec->capabilities & AV_CODEC_CAP_VARIABLE_FRAME_SIZE)
         nb_samples = 10000;
@@ -951,15 +954,17 @@ void OutputTS::open_audio(AVFormatContext* oc, const AVCodec* codec,
 
     /* copy the stream parameters to the muxer */
     ret = avcodec_parameters_from_context(ost->st->codecpar, c);
-    if (ret < 0) {
-        fprintf(stderr, "Could not copy the stream parameters\n");
+    if (ret < 0)
+    {
+        cerr << "Could not copy the stream parameters\n";
         exit(1);
     }
 
     /* create resampler context */
     ost->swr_ctx = swr_alloc();
-    if (!ost->swr_ctx) {
-        fprintf(stderr, "Could not allocate resampler context\n");
+    if (!ost->swr_ctx)
+    {
+        cerr << "Could not allocate resampler context\n";
         exit(1);
     }
 
@@ -978,8 +983,9 @@ void OutputTS::open_audio(AVFormatContext* oc, const AVCodec* codec,
                           c->sample_fmt,     0);
 
     /* initialize the resampling context */
-    if ((ret = swr_init(ost->swr_ctx)) < 0) {
-        fprintf(stderr, "Failed to initialize the resampling context\n");
+    if ((ret = swr_init(ost->swr_ctx)) < 0)
+    {
+        cerr << "Failed to initialize the resampling context\n";
         exit(1);
     }
 }
@@ -1042,8 +1048,6 @@ bool OutputTS::open_spdif_context(void)
     m_spdif_format_context->pb = m_spdif_avio_context;
 
     const AVInputFormat* spdif_fmt = av_find_input_format("spdif");
-
-
 
     if (0 > avformat_open_input(&m_spdif_format_context, NULL,
                                 spdif_fmt, NULL))
@@ -1223,7 +1227,6 @@ bool OutputTS::open_spdif(void)
     if (idx == 10)
         return false;
 
-
     /* Find a decoder for the audio stream. */
     if (!(m_spdif_codec = avcodec_find_decoder(m_spdif_codec_id)))
     {
@@ -1234,7 +1237,6 @@ bool OutputTS::open_spdif(void)
         }
         return false;
     }
-
 
     m_bitstream = true;
     return true;
@@ -1308,8 +1310,10 @@ AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
     ost->frame->pts = av_rescale_q(frame->pts, m_input_time_base,
                                    ost->enc->time_base);
 
+#if 0
     ost->t     += (ost->tincr * frame->nb_samples);
     ost->tincr += (ost->tincr2 * frame->nb_samples);
+#endif
 
     ost->next_pts = frame->pts + frame->nb_samples;
 
@@ -1329,20 +1333,11 @@ bool OutputTS::write_pcm_frame(AVFormatContext* oc, OutputStream* ost)
     /* convert samples from native format to destination codec format,
      * using the resampler */
     /* compute destination number of samples */
-#if 0
-    dst_nb_samples = av_rescale_rnd(swr_get_delay(ost->swr_ctx,
-                                                  enc_ctx->sample_rate)
-                                    + frame->nb_samples,
-                                    enc_ctx->sample_rate,
-                                    enc_ctx->sample_rate,
-                                    AV_ROUND_UP);
-#else
     dst_nb_samples = av_rescale(swr_get_delay(ost->swr_ctx,
                                               enc_ctx->sample_rate)
                                 + frame->nb_samples,
                                 enc_ctx->sample_rate,
                                 enc_ctx->sample_rate);
-#endif
     av_assert0(dst_nb_samples == frame->nb_samples);
 
     /* when we pass a frame to the encoder, it may keep a reference to it
@@ -1373,16 +1368,9 @@ bool OutputTS::write_pcm_frame(AVFormatContext* oc, OutputStream* ost)
     }
 
     frame = ost->frame;
-#if 1
     frame->pts = av_rescale_q(m_packet_queue.TimeStamp(),
                               m_input_time_base,
                               enc_ctx->time_base);
-#else
-    frame->pts = av_rescale_q_rnd(m_packet_queue.TimeStamp(),
-                                  m_input_time_base,
-                                  enc_ctx->time_base,
-                    static_cast<AVRounding>(AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX));
-#endif
 
     ost->samples_count += dst_nb_samples;
 

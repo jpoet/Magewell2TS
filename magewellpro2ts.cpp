@@ -1171,7 +1171,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 {
                     if (++extra_frame_cnt > 1)
                     {
-                        cerr << " Dropping frame. Encoder may be too slow!\n";
+                        cerr << "WARNING: Dropping video frame. Encoder may be too slow!\n";
                         frame_idx = -1;
                         break;
                     }
