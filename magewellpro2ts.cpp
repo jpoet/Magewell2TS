@@ -740,7 +740,7 @@ void* audio_capture(void* param1, int param2, void* param3)
                 break;
             if (verbose > 0)
                 cerr << "[" << err_cnt << "] can't get audio signal status\n";
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            std::this_thread::sleep_for(std::chrono::milliseconds(6));
             continue;
         }
 
@@ -751,7 +751,7 @@ void* audio_capture(void* param1, int param2, void* param3)
                 break;
             if (verbose > 0)
                 cerr << "[" << err_cnt << "] audio signal is invalid\n";
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            std::this_thread::sleep_for(std::chrono::milliseconds(6));
             continue;
         }
 
@@ -770,7 +770,7 @@ void* audio_capture(void* param1, int param2, void* param3)
             if (verbose > 0)
                 cerr << "[" << err_cnt << "] audio channel "
                      << cur_channels << " error\n";
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            std::this_thread::sleep_for(std::chrono::milliseconds(6));
             continue;
         }
 
@@ -851,7 +851,7 @@ void* audio_capture(void* param1, int param2, void* param3)
 
             if (MW_ENODATA == MWCaptureAudioFrame(channel_handle, &macf))
             {
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                std::this_thread::sleep_for(std::chrono::milliseconds(6));
                 continue;
             }
 
@@ -1050,7 +1050,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
         while (g_running)
         {
-            if (MWWaitEvent(hNotifyEvent, 1000) <= 0)
+            if (MWWaitEvent(hNotifyEvent, 500) <= 0)
             {
                 if (verbose > 0)
                     cerr << "Video wait notify error or timeout\n";
@@ -1074,11 +1074,10 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 continue;
             }
 
-#if 1
             if (videoBufferInfo.iNewestBufferedFullFrame >= frame_wrap_idx)
                 frame_wrap_idx = videoBufferInfo.iNewestBufferedFullFrame + 1;
 
-            int cnt = 0;
+            int extra_frame_cnt = 0;
             for (;;)
             {
                 if (frame_idx == -1)
@@ -1086,9 +1085,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 else if (++frame_idx == frame_wrap_idx)
                     frame_idx = 0;
 
-#else
-                frame_idx = frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
-#endif
                 if (MWGetVideoFrameInfo(hChannel, frame_idx,
                                         &videoFrameInfo) != MW_SUCCEEDED)
                 {
@@ -1150,7 +1146,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
                 if (ret != MW_SUCCEEDED)
                 {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(6));
                     continue;
                 }
                 if (MWWaitEvent(hCaptureEvent,1000) <= 0)
@@ -1168,14 +1164,19 @@ bool video_capture_loop(HCHANNEL  hChannel,
                                      : videoFrameInfo.allFieldBufferedTimes[0];
 
                 out2ts.Write(pbImage, dwImageSize, llCurrent);
-#if 1
+
                 if (frame_idx == (int)videoBufferInfo.iNewestBufferedFullFrame)
                     break;
                 else
-                    cerr << "Processing driver buffered frame "
-                         << ++cnt << " of " << frame_wrap_idx << ".\n";
+                {
+                    if (++extra_frame_cnt > 1)
+                    {
+                        cerr << " Dropping frame. Encoder may be too slow!\n";
+                        frame_idx = -1;
+                        break;
+                    }
+                }
             }
-#endif
         }
 
         MWUnpinVideoBuffer(hChannel, (LPBYTE)pbImage);
