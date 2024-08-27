@@ -1379,8 +1379,16 @@ bool OutputTS::write_pcm_frame(AVFormatContext* oc, OutputStream* ost)
 
 bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
 {
-    if (m_packet_queue.Size() < m_audio_block_size * 12)
+#if 0
+    if (m_audioIO.Size() < 10240)
+    {
+        if (m_verbose > 1)
+            cerr << "write_bitstream_frame: Only "
+                 << m_audioIO.Size() << " bytes available. "
+                 << m_audio_block_size * 4 << " desired.\n";
         return false;
+    }
+#endif
 
     AVPacket* pkt = av_packet_alloc();
     if (!pkt)
@@ -1392,14 +1400,13 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
         return false;
     }
 
-    int ret =  av_read_frame(m_spdif_format_context, pkt);
+    double ret =  av_read_frame(m_spdif_format_context, pkt);
     if (0 > ret)
     {
-        if (m_verbose > 0)
-        {
-            cerr << "Failed to read spdif frame: "
+        av_packet_free(&pkt);
+        if (ret != AVERROR_EOF && m_verbose > 0)
+            cerr << "Failed to read spdif frame: (" << ret << ") "
                  << AVerr2str(ret) << endl;
-        }
         return false;
     }
 
