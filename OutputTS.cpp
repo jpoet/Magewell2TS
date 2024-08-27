@@ -1503,12 +1503,14 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
 
     av_opt_set_int(ctx->priv_data, "cq", m_quality, 0);
     if (m_look_ahead >= 0)
+    {
         av_opt_set_int(ctx->priv_data, "rc-lookahead", m_look_ahead, 0);
+        av_opt_set_int(ctx->priv_data, "surfaces", 50, 0);
+    }
     av_opt_set_int(ctx->priv_data, "b", 0, 0);
     av_opt_set_int(ctx->priv_data, "minrate", 4000000, 0);
     av_opt_set_int(ctx->priv_data, "maxrate", 25000000, 0);
     av_opt_set_int(ctx->priv_data, "bufsize", 400000000, 0);
-    av_opt_set_int(ctx->priv_data, "surfaces", 50, 0);
 
     av_opt_set_int(ctx->priv_data, "bf", 0, 0);
     av_opt_set_int(ctx->priv_data, "b_ref_mode", 0, 0);
