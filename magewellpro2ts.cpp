@@ -678,7 +678,6 @@ void* audio_capture(void* param1, int param2, void* param3)
     DWORD     input_count = 0;
     int       cur_channels;
     int       channel_offset;
-    unsigned char* capture_buf = nullptr;
     MWCAP_AUDIO_SIGNAL_STATUS audio_signal_status;
     int err_cnt = 0;
     int cnt     = 0;
@@ -687,6 +686,7 @@ void* audio_capture(void* param1, int param2, void* param3)
     long long int tm_last     = 0LL;
     uint64_t audio_frame_rate = 0LL;
 
+    uint8_t*  capture_buf = nullptr;
     HCHANNEL* channel_handle = reinterpret_cast<HCHANNEL* >(param1);
     int        verbose        = param2;
     OutputTS* out2ts         = reinterpret_cast<OutputTS* >(param3);
@@ -700,10 +700,10 @@ void* audio_capture(void* param1, int param2, void* param3)
     }
 
     notify_audio  = MWRegisterNotify(channel_handle, notify_event,
-                                     MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
-                                     MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE |
-                                     MWCAP_NOTIFY_AUDIO_INPUT_RESET |
-                                     MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO
+                                     (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
+                                     (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE |
+                                     (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET |
+                                     (DWORD)MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO
                                      );
 
     if (notify_audio == 0)
@@ -744,7 +744,6 @@ void* audio_capture(void* param1, int param2, void* param3)
             continue;
         }
 
-        // FALSE ==
         if (!audio_signal_status.wChannelValid)
         {
             if (++err_cnt > 50)
@@ -776,20 +775,24 @@ void* audio_capture(void* param1, int param2, void* param3)
 
         channel_offset = cur_channels / 2;
 
-        if (capture_buf != nullptr)
-        {
-            delete[] capture_buf;
-            capture_buf = nullptr;
-        }
+        const int    audio_buf_sz = (6144 * 50) / 768;
+        int          buf_idx = 0;
+        size_t       frame_idx = 0;
+        size_t       frame_size = MWCAP_AUDIO_SAMPLES_PER_FRAME
+                                  * cur_channels * bytes_per_sample;
 
-        size_t frame_size = MWCAP_AUDIO_SAMPLES_PER_FRAME * cur_channels *
-                            bytes_per_sample;
-
-        capture_buf = new uint8_t[frame_size];
+        size_t   capture_buf_size = audio_buf_sz * frame_size;
+        uint8_t* capture_buf = new uint8_t[capture_buf_size];
         if (nullptr == capture_buf)
         {
-            if (verbose > 0)
-                cerr << "capture_buf alloc failed\n";
+            cerr << "audio capture_buf alloc failed\n";
+            break;
+        }
+
+        int64_t* audio_timestamps = new int64_t[audio_buf_sz];
+        if (nullptr == audio_timestamps)
+        {
+            cerr << "audio timestamp buf alloc failed\n";
             break;
         }
 
@@ -798,18 +801,25 @@ void* audio_capture(void* param1, int param2, void* param3)
 // Channels: 2 SampleRate: 48000 FrameRate: 9216000 BytesPerSample: 2
 // perFrame 192
         out2ts->setAudioParams(cur_channels, audio_signal_status.bLPCM,
-                               bytes_per_sample, MWCAP_AUDIO_SAMPLES_PER_FRAME,
-                               audio_signal_status.dwSampleRate);
+                               bytes_per_sample,
+                               audio_signal_status.dwSampleRate,
+                               MWCAP_AUDIO_SAMPLES_PER_FRAME,
+                               frame_size,
+                               capture_buf, capture_buf_size,
+                               audio_timestamps, audio_buf_sz);
+        cerr << " Capturebuf: "
+             << " @ " << (uint64_t)(&capture_buf[frame_idx]) << endl;
 
         cnt = 0;
         err_cnt = 0;
 
+
+        ULONGLONG notify_status = 0;
+        unsigned char* audio_frame;
+        MWCAP_AUDIO_CAPTURE_FRAME macf;
+
         while (g_running)
         {
-            ULONGLONG notify_status = 0;
-            unsigned char* audio_frame;
-            MWCAP_AUDIO_CAPTURE_FRAME macf;
-
             if (MWWaitEvent(notify_event, 1000) <= 0)
             {
                 if (verbose > 1)
@@ -875,13 +885,22 @@ void* audio_capture(void* param1, int param2, void* param3)
                                  >> (32 - audio_signal_status.cBitsPerSample);
                     DWORD right = macf.adwSamples[read_pos2]
                                   >> (32 - audio_signal_status.cBitsPerSample);
-                    memcpy(&capture_buf[write_pos], &left, bytes_per_sample);
-                    memcpy(&capture_buf[write_pos + bytes_per_sample],
+                    memcpy(&capture_buf[frame_idx + write_pos], &left, bytes_per_sample);
+                    memcpy(&capture_buf[frame_idx + write_pos + bytes_per_sample],
                            &right, bytes_per_sample);
                 }
             }
 
-            out2ts->addPacket(capture_buf, frame_size, timestamp);
+#if 0
+            cerr << " FRAME_IDX " << frame_idx
+                 << " @ " << (uint64_t)(&capture_buf[frame_idx]) << endl;
+#endif
+            audio_timestamps[buf_idx] = macf.llTimestamp;
+            out2ts->addAudio(&capture_buf[frame_idx], frame_size,
+                             macf.llTimestamp);
+            if (++buf_idx == audio_buf_sz)
+                buf_idx = 0;
+            frame_idx = frame_size * buf_idx;
         }
     }
 
@@ -937,9 +956,10 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
     while (g_running)
     {
+#if 0
         if (!out2ts.AudioReady())
             continue;
-
+#endif
         MWCAP_VIDEO_BUFFER_INFO videoBufferInfo;
         MWGetVideoBufferInfo(hChannel, &videoBufferInfo);
 
@@ -1094,25 +1114,17 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 }
 
                 if (0 == (ullStatusBits & notifyBufferMode))
-                {
                     continue;
-                }
 
                 if(videoSignalStatus.bInterlaced)
                 {
                     if (0 == videoBufferInfo.iBufferedFieldIndex)
-                    {
                         mode = MWCAP_VIDEO_DEINTERLACE_TOP_FIELD;
-                    }
                     else
-                    {
                         mode = MWCAP_VIDEO_DEINTERLACE_BOTTOM_FIELD;
-                    }
                 }
                 else
-                {
                     mode = MWCAP_VIDEO_DEINTERLACE_BLEND;
-                }
 
                 MW_RESULT ret = MWCaptureVideoFrameToVirtualAddressEx
                                 (hChannel,
@@ -1146,7 +1158,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
                 if (ret != MW_SUCCEEDED)
                 {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(6));
+                    cerr << "MWCaptureVideoFrame failed.\n";
+//                    std::this_thread::sleep_for(std::chrono::milliseconds(6));
                     continue;
                 }
                 if (MWWaitEvent(hCaptureEvent, 17) <= 0)
