@@ -1050,7 +1050,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
         while (g_running)
         {
-            if (MWWaitEvent(hNotifyEvent, 500) <= 0)
+            if (MWWaitEvent(hNotifyEvent, 17) <= 0)
             {
                 if (verbose > 0)
                     cerr << "Video wait notify error or timeout\n";
@@ -1149,7 +1149,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
                     std::this_thread::sleep_for(std::chrono::milliseconds(6));
                     continue;
                 }
-                if (MWWaitEvent(hCaptureEvent,1000) <= 0)
+                if (MWWaitEvent(hCaptureEvent, 17) <= 0)
                 {
                     if (verbose > 0)
                         cerr << "Error:wait capture event error or timeout\n";
@@ -1169,7 +1169,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
                     break;
                 else
                 {
-                    if (++extra_frame_cnt > 1)
+                    if (++extra_frame_cnt > 2)
                     {
                         cerr << "WARNING: Dropping video frame. Encoder may be too slow!\n";
                         frame_idx = -1;

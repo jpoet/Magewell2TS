@@ -98,13 +98,6 @@ class OutputTS
 
         AVPacket* tmp_pkt;
 
-#if 0
-        float t, tincr, tincr2;
-#endif
-
-#if 0
-        struct SwsContext* sws_ctx;
-#endif
         struct SwrContext* swr_ctx;
     };
 

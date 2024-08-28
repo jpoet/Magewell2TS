@@ -815,6 +815,19 @@ void OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
           av_channel_layout_copy(&ost->enc->ch_layout, &m_channel_layout);
           ost->st->time_base = (AVRational){ 1, ost->enc->sample_rate };
 
+          if (ost->enc->codec->capabilities & AV_CODEC_CAP_SLICE_THREADS)
+          {
+              ost->enc->thread_type = FF_THREAD_SLICE;
+              if (m_verbose > 0)
+                  cerr << " Audio = THREAD SLICE\n";
+          }
+          else if (ost->enc->codec->capabilities & AV_CODEC_CAP_FRAME_THREADS)
+          {
+              ost->enc->thread_type = FF_THREAD_FRAME;
+              if (m_verbose > 0)
+                  cerr << " Audio = THREAD FRAME\n";
+          }
+
           if (m_verbose > 2)
           {
               cerr << "Audio time base " << ost->st->time_base.num << "/"
@@ -848,6 +861,19 @@ void OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
           else
               ost->enc->pix_fmt = AV_PIX_FMT_YUV420P;
 
+          if (ost->enc->codec->capabilities & AV_CODEC_CAP_SLICE_THREADS)
+          {
+              ost->enc->thread_type = FF_THREAD_SLICE;
+              if (m_verbose > 0)
+                  cerr << " Video = THREAD SLICE\n";
+          }
+          else if (ost->enc->codec->capabilities & AV_CODEC_CAP_FRAME_THREADS)
+          {
+              ost->enc->thread_type = FF_THREAD_FRAME;
+              if (m_verbose > 0)
+                  cerr << " Video = THREAD FRAME\n";
+          }
+
           if (m_verbose > 2)
           {
               cerr << "Output stream< Video: " << ost->enc->width
@@ -874,9 +900,6 @@ void OutputTS::close_stream(AVFormatContext* oc, OutputStream* ost)
     av_frame_free(&ost->frame);
     av_frame_free(&ost->tmp_frame);
     av_packet_free(&ost->tmp_pkt);
-#if 0
-    sws_freeContext(ost->sws_ctx);
-#endif
     swr_free(&ost->swr_ctx);
 }
 
@@ -933,14 +956,6 @@ void OutputTS::open_audio(AVFormatContext* oc, const AVCodec* codec,
         cerr << "Could not open audio codec: " << AVerr2str(ret) << endl;
         exit(1);
     }
-
-#if 0
-    /* init signal generator */
-    ost->t     = 0;
-    ost->tincr = 2 * M_PI * 110.0 / c->sample_rate;
-    /* increment frequency by 110 Hz per second */
-    ost->tincr2 = 2 * M_PI * 110.0 / c->sample_rate / c->sample_rate;
-#endif
 
     if (c->codec->capabilities & AV_CODEC_CAP_VARIABLE_FRAME_SIZE)
         nb_samples = 10000;
@@ -1885,18 +1900,8 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
         return false;
     }
 
-#if 0
-    if (ost->next_pts == 0)
-        hw_frame->pts = pts;
-    else
-        hw_frame->pts = ost->next_pts;
-
-//    ost->next_timestamp = timestamp + 1;
-    ost->next_pts = hw_frame->pts + 1;
-#else
     hw_frame->pts = pts;
     ost->next_pts = timestamp + 1;
-#endif
 
     ret = write_frame(oc, enc_ctx, hw_frame, ost);
     av_frame_free(&hw_frame);
