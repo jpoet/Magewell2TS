@@ -269,6 +269,7 @@ int AudioIO::Read(uint8_t* dest, size_t len)
         cerr << "ERROR: No audio buffers to Read from\n";
         return 0;
     }
+
     buffer_que_t::iterator Ibuf = m_buffer_q.begin();
 
     print_pointers(*Ibuf);
@@ -338,9 +339,10 @@ int AudioIO::Read(uint8_t* dest, size_t len)
          << " read: " << (size_t)((*Ibuf).read - (*Ibuf).begin)
          << endl;
 #endif
+
+    (*Ibuf).m_timestamp = (*Ibuf).TimeStamp((*Ibuf).read);
     if (dest != nullptr)
         memcpy(dest, (*Ibuf).read, sz);
-    (*Ibuf).m_timestamp = (*Ibuf).TimeStamp((*Ibuf).read);
     if (m_verbose > 3)
     {
         cerr << "AudioIO::Read: " << (*Ibuf).m_timestamp << " : "
@@ -837,17 +839,15 @@ void OutputTS::setAudioParams(int num_channels, bool is_lpcm,
     m_audio_sample_rate = sample_rate;
     m_audio_samples_per_frame = samples_per_frame;
 
-    cerr << "Buffer size: " << m_audioIO.Buffers() << endl;
-
     if (m_audioIO.Bitstream())
     {
         if (m_verbose > 0)
-            cerr << "set --> Bitstream: (" << m_audioIO.CodecName() << ")\n";
+            cerr << "Bitstream audio\n";
     }
     else
     {
         if (m_verbose > 0)
-            cerr << "set --> PCM: (" << m_audioIO.CodecName() << ")\n";
+            cerr << "PCM audio\n";
     }
 
     m_audio_block_size = 8 * bytes_per_sample * m_audio_samples_per_frame;
@@ -875,7 +875,9 @@ void OutputTS::setVideoParams(int width, int height, bool interlaced,
     if (m_verbose > 2)
         cerr << "Video Params set\n";
 
-    m_init = true;
+    open_video();
+    open_audio();
+    open_container();
 }
 
 OutputTS::~OutputTS(void)
@@ -1113,8 +1115,6 @@ bool OutputTS::open_spdif_context(void)
 
 bool OutputTS::open_spdif(void)
 {
-    cerr << " OPEN S/PDIF" << endl;
-
     /* retrieve stream information */
     const AVInputFormat* fmt = nullptr;
     int ret;
@@ -1125,16 +1125,9 @@ bool OutputTS::open_spdif(void)
     {
         open_spdif_context();
 
-        cerr << "Probing\n";
-#if 1
         if ((ret = av_probe_input_buffer(m_spdif_avio_context,
                                          &fmt, "", nullptr, 0,
-                                         5 * m_audio_block_size)) != 0)
-#else
-        if ((ret = av_probe_input_buffer(m_spdif_avio_context,
-                                         &fmt, "", nullptr, 0,
-                                         m_audioIO.Size())) != 0)
-#endif
+                                         8 * m_audio_block_size)) != 0)
         {
             if (m_verbose > 0)
             {
@@ -1308,12 +1301,12 @@ bool OutputTS::write_pcm_frame(AVFormatContext* oc, OutputStream* ost)
 
 bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
 {
-    if (m_audioIO.Size() < 4096) // This check reduces CPU usage a bit
+    if (m_audioIO.Size() < m_audio_block_size * 8) // This check reduces CPU usage a bit
     {
         if (m_verbose > 4)
             cerr << "write_bitstream_frame: Only "
                  << m_audioIO.Size() << " bytes available. "
-                 << m_audio_block_size * 4 << " desired.\n";
+                 << m_audio_block_size * 8 << " desired.\n";
         return false;
     }
 
@@ -1843,14 +1836,6 @@ bool OutputTS::write_video_frame(AVFormatContext* oc, OutputStream* ost,
 bool OutputTS::Write(uint8_t* pImage, uint32_t imageSize,
                      int64_t timestamp)
 {
-    if (m_init)
-    {
-        open_video();
-        open_audio();
-        open_container();
-        m_init = false;
-    }
-
     if (!m_no_audio)
     {
         while (m_video_stream.next_pts > m_audio_stream.next_pts)

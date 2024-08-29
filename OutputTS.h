@@ -68,6 +68,7 @@ class AudioIO
         {
             if (m_own_buffer)
             {
+//                std::cerr << "Deleting[] " << (uint64_t)begin << std::endl;
                 delete[] begin;
                 delete[] m_timestamps;
             }
@@ -214,9 +215,7 @@ class OutputTS
     int              m_audio_samples_per_frame    {-1};
     int              m_audio_sample_rate          {-1};
     int              m_audio_block_size           {-1};
-//    int              m_audio_detect_blocks        {3};
 
-    bool             m_init                 {true};
     bool             m_error                {false};
 
     AVFormatContext* m_spdif_format_context {nullptr};

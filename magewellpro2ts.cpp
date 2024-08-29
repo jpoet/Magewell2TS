@@ -775,13 +775,14 @@ void* audio_capture(void* param1, int param2, void* param3)
 
         channel_offset = cur_channels / 2;
 
-        const int    audio_buf_sz = (6144 * 50) / 768;
+        const int    audio_buf_sz = 768 * 160;
         int          buf_idx = 0;
         size_t       frame_idx = 0;
         size_t       frame_size = MWCAP_AUDIO_SAMPLES_PER_FRAME
                                   * cur_channels * bytes_per_sample;
 
         size_t   capture_buf_size = audio_buf_sz * frame_size;
+
         uint8_t* capture_buf = new uint8_t[capture_buf_size];
         if (nullptr == capture_buf)
         {
@@ -807,9 +808,6 @@ void* audio_capture(void* param1, int param2, void* param3)
                                frame_size,
                                capture_buf, capture_buf_size,
                                audio_timestamps, audio_buf_sz);
-        cerr << " Capturebuf: "
-             << " @ " << (uint64_t)(&capture_buf[frame_idx]) << endl;
-
         cnt = 0;
         err_cnt = 0;
 
@@ -956,12 +954,10 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
     while (g_running)
     {
-#if 0
-        if (!out2ts.AudioReady())
-            continue;
-#endif
         MWCAP_VIDEO_BUFFER_INFO videoBufferInfo;
         MWGetVideoBufferInfo(hChannel, &videoBufferInfo);
+
+        frame_wrap_idx = videoBufferInfo.cMaxFrames;
 
         MWCAP_VIDEO_FRAME_INFO videoFrameInfo;
         MWGetVideoFrameInfo(hChannel,
@@ -1070,7 +1066,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
         while (g_running)
         {
-            if (MWWaitEvent(hNotifyEvent, 17) <= 0)
+            if (MWWaitEvent(hNotifyEvent, 250) <= 0)
             {
                 if (verbose > 0)
                     cerr << "Video wait notify error or timeout\n";
@@ -1093,9 +1089,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
                     cerr << "Failed to get video buffer info.\n";
                 continue;
             }
-
-            if (videoBufferInfo.iNewestBufferedFullFrame >= frame_wrap_idx)
-                frame_wrap_idx = videoBufferInfo.iNewestBufferedFullFrame + 1;
 
             int extra_frame_cnt = 0;
             for (;;)
@@ -1180,14 +1173,11 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
                 if (frame_idx == (int)videoBufferInfo.iNewestBufferedFullFrame)
                     break;
-                else
+                if (++extra_frame_cnt == frame_wrap_idx)
                 {
-                    if (++extra_frame_cnt > 2)
-                    {
-                        cerr << "WARNING: Dropping video frame. Encoder may be too slow!\n";
-                        frame_idx = -1;
-                        break;
-                    }
+                    cerr << "WARNING: Dropping video frame. Encoder may be too slow!\n";
+                    frame_idx = -1;
+                    break;
                 }
             }
         }
