@@ -27,7 +27,6 @@ class AudioIO
     int Add(uint8_t* Pframe, size_t len, int64_t timestamp);
     int Read(uint8_t* dest, size_t len);
     int64_t Seek(int64_t offset, int whence);
-    void Rewind(void);
 
     bool Bitstream(void);
 
@@ -88,6 +87,7 @@ class AudioIO
         uint8_t* prev_frame    {nullptr};
         bool     lpcm          {true};
         bool     write_wrapped {false};
+        bool     has_wrapped   {false};
         std::string codec_name;
 
         int64_t* m_timestamps  {nullptr};

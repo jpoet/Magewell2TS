@@ -138,6 +138,7 @@ AudioIO::buffer_t& AudioIO::buffer_t::operator=(const buffer_t & rhs)
     prev_frame = rhs.prev_frame;
     lpcm = rhs.lpcm;
     write_wrapped = rhs.write_wrapped;
+    has_wrapped = rhs.has_wrapped;
     codec_name = rhs.codec_name;
 
     m_timestamps = rhs.m_timestamps;
@@ -234,6 +235,7 @@ int AudioIO::Add(uint8_t* Pframe, size_t len, int64_t timestamp)
 
     if (Pframe < (*Ibuf).prev_frame)
     {
+        (*Ibuf).has_wrapped = true;
         (*Ibuf).write_wrapped = true;
         if (m_verbose > 5)
             cerr << "AudioIO::Add: wrapped\n";
@@ -418,11 +420,26 @@ int64_t AudioIO::Seek(int64_t offset, int whence)
     {
         desired = -desired; // To keep my head from exploading
         // Backwards
-        if ((*Ibuf).read - desired < (*Ibuf).begin)
-            // Wrap
-            (*Ibuf).read = (*Ibuf).end - ((*Ibuf).begin - ((*Ibuf).read - desired));
+        if ((*Ibuf).write_wrapped)
+        {
+            if ((*Ibuf).read - desired < (*Ibuf).write)
+                (*Ibuf).read = (*Ibuf).write;
+            else
+                (*Ibuf).read -= desired;
+        }
         else
-            (*Ibuf).read -= desired;
+        {
+            if ((*Ibuf).read - desired < (*Ibuf).begin)
+            {
+                if ((*Ibuf).has_wrapped)
+                // Wrap
+                    (*Ibuf).read = (*Ibuf).end - ((*Ibuf).begin - ((*Ibuf).read - desired));
+                else
+                    (*Ibuf).read = (*Ibuf).begin;
+            }
+            else
+                (*Ibuf).read -= desired;
+        }
     }
     else if (desired > 0)
     {
@@ -434,20 +451,6 @@ int64_t AudioIO::Seek(int64_t offset, int whence)
 
     (*Ibuf).m_timestamp = (*Ibuf).TimeStamp((*Ibuf).read);
     return 0;
-}
-
-void AudioIO::Rewind(void)
-{
-    if (m_buffer_q.empty())
-        return;
-
-    buffer_que_t::iterator Ibuf = m_buffer_q.begin();
-
-    /* Not perfect, but good enough. */
-    if ((*Ibuf).write_wrapped)
-        (*Ibuf).read = (*Ibuf).write;
-    else
-        (*Ibuf).read = (*Ibuf).begin;
 }
 
 bool AudioIO::Bitstream(void)
@@ -1213,7 +1216,7 @@ bool OutputTS::open_spdif(void)
         exit(-1);
     }
 
-    m_audioIO.Rewind();
+    m_audioIO.Seek(-8 * m_audio_block_size, SEEK_CUR);
 
     /* Find a decoder for the audio stream. */
     if (!(m_spdif_codec = avcodec_find_decoder(m_spdif_codec_id)))
