@@ -27,6 +27,7 @@ class AudioIO
     int Add(uint8_t* Pframe, size_t len, int64_t timestamp);
     int Read(uint8_t* dest, size_t len);
     int64_t Seek(int64_t offset, int whence);
+    void Rewind(void);
 
     bool Bitstream(void);
 

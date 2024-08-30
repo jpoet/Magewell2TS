@@ -436,6 +436,20 @@ int64_t AudioIO::Seek(int64_t offset, int whence)
     return 0;
 }
 
+void AudioIO::Rewind(void)
+{
+    if (m_buffer_q.empty())
+        return;
+
+    buffer_que_t::iterator Ibuf = m_buffer_q.begin();
+
+    /* Not perfect, but good enough. */
+    if ((*Ibuf).write_wrapped)
+        (*Ibuf).read = (*Ibuf).write;
+    else
+        (*Ibuf).read = (*Ibuf).begin;
+}
+
 bool AudioIO::Bitstream(void)
 {
     const std::unique_lock<std::mutex> lock(m_mutex);
@@ -1199,6 +1213,8 @@ bool OutputTS::open_spdif(void)
         exit(-1);
     }
 
+    m_audioIO.Rewind();
+
     /* Find a decoder for the audio stream. */
     if (!(m_spdif_codec = avcodec_find_decoder(m_spdif_codec_id)))
     {
@@ -1219,10 +1235,9 @@ AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
 
     int j, i;
     uint8_t* q = (uint8_t*)frame->data[0];
-    size_t bytes;
     size_t got;
 
-    bytes = ost->enc->ch_layout.nb_channels * frame->nb_samples * 2;
+    size_t bytes = ost->enc->ch_layout.nb_channels * frame->nb_samples * 2;
     if (m_audioIO.Size() < bytes)
     {
         if (m_verbose > 5)
