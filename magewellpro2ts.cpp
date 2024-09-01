@@ -699,20 +699,6 @@ void* audio_capture(void* param1, int param2, void* param3)
         goto audio_capture_stoped;
     }
 
-    notify_audio  = MWRegisterNotify(channel_handle, notify_event,
-                                     (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
-                                     (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE |
-                                     (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET |
-                                     (DWORD)MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO
-                                     );
-
-    if (notify_audio == 0)
-    {
-        if (verbose > 0)
-            cerr << "Register Notify audio fail\n";
-        goto audio_capture_stoped;
-    }
-
     MWGetAudioInputSourceArray(channel_handle, nullptr, &input_count);
     if (input_count == 0)
     {
@@ -775,7 +761,7 @@ void* audio_capture(void* param1, int param2, void* param3)
 
         channel_offset = cur_channels / 2;
 
-        const int    audio_buf_sz = 768 * 160;
+        const int    audio_buf_sz = 256;
         int          buf_idx = 0;
         size_t       frame_idx = 0;
         size_t       frame_size = MWCAP_AUDIO_SAMPLES_PER_FRAME
@@ -816,6 +802,20 @@ void* audio_capture(void* param1, int param2, void* param3)
         unsigned char* audio_frame;
         MWCAP_AUDIO_CAPTURE_FRAME macf;
 
+    notify_audio  = MWRegisterNotify(channel_handle, notify_event,
+                                     (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
+                                     (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE |
+                                     (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET |
+                                     (DWORD)MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO
+                                     );
+
+    if (notify_audio == 0)
+    {
+        if (verbose > 0)
+            cerr << "Register Notify audio fail\n";
+        goto audio_capture_stoped;
+    }
+
         while (g_running)
         {
             if (MWWaitEvent(notify_event, 1000) <= 0)
@@ -836,7 +836,7 @@ void* audio_capture(void* param1, int param2, void* param3)
             {
                 if (verbose > 1)
                     cerr << "Audio signal CHANGED!\n";
-                break;
+                continue;
             }
 
             if (notify_status & MWCAP_NOTIFY_AUDIO_INPUT_RESET)

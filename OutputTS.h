@@ -24,18 +24,20 @@ class AudioIO
                    int frame_size, bool lpcm,
                    int64_t* timestamps, size_t frame_count);
 
-    int Add(uint8_t* Pframe, size_t len, int64_t timestamp);
-    int Read(uint8_t* dest, size_t len);
+    int     Add(uint8_t* Pframe, size_t len, int64_t timestamp);
+    int     Read(uint8_t* dest, size_t len);
     int64_t Seek(int64_t offset, int whence);
 
-    bool Bitstream(void);
-
-    size_t Buffers(void) const { return m_buffer_q.size(); }
-    size_t Size(void) const;
-    bool   Empty(void) const;
+    size_t  Buffers(void) const { return m_buffer_q.size(); }
+    size_t  Size(void) const;
+    bool    Empty(void) const;
     int64_t TimeStamp(void) const;
     std::string CodecName(void) const;
-    void setCodecName(const std::string & rhs);
+    void    SetCodecName(const std::string & rhs);
+
+    bool    Bitstream(void);
+    bool    BitstreamChanged(bool is_lpcm);
+    bool    CodecChanged(void);
 
   private:
     class buffer_t
@@ -98,14 +100,17 @@ class AudioIO
 
     using buffer_que_t = std::deque<buffer_t>;
 
-    void    print_pointers(const buffer_t & buffer) const;
+    void    print_pointers(const buffer_t & buffer,
+                           const std::string & where,
+                           bool force = false) const;
 
-    buffer_que_t         m_buffer_q;
-    std::string          m_codec_name;
+    buffer_que_t     m_buffer_q;
+    std::string      m_codec_name;
 
-    std::mutex           m_mutex;
+    std::mutex       m_mutex;
 
-    int                  m_verbose     {1};
+    int              m_verbose     {1};
+    int              m_report_next {false};
 };
 
 class OutputTS
@@ -132,22 +137,22 @@ class OutputTS
   private:
     // a wrapper around a single output AVStream
     using OutputStream = struct {
-        AVStream* st;
-        AVBufferRef*    hw_device_ctx  {nullptr};
-        AVCodecContext* enc;
+        AVBufferRef* hw_device_ctx {nullptr};
+        AVStream* st               {nullptr};
+        AVCodecContext* enc        {nullptr};
 
         /* pts of the next frame that will be generated */
-        int64_t next_pts;
-        int samples_count;
+        int64_t next_pts           {-1};
+        int samples_count          {0};
 
-        AVFrame* frame;
-        AVFrame* tmp_frame;
-        int64_t  prev_pts        {-1};
-        int64_t  prev_dts        {-1};
+        AVFrame* frame             {nullptr};
+        AVFrame* tmp_frame         {nullptr};
+        int64_t  prev_pts          {-1};
+        int64_t  prev_dts          {-1};
 
-        AVPacket* tmp_pkt;
+        AVPacket* tmp_pkt          {nullptr};
 
-        struct SwrContext* swr_ctx;
+        struct SwrContext* swr_ctx {nullptr};
     };
 
     void add_stream(OutputStream* ost, AVFormatContext* oc,
@@ -194,9 +199,6 @@ class OutputTS
                            uint8_t* pImage, uint32_t imageSize,
                            int64_t timestamp);
 
-    bool Bitstream(void)
-    { return m_audioIO.Bitstream(); }
-
     EncoderType     m_encoderType  { UNKNOWN };
 
     AudioIO         m_audioIO;
@@ -238,11 +240,12 @@ class OutputTS
     AVRational       m_input_frame_rate        {10000000, 166817};
     AVRational       m_input_time_base         {1, 10000000};
 
-    bool             m_interlaced             {false};
+    bool             m_interlaced              {false};
 
     int              m_verbose;
 
-    std::mutex              m_mutex;
+    bool             m_initialized       {false};
+    std::mutex       m_mutex;
 };
 
 #endif
