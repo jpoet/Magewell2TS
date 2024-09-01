@@ -376,7 +376,7 @@ int64_t AudioIO::Seek(int64_t offset, int whence)
           cerr << "whence = " << whence << endl;
           break;
     }
-    if (m_verbose > 2)
+    if (m_verbose > 3)
         cerr << "Seeking from " << whence_str << " to " << offset << endl;
 #endif
 
@@ -453,8 +453,9 @@ bool AudioIO::Bitstream(void)
 bool AudioIO::BitstreamChanged(bool is_lpcm)
 {
     const std::unique_lock<std::mutex> lock(m_mutex);
-    if (m_buffer_q.empty() ||
-            m_buffer_q.back().lpcm != is_lpcm)
+    if (m_buffer_q.empty())
+        return true;
+    if (m_buffer_q.back().lpcm != is_lpcm)
     {
         if (m_verbose > 0)
         {
@@ -673,10 +674,11 @@ void OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
 
 bool OutputTS::open_audio(void)
 {
-    cerr << "\nopen_audio\n";
-
     if (m_no_audio)
         return true;
+
+    std::unique_lock<std::mutex> lock(m_audio_mutex);
+    m_audio_cond.wait(lock, [&]{return m_audio_ready;});
 
     close_stream(m_output_format_context, &m_audio_stream);
 
@@ -883,7 +885,7 @@ void OutputTS::setAudioParams(int num_channels, bool is_lpcm,
 
         if (m_verbose > 1)
         {
-            cerr << "\n\nsetAudioParams " << (is_lpcm ? "LPCM" : "Bitstream") << endl;
+            cerr << "setAudioParams " << (is_lpcm ? "LPCM" : "Bitstream") << endl;
         }
 
         m_audio_channels = num_channels;
@@ -892,6 +894,8 @@ void OutputTS::setAudioParams(int num_channels, bool is_lpcm,
         m_audio_samples_per_frame = samples_per_frame;
 
         m_audio_block_size = 8 * bytes_per_sample * m_audio_samples_per_frame;
+        m_audio_ready = true;
+        m_audio_cond.notify_one();
     }
 }
 
@@ -1253,7 +1257,7 @@ bool OutputTS::open_spdif(void)
         exit(-1);
     }
 
-    m_audioIO.Seek(-8 * m_audio_block_size, SEEK_CUR);
+    m_audioIO.Seek(-m_spdif_avio_context_buffer_size, SEEK_CUR);
 
     /* Find a decoder for the audio stream. */
     if (!(m_spdif_codec = avcodec_find_decoder(m_spdif_codec_id)))
@@ -1427,7 +1431,10 @@ bool OutputTS::write_audio_frame(AVFormatContext* oc, OutputStream* ost)
 #endif
 
     if (m_audioIO.CodecChanged())
+    {
         open_audio();
+        open_container();
+    }
 
     if (m_audioIO.Bitstream())
         return write_bitstream_frame(oc, ost);

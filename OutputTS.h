@@ -246,6 +246,10 @@ class OutputTS
 
     bool             m_initialized       {false};
     std::mutex       m_mutex;
+
+    bool             m_audio_ready;
+    std::mutex       m_audio_mutex;
+    std::condition_variable m_audio_cond;
 };
 
 #endif

@@ -836,7 +836,7 @@ void* audio_capture(void* param1, int param2, void* param3)
             {
                 if (verbose > 1)
                     cerr << "Audio signal CHANGED!\n";
-                continue;
+                break;
             }
 
             if (notify_status & MWCAP_NOTIFY_AUDIO_INPUT_RESET)
