@@ -484,7 +484,7 @@ bool AudioIO::CodecChanged(void)
         return false;
 
     if (m_verbose > 0)
-        cerr << "New audio buffer: "
+        cerr << "New audio buffer codec: "
              << (m_buffer_q.front().lpcm ? "LPCM" : "Bitstream")
              << endl;
 
@@ -1432,8 +1432,10 @@ bool OutputTS::write_audio_frame(AVFormatContext* oc, OutputStream* ost)
 
     if (m_audioIO.CodecChanged())
     {
+#if 0 // Take a step back for stability
         open_audio();
         open_container();
+#endif
     }
 
     if (m_audioIO.Bitstream())
