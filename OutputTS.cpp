@@ -437,8 +437,8 @@ static int64_t seek_packet(void* opaque, int64_t offset, int whence)
 
 
 OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
-                   const string & preset, int quality, int look_ahead,
-                   bool no_audio, const string & device)
+                   const string & preset, int quality, int look_ahead, bool no_audio,
+                   const string & device, MagCallback image_buffer_avail)
     : m_packet_queue(verbose_level)
     , m_verbose(verbose_level)
     , m_video_codec_name(video_codec_name)
@@ -447,6 +447,7 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     , m_look_ahead(look_ahead)
     , m_no_audio(no_audio)
     , m_device("/dev/dri/" + device)
+    , m_image_buffer_available(image_buffer_avail)
 {
     if (m_video_codec_name.find("qsv") != string::npos)
         m_encoderType = EncoderType::QSV;
@@ -644,6 +645,10 @@ void OutputTS::setVideoParams(int width, int height, bool interlaced,
         cerr << "Video Params set\n";
 
     open_streams();
+
+    if (m_image_ready_thread.joinable())
+        m_image_ready_thread.join();
+    m_image_ready_thread = std::thread(&OutputTS::Write, this);
 }
 
 OutputTS::~OutputTS(void)
@@ -1818,9 +1823,8 @@ bool OutputTS::open_qsv(const AVCodec* codec,
 
 bool OutputTS::nv_encode(AVFormatContext* oc,
                          OutputStream* ost,
-                         uint8_t* data,
-                         uint32_t imageSize,
-                         int64_t timestamp)
+                         uint8_t* pImage,
+                         int64_t  timestamp)
 {
     AVCodecContext* ctx = ost->enc;
 
@@ -1839,10 +1843,11 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
 
     // YUV 4:2:0
     size_t size = ctx->width * ctx->height;
-    memcpy(ost->frame->data[0], data, size);
+    memcpy(ost->frame->data[0], pImage, size);
     memcpy(ost->frame->data[1],
-           data + size, size / 4);
-    memcpy(ost->frame->data[2], data + size * 5 / 4, size  / 4);
+           pImage + size, size / 4);
+    memcpy(ost->frame->data[2], pImage + size * 5 / 4, size  / 4);
+    m_image_buffer_available(pImage);
 
     ost->frame->pts = av_rescale_q_rnd(timestamp, m_input_time_base,
                                        ctx->time_base,
@@ -1854,8 +1859,9 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
 }
 
 bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
-                                OutputStream* ost, uint8_t*  pImage,
-                                uint32_t imageSize, int64_t timestamp)
+                                OutputStream* ost,
+                                uint8_t* pImage,
+                                int64_t  timestamp)
 {
     AVCodecContext* enc_ctx = ost->enc;
     static AVFrame* hw_frame = nullptr;
@@ -1867,6 +1873,7 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
     size_t size = enc_ctx->width * enc_ctx->height;
     memcpy(ost->frame->data[0], pImage, size);
     memcpy(ost->frame->data[1], pImage + size, size / 2);
+    m_image_buffer_available(pImage);
 
     if (!(hw_frame = av_frame_alloc()))
     {
@@ -1909,36 +1916,63 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
     return ret;
 }
 
-/*
- * encode one video frame and send it to the muxer
- * return 1 when encoding is finished, 0 otherwise
- */
-bool OutputTS::write_video_frame(AVFormatContext* oc, OutputStream* ost,
-                                uint8_t* pImage, uint32_t imageSize,
-                                int64_t timestamp)
+void OutputTS::Write(void)
 {
-    if (m_encoderType == EncoderType::NV)
-        return nv_encode(oc, ost, pImage, imageSize, timestamp);
-    else if (m_encoderType == EncoderType::QSV ||
-             m_encoderType == EncoderType::VAAPI)
-        return qsv_vaapi_encode(oc, ost, pImage, imageSize, timestamp);
+    std::unique_lock<std::mutex> lock(m_imagepkt_mutex);
 
-    return false;
+    uint8_t* pImage;
+    uint64_t timestamp;
+
+    for (;;)
+    {
+        m_image_ready.wait_for(lock,
+                               std::chrono::milliseconds(m_input_frame_wait_ms));
+
+        for (;;)
+        {
+            {
+                const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
+                if (m_imagequeue.empty())
+                    break;
+
+                pImage    = m_imagequeue.front().image;
+                timestamp = m_imagequeue.front().timestamp;
+                m_imagequeue.pop_front();
+            }
+
+            if (!m_no_audio)
+            {
+                while (m_video_stream.next_pts > m_audio_stream.next_pts)
+                {
+                    if (!write_audio_frame(m_output_format_context,
+                                           &m_audio_stream))
+                        break;
+                }
+            }
+
+            if (m_encoderType == EncoderType::NV)
+                nv_encode(m_output_format_context, &m_video_stream,
+                          pImage, timestamp);
+            else if (m_encoderType == EncoderType::QSV ||
+                     m_encoderType == EncoderType::VAAPI)
+                qsv_vaapi_encode(m_output_format_context, &m_video_stream,
+                                 pImage, timestamp);
+            else
+            {
+                cerr << "Unknown encoderType.\n";
+                return;
+            }
+        }
+    }
 }
 
-bool OutputTS::Write(uint8_t* pImage, uint32_t imageSize,
-                     int64_t timestamp)
+bool OutputTS::VideoFrame(uint8_t* pImage, uint32_t imageSize,
+                          int64_t timestamp)
 {
-    if (!m_no_audio)
-    {
-        while (m_video_stream.next_pts > m_audio_stream.next_pts)
-            if (!write_audio_frame(m_output_format_context, &m_audio_stream))
-                break;
-    }
+    const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
+    m_imagequeue.push_back(imagepkt_t{timestamp, pImage});
 
-    write_video_frame(m_output_format_context,
-                      &m_video_stream, pImage, imageSize,
-                      timestamp);
+    m_image_ready.notify_one();
 
-    return false;
+    return true;
 }
