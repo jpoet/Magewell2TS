@@ -700,10 +700,10 @@ void* audio_capture(void* param1, int param2, void* param3)
     }
 
     notify_audio  = MWRegisterNotify(channel_handle, notify_event,
-                                     MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
-                                     MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE |
-                                     MWCAP_NOTIFY_AUDIO_INPUT_RESET |
-                                     MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO
+                                     (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
+                                     (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE |
+                                     (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET |
+                                     (DWORD)MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO
                                      );
 
     if (notify_audio == 0)
@@ -1143,7 +1143,11 @@ bool video_capture_loop(HCHANNEL  hChannel,
             }
 
             if (frame_idx == videoBufferInfo.iNewestBufferedFullFrame)
+            {
+                cerr << " Already processed MW video buffer "
+                     << frame_idx << " -- Skipping\n";
                 continue;
+            }
             if (++frame_idx == frame_wrap_idx)
                 frame_idx = 0;
             if (frame_idx != videoBufferInfo.iNewestBufferedFullFrame)
@@ -1155,9 +1159,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
             }
 
-
-            if (MWGetVideoFrameInfo(hChannel,
-                                    videoBufferInfo.iNewestBufferedFullFrame,
+            if (MWGetVideoFrameInfo(hChannel, frame_idx,
                                     &videoFrameInfo) != MW_SUCCEEDED)
             {
                 if (verbose > 0)
@@ -1168,6 +1170,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             if (0 == (ullStatusBits & notifyBufferMode))
                 continue;
 
+            // Wait for an available frame buffer
             {
                 start = std::chrono::steady_clock::now();
                 std::unique_lock<std::mutex> lock(image_buffer_mutex);
@@ -1192,7 +1195,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
             MW_RESULT ret = MWCaptureVideoFrameToVirtualAddress
                             (hChannel,
-                             videoBufferInfo.iNewestBufferedFullFrame,
+                             frame_idx,
                              reinterpret_cast<MWCAP_PTR>(pbImage),
                              dwImageSize,
                              dwMinStride,
