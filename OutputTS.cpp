@@ -1301,6 +1301,7 @@ AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
         return nullptr;
 
     frame->pts = m_audioIO.TimeStamp();
+#if 0
     if (frame->pts != ost->next_pts)
     {
         cerr << "WARNING: PCM audio TS " << frame->pts
@@ -1309,7 +1310,7 @@ AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
              << " expected " << frame->nb_samples
              << endl;
     }
-
+#endif
     ost->frame->pts = av_rescale_q(frame->pts, m_input_time_base,
                                    ost->enc->time_base);
 
