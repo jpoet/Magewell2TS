@@ -162,6 +162,11 @@ bool AudioIO::buffer_t::operator==(const buffer_t & rhs)
 int64_t AudioIO::buffer_t::TimeStamp(uint8_t* P) const
 {
     size_t idx = static_cast<uint32_t>(P - begin) / frame_size;
+#if 1
+    float fidx = (P - begin) / frame_size;
+    if ((float)idx != fidx)
+        cerr << "buffer_t::TimeStamp: calced idx: " << fidx << endl;
+#endif
     return m_timestamps[idx];
 }
 
@@ -231,27 +236,38 @@ int AudioIO::Add(uint8_t* Pframe, size_t len, int64_t timestamp)
     (*Ibuf).write = Pframe + len;
     print_pointers(*Ibuf, "      Add");
 
-    if (Pframe < (*Ibuf).prev_frame)
+    if ((*Ibuf).write > (*Ibuf).end)
+    {
+        cerr << "ERR: Add audio to " << (uint64_t)Pframe
+             << " - " << (*Ibuf).write
+             << " which is greater than the end " << (uint64_t)(*Ibuf).end
+             << endl;
+    }
+
+    if (Pframe == (*Ibuf).begin)
     {
         (*Ibuf).has_wrapped = true;
         (*Ibuf).write_wrapped = true;
         if (m_verbose > 5)
             cerr << "AudioIO::Add: wrapped\n";
     }
+    else if (Pframe < (*Ibuf).prev_frame)
+    {
+        cerr << "ERR: Add audio to " << (uint64_t)Pframe
+             << " which is less than " << (uint64_t)(*Ibuf).prev_frame
+             << " but not the begining " << (uint64_t)(*Ibuf).begin
+             << endl;
+    }
+
     (*Ibuf).prev_frame = Pframe;
 
-    if ((*Ibuf).write_wrapped)
+    if ((*Ibuf).write_wrapped && (*Ibuf).read < (*Ibuf).write)
     {
-        if ((*Ibuf).read < (*Ibuf).write)
+        (*Ibuf).read = (*Ibuf).write;
+        if (m_verbose > 4)
         {
-            (*Ibuf).read = (*Ibuf).write;
-            if (m_verbose > 4)
-            {
-//                cerr << endl;
-                cerr << "Overwrote buffer begin, moving read\n";
-                print_pointers(*Ibuf, "      Add");
-//                cerr << endl;
-            }
+            cerr << "ERR: Overwrote buffer begin, moving read\n";
+            print_pointers(*Ibuf, "      Add");
         }
     }
 
@@ -276,7 +292,8 @@ int AudioIO::Read(uint8_t* dest, size_t len)
     {
         if (m_buffer_q.size() > 1)
         {
-            cerr << " AduioIO::Read: EOF\n";
+            if (m_verbose > 2)
+                cerr << " AduioIO::Read: EOF\n";
             return AVERROR_EOF;
         }
         if (m_verbose > 5)
@@ -308,10 +325,8 @@ int AudioIO::Read(uint8_t* dest, size_t len)
     {
         if ((*Ibuf).read > (*Ibuf).write)
         {
-            cerr << "Read has passed Write!\n";
-            cerr << "Audio write: " << (size_t)((*Ibuf).write - (*Ibuf).begin)
-                 << " read: " << (size_t)((*Ibuf).read - (*Ibuf).begin)
-                 << endl;
+            cerr << "ERR: Read has passed Write!\n";
+            print_pointers(*Ibuf, "     Read", true);
             exit(-1);
         }
         Pend = (*Ibuf).write;
@@ -329,12 +344,6 @@ int AudioIO::Read(uint8_t* dest, size_t len)
     }
     else
         sz = len;
-
-#if 0
-    cerr << "Audio write: " << (size_t)((*Ibuf).write - (*Ibuf).begin)
-         << " read: " << (size_t)((*Ibuf).read - (*Ibuf).begin)
-         << endl;
-#endif
 
     (*Ibuf).m_timestamp = (*Ibuf).TimeStamp((*Ibuf).read);
     if (dest != nullptr)
@@ -1292,6 +1301,14 @@ AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
         return nullptr;
 
     frame->pts = m_audioIO.TimeStamp();
+    if (frame->pts != ost->next_pts)
+    {
+        cerr << "WARNING: PCM audio TS " << frame->pts
+             << " expected to be " << ost->next_pts
+             << " diff " << frame->pts - ost->next_pts
+             << " expected " << frame->nb_samples
+             << endl;
+    }
 
     ost->frame->pts = av_rescale_q(frame->pts, m_input_time_base,
                                    ost->enc->time_base);

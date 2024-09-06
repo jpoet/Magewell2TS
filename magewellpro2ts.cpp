@@ -688,7 +688,7 @@ void* audio_capture(void* param1, int param2, void* param3)
 
     uint8_t*  capture_buf = nullptr;
     HCHANNEL* channel_handle = reinterpret_cast<HCHANNEL* >(param1);
-    int        verbose        = param2;
+    int       verbose        = param2;
     OutputTS* out2ts         = reinterpret_cast<OutputTS* >(param3);
 
     notify_event = MWCreateEvent();
@@ -1155,11 +1155,11 @@ bool video_capture_loop(HCHANNEL  hChannel,
 //                    std::this_thread::sleep_for(std::chrono::milliseconds(6));
                     continue;
                 }
-                if (MWWaitEvent(hCaptureEvent, 17) <= 0)
+                if (MWWaitEvent(hCaptureEvent, 100) <= 0)
                 {
                     if (verbose > 0)
                         cerr << "Error:wait capture event error or timeout\n";
-                    break;
+                    continue;
                 }
 
                 MWCAP_VIDEO_CAPTURE_STATUS captureStatus;
@@ -1169,7 +1169,20 @@ bool video_capture_loop(HCHANNEL  hChannel,
                                      ? videoFrameInfo.allFieldBufferedTimes[1]
                                      : videoFrameInfo.allFieldBufferedTimes[0];
 
-                out2ts.Write(pbImage, dwImageSize, llCurrent);
+#if 1
+                static int64_t prev_ts = 0;
+                int32_t diff = llCurrent - prev_ts;
+                if (diff < 160000 || diff > 170000)
+                {
+                    cerr << "\nWARNING: Video frame TS diff: " << diff << endl;
+                }
+                prev_ts = llCurrent;
+#endif
+
+                if (diff == 0)
+                    cerr << "\nZERO?\n";
+                else
+                    out2ts.Write(pbImage, dwImageSize, llCurrent);
 
                 if (frame_idx == (int)videoBufferInfo.iNewestBufferedFullFrame)
                     break;
