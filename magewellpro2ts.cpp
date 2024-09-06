@@ -940,6 +940,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
     int frame_idx = -1;
     int frame_wrap_idx = 4;
+    int zero_cnt = 0;
 
     if (out2ts.encoderType() == OutputTS::QSV ||
         out2ts.encoderType() == OutputTS::VAAPI)
@@ -1169,20 +1170,24 @@ bool video_capture_loop(HCHANNEL  hChannel,
                                      ? videoFrameInfo.allFieldBufferedTimes[1]
                                      : videoFrameInfo.allFieldBufferedTimes[0];
 
-#if 1
                 static int64_t prev_ts = 0;
                 int32_t diff = llCurrent - prev_ts;
-                if (diff < 160000 || diff > 170000)
+                if (diff != 0)
                 {
-                    cerr << "\nWARNING: Video frame TS diff: " << diff << endl;
-                }
-                prev_ts = llCurrent;
+#if 1
+                    if (diff < 160000 || diff > 170000)
+                    {
+                        cerr << "\nWARNING: Video frame TS diff: " << diff << endl;
+                    }
+                    prev_ts = llCurrent;
 #endif
-
-                if (diff == 0)
-                    cerr << "\nZERO?\n";
-                else
                     out2ts.Write(pbImage, dwImageSize, llCurrent);
+                }
+                else
+                {
+                    if (++zero_cnt & 1000 == 0)
+                        cerr << zero_cnt << " repeated frames?\n";
+                }
 
                 if (frame_idx == (int)videoBufferInfo.iNewestBufferedFullFrame)
                     break;
