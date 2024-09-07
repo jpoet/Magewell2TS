@@ -79,7 +79,8 @@ class OutputTS
     void setAudioParams(int num_channels, bool is_lpcm, int bytes_per_sample,
                         int samples_per_frame, int sample_rate);
     void setVideoParams(int width, int height, bool interlaced,
-                        AVRational time_base, AVRational frame_rate);
+                        AVRational time_base, double frame_duration,
+                        AVRational frame_rate);
     bool AudioReady(void);
     void addPacket(uint8_t* buf, int buf_size, int64_t timestamp);
     void Write(void);

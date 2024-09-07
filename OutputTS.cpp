@@ -623,21 +623,25 @@ void OutputTS::setAudioParams(int num_channels, bool is_lpcm,
 }
 
 void OutputTS::setVideoParams(int width, int height, bool interlaced,
-                              AVRational time_base, AVRational frame_rate)
+                              AVRational time_base, double frame_duration,
+                              AVRational frame_rate)
 {
     m_interlaced = interlaced;
+
+    double fps = static_cast<double>(frame_rate.num) / frame_rate.den;
 
     if (m_verbose > 1)
     {
         cerr << "Video: " << width << "x" << height
-             << " fps: "
-             << static_cast<double>(frame_rate.num) / frame_rate.den
+             << " fps: " << fps
              << (m_interlaced ? 'i' : 'p')
              << "\n";
     }
 
     m_input_width = width;
     m_input_height = height;
+    m_input_frame_duration = frame_duration;
+    m_input_frame_wait_ms = frame_duration / 10000 / 2;
     m_input_frame_rate = frame_rate;
     m_input_time_base = time_base;
 

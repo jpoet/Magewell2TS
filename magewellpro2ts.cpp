@@ -1063,6 +1063,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             frame_rate = (AVRational){10000000LL, (int)frame_duration};
             time_base = (AVRational){1, 10000000LL};
         }
+        input_frame_wait_ms = frame_duration / 10000 / buffer_cnt;
 
         // 100ns / frame_duration
         if (verbose > 2)
@@ -1091,7 +1092,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
         out2ts.setVideoParams(videoSignalStatus.cx,
                               videoSignalStatus.cy,
                               videoSignalStatus.bInterlaced,
-                              time_base, frame_rate);
+                              time_base, frame_duration, frame_rate);
 
         if(videoSignalStatus.bInterlaced)
         {
