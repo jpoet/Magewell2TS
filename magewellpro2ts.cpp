@@ -973,9 +973,9 @@ bool video_capture_loop(HCHANNEL  hChannel,
     int64_t timestamp;
 
     int input_frame_wait_ms = 17;
-    int buffer_cnt = 4;
+    int buffer_cnt = 6;
     int frame_wrap_idx;
-    int frame_idx;
+    int frame_idx = -1;
     int idx;
 
     std::chrono::time_point<std::chrono::steady_clock> start, end;
@@ -1115,7 +1115,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             return false;
         }
 
-        frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
+//        frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
         while (g_running)
         {
             if (MWWaitEvent(hNotifyEvent, 1000) <= 0)

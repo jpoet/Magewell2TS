@@ -1930,16 +1930,6 @@ void OutputTS::Write(void)
 
         for (;;)
         {
-            {
-                const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
-                if (m_imagequeue.empty())
-                    break;
-
-                pImage    = m_imagequeue.front().image;
-                timestamp = m_imagequeue.front().timestamp;
-                m_imagequeue.pop_front();
-            }
-
             if (!m_no_audio)
             {
                 while (m_video_stream.next_pts > m_audio_stream.next_pts)
@@ -1948,6 +1938,16 @@ void OutputTS::Write(void)
                                            &m_audio_stream))
                         break;
                 }
+            }
+
+            {
+                const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
+                if (m_imagequeue.empty())
+                    break;
+
+                pImage    = m_imagequeue.front().image;
+                timestamp = m_imagequeue.front().timestamp;
+                m_imagequeue.pop_front();
             }
 
             if (m_encoderType == EncoderType::NV)
