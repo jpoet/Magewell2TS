@@ -747,11 +747,14 @@ void* audio_capture(void* param1, int param2, void* param3)
         // FALSE ==
         if (!audio_signal_status.wChannelValid)
         {
-            if (++err_cnt > 50)
+            if (++err_cnt > 300)
+            {
+                cerr << "ERR: Giving up waiting for good audio.\n";
                 break;
-            if (verbose > 0)
-                cerr << "[" << err_cnt << "] audio signal is invalid\n";
-            std::this_thread::sleep_for(std::chrono::milliseconds(6));
+            }
+            if (err_cnt % 25 == 0)
+                cerr << "ERR: [" << err_cnt << "] audio signal is invalid\n";
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
 
@@ -826,15 +829,13 @@ void* audio_capture(void* param1, int param2, void* param3)
 
             if (notify_status & MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE)
             {
-                if (verbose > 1)
-                    cerr << "Audio signal CHANGED!\n";
+                cerr << "Audio signal CHANGED!\n";
                 break;
             }
 
             if (notify_status & MWCAP_NOTIFY_AUDIO_INPUT_RESET)
             {
-                if (verbose > 1)
-                    cerr << "Audio input RESET!\n";
+                cerr << "Audio input RESET!\n";
                 break;
             }
 
@@ -1028,25 +1029,23 @@ bool video_capture_loop(HCHANNEL  hChannel,
         switch (videoSignalStatus.state)
         {
             case MWCAP_VIDEO_SIGNAL_NONE:
-              if (verbose > 1)
-                  cerr << "ERRPR: Input signal status: NONE\n";
+              cerr << "ERRPR: Input signal status: NONE\n";
               break;
             case MWCAP_VIDEO_SIGNAL_UNSUPPORTED:
-              if (verbose > 1)
-                  cerr << "ERRPR: Input signal status: Unsupported\n";
+              cerr << "ERRPR: Input signal status: Unsupported\n";
               break;
             case MWCAP_VIDEO_SIGNAL_LOCKING:
-              if (verbose > 1)
-                  cerr << "ERRPR: Input signal status: Locking\n";
+              cerr << "ERRPR: Input signal status: Locking\n";
               break;
             case MWCAP_VIDEO_SIGNAL_LOCKED:
               if (verbose > 1)
                   cerr << "Input signal status: Locked\n";
-              break;
+//              break;
         }
 
         if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
         {
+            cerr << "ERR: Video signal not locked.\n";
             MWStopVideoCapture(hChannel);
             break;
         }
@@ -1145,7 +1144,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
             if (frame_idx == videoBufferInfo.iNewestBufferedFullFrame)
             {
-                cerr << " Already processed MW video buffer "
+                cerr << "WARN: Already processed MW video buffer "
                      << frame_idx << " -- Skipping\n";
                 continue;
             }
@@ -1153,7 +1152,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 frame_idx = 0;
             if (frame_idx != videoBufferInfo.iNewestBufferedFullFrame)
             {
-                cerr << "Expected MW video buffer " << frame_idx
+                cerr << "WARN: Expected MW video buffer " << frame_idx
                      << " but current is "
                      << (int)videoBufferInfo.iNewestBufferedFullFrame
                      << endl;
@@ -1179,12 +1178,12 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 for (idx = 0; avail_image_buffers.empty(); ++idx)
                 {
                     image_buffer_ready.wait_for(lock,
-                                                std::chrono::milliseconds(input_frame_wait_ms));
+                                 std::chrono::milliseconds(input_frame_wait_ms));
                 }
                 if (idx > buffer_cnt)
                 {
                     end = std::chrono::steady_clock::now();
-                    cerr << "video_capture_loop: waited "
+                    cerr << "WARN: video_capture_loop: waited "
                          << std::chrono::duration_cast<std::chrono::milliseconds>
                         (end - start).count()
                          << "ms for image buffer. Encoder is too slow!\n";
@@ -1213,8 +1212,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             }
             if (MWWaitEvent(hCaptureEvent, 1000) <= 0)
             {
-                if (verbose > 0)
-                    cerr << "Error:wait capture event error or timeout\n";
+                cerr << "ERR: wait capture event error or timeout\n";
                 break;
             }
 
