@@ -122,8 +122,8 @@ void AudioIO::print_pointers(const buffer_t & buffer,
              << ", read : " << (size_t)(buffer.read - buffer.begin)
              << ", frame sz: " << buffer.frame_size
              << ", wrapped: " << (buffer.write_wrapped ? "Yes, " : "No, ")
-             << (buffer.lpcm ? " LPCM" : " bistream") << ":"
-             << ", codec: " << buffer.codec_name
+             << (buffer.lpcm ? " LPCM" : " bistream")
+             << " codec: " << buffer.codec_name
              << ", timestamp: " << buffer.m_timestamp << endl;
     }
 }
@@ -262,12 +262,11 @@ int AudioIO::Add(uint8_t* Pframe, size_t len, int64_t timestamp)
 
     if ((*Ibuf).write_wrapped && (*Ibuf).read < (*Ibuf).write)
     {
-
-        (*Ibuf).read = (*Ibuf).write;
         if (m_verbose > 0 && (*Ibuf).read != (*Ibuf).begin)
         {
             cerr << "ERR: Overwrote buffer begin, moving read\n";
             print_pointers(*Ibuf, "      Add", true);
+            (*Ibuf).read = (*Ibuf).write;
         }
     }
 

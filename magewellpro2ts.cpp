@@ -926,28 +926,22 @@ using imageque_t = std::deque<uint8_t*>;
 imageque_t image_buffers;
 imageque_t avail_image_buffers;
 std::mutex image_buffer_mutex;
-std::condition_variable image_buffer_ready;
 
-bool create_image_buffers(HCHANNEL hChannel, DWORD dwImageSize, int num_buffers)
+bool add_image_buffer(HCHANNEL hChannel, DWORD dwImageSize)
 {
     std::unique_lock<std::mutex> lock(image_buffer_mutex);
-    for (int idx = 0; idx < num_buffers; ++idx)
+
+    uint8_t* pbImage =  new uint8_t[dwImageSize];
+    if (pbImage == nullptr)
     {
-        uint8_t* pbImage       = nullptr;
-
-        pbImage = new uint8_t[dwImageSize];
-        if (pbImage == nullptr)
-        {
-            cerr << "ERROR: image buffer alloc fail!\n";
-            return false;
-        }
-
-        MWPinVideoBuffer(hChannel, (MWCAP_PTR)pbImage, dwImageSize);
-
-        image_buffers.push_back(pbImage);
-        avail_image_buffers.push_back(pbImage);
+        cerr << "ERROR: image buffer alloc fail!\n";
+        return false;
     }
 
+    MWPinVideoBuffer(hChannel, (MWCAP_PTR)pbImage, dwImageSize);
+
+    image_buffers.push_back(pbImage);
+    avail_image_buffers.push_back(pbImage);
     return true;
 }
 
@@ -963,21 +957,12 @@ void free_image_buffers(HCHANNEL hChannel)
         delete[] (*Iimage);
     }
     image_buffers.clear();
-
-    for (Iimage = avail_image_buffers.begin();
-         Iimage != avail_image_buffers.end(); ++Iimage)
-    {
-        MWUnpinVideoBuffer(hChannel, (LPBYTE)(*Iimage));
-        delete[] (*Iimage);
-    }
-    avail_image_buffers.clear();
 }
 
 void image_buffer_available(uint8_t* pbImage)
 {
     std::unique_lock<std::mutex> lock(image_buffer_mutex);
     avail_image_buffers.push_back(pbImage);
-    image_buffer_ready.notify_one();
 }
 
 
@@ -996,8 +981,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
     int64_t timestamp;
 
-    int input_frame_wait_ms = 17;
-    int buffer_cnt = 6;
+    int buffer_cnt = 0;
     int frame_idx = -1;
     int frame_wrap_idx = 4;
     int idx;
@@ -1018,9 +1002,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
         cerr << "Failed to determine best magewell pixel format.\n";
         return false;
     }
-
-    if (verbose > 0)
-        cerr << "Using " << buffer_cnt << " image buffers.\n";
 
     while (g_running)
     {
@@ -1085,7 +1066,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
             frame_rate = (AVRational){10000000LL, (int)frame_duration};
             time_base = (AVRational){1, 10000000LL};
         }
-        input_frame_wait_ms = frame_duration / 10000 / buffer_cnt;
 
         // 100ns / frame_duration
         if (verbose > 2)
@@ -1108,7 +1088,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
         }
 
         free_image_buffers(hChannel);
-        if (!create_image_buffers(hChannel, dwImageSize, buffer_cnt))
+        if (!add_image_buffer(hChannel, dwImageSize))
             return false;
 
         out2ts.setVideoParams(videoSignalStatus.cx,
@@ -1192,42 +1172,18 @@ bool video_capture_loop(HCHANNEL  hChannel,
             if (0 == (ullStatusBits & notifyBufferMode))
                 continue;
 
-            // Wait for an available frame buffer
+            image_buffer_mutex.lock();
+            if (avail_image_buffers.empty())
             {
-                start = std::chrono::steady_clock::now();
-                std::unique_lock<std::mutex> lock(image_buffer_mutex);
-
-                for (idx = 0; avail_image_buffers.empty(); ++idx)
-                {
-                    image_buffer_ready.wait_for(lock,
-                                 std::chrono::milliseconds(input_frame_wait_ms));
-                }
-                if (idx > buffer_cnt)
-                {
-                    end = std::chrono::steady_clock::now();
-                    cerr << "WARN: video_capture_loop: waited "
-                         << std::chrono::duration_cast<std::chrono::milliseconds>
-                        (end - start).count()
-                         << "ms for image buffer. Encoder is too slow!\n";
-
-                    if (slow_cnt++ == 0)
-                        slow_start = chrono::steady_clock::now();
-                    else
-                    {
-                        delta = chrono::duration_cast<std::chrono::milliseconds>(end - slow_start).count();
-                        if (delta > 500)
-                            slow_cnt = 0;
-                        else if (slow_cnt > 30)
-                        {
-                            cerr << "ERR: Continuing to drop frames. Resetting\n";
-                            break;
-                        }
-                    }
-                }
-
-                pbImage = avail_image_buffers.front();
-                avail_image_buffers.pop_front();
+                image_buffer_mutex.unlock();
+                add_image_buffer(hChannel, dwImageSize);
+                image_buffer_mutex.lock();
+                cerr << "WARN: video encoder is " << ++buffer_cnt << " frames behind.\n";
             }
+
+            pbImage = avail_image_buffers.front();
+            avail_image_buffers.pop_front();
+            image_buffer_mutex.unlock();
 
             MW_RESULT ret = MWCaptureVideoFrameToVirtualAddress
                             (hChannel,
