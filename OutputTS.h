@@ -13,6 +13,7 @@ extern "C" {
 #include <mutex>
 #include <condition_variable>
 #include <atomic>
+#include <functional>
 
 class AudioIO
 {
@@ -116,11 +117,14 @@ class AudioIO
 class OutputTS
 {
   public:
+    using MagCallback = std::function<void (uint8_t*)>;
+
     enum EncoderType { UNKNOWN, NV, VAAPI, QSV };
 
     OutputTS(int verbose, const std::string & video_codec_name,
              const std::string & preset, int quality, int look_ahead,
-             bool no_audio, const std::string & device);
+             bool no_audio, const std::string & device,
+             MagCallback image_buffer_avail);
     ~OutputTS(void);
 
     EncoderType encoderType(void) const { return m_encoderType; }
@@ -130,9 +134,11 @@ class OutputTS
                         uint8_t* capture_buf, size_t capture_buf_size,
                         int64_t* timestamps, size_t frame_count);
     void setVideoParams(int width, int height, bool interlaced,
-                        AVRational time_base, AVRational frame_rate);
+                        AVRational time_base, double frame_duration,
+                        AVRational frame_rate);
     void addAudio(uint8_t* buf, size_t len, int64_t timestamp);
-    bool Write(uint8_t*  pImage, uint32_t imageSize, int64_t timestamp);
+    void Write(void);
+    bool VideoFrame(uint8_t*  pImage, uint32_t imageSize, int64_t timestamp);
 
   private:
     // a wrapper around a single output AVStream
@@ -154,6 +160,13 @@ class OutputTS
 
         struct SwrContext* swr_ctx {nullptr};
     };
+
+    using imagepkt_t = struct {
+        int64_t  timestamp;
+        uint8_t* image;
+    };
+    using imageque_t = std::deque<imagepkt_t>;
+    imageque_t m_imagequeue;
 
     void add_stream(OutputStream* ost, AVFormatContext* oc,
                     const AVCodec* *codec);
@@ -191,13 +204,10 @@ class OutputTS
                   AVDictionary* opt_arg);
     bool nv_encode(AVFormatContext* oc,
                    OutputStream* ost, uint8_t* pImage,
-                   uint32_t imageSize, int64_t timestamp);
+                   int64_t timestamp);
     bool qsv_vaapi_encode(AVFormatContext* oc,
                       OutputStream* ost, uint8_t*  pImage,
-                      uint32_t imageSize, int64_t timestamp);
-    bool write_video_frame(AVFormatContext* oc, OutputStream* ost,
-                           uint8_t* pImage, uint32_t imageSize,
-                           int64_t timestamp);
+                      int64_t timestamp);
 
     EncoderType     m_encoderType  { UNKNOWN };
 
@@ -237,6 +247,8 @@ class OutputTS
     int              m_look_ahead              {-1};
     int              m_input_width             {1280};
     int              m_input_height            {720};
+    double           m_input_frame_duration    {0};
+    int              m_input_frame_wait_ms     {17};
     AVRational       m_input_frame_rate        {10000000, 166817};
     AVRational       m_input_time_base         {1, 10000000};
 
@@ -245,7 +257,12 @@ class OutputTS
     int              m_verbose;
 
     bool             m_initialized       {false};
-    std::mutex       m_mutex;
+
+    MagCallback             m_image_buffer_available;
+    std::thread             m_image_ready_thread;
+    std::mutex              m_imagepkt_mutex;
+    std::mutex              m_imagequeue_mutex;
+    std::condition_variable m_image_ready;
 
     bool             m_audio_ready;
     std::mutex       m_audio_mutex;
