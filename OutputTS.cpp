@@ -238,7 +238,7 @@ int AudioIO::Add(uint8_t* Pframe, size_t len, int64_t timestamp)
 
     if ((*Ibuf).write > (*Ibuf).end)
     {
-        cerr << "ERR: Add audio to " << (uint64_t)Pframe
+        cerr << "ERROR: Add audio to " << (uint64_t)Pframe
              << " - " << (*Ibuf).write
              << " which is greater than the end " << (uint64_t)(*Ibuf).end
              << endl;
@@ -253,7 +253,7 @@ int AudioIO::Add(uint8_t* Pframe, size_t len, int64_t timestamp)
     }
     else if (Pframe < (*Ibuf).prev_frame)
     {
-        cerr << "ERR: Add audio to " << (uint64_t)Pframe
+        cerr << "ERROR: Add audio to " << (uint64_t)Pframe
              << " which is less than " << (uint64_t)(*Ibuf).prev_frame
              << " but not the begining " << (uint64_t)(*Ibuf).begin
              << endl;
@@ -264,7 +264,7 @@ int AudioIO::Add(uint8_t* Pframe, size_t len, int64_t timestamp)
     {
         if (m_verbose > 0 && (*Ibuf).read != (*Ibuf).begin)
         {
-            cerr << "ERR: Overwrote buffer begin, moving read\n";
+            cerr << "ERROR: Overwrote buffer begin, moving read\n";
             print_pointers(*Ibuf, "      Add", true);
             (*Ibuf).read = (*Ibuf).write;
         }
@@ -324,7 +324,7 @@ int AudioIO::Read(uint8_t* dest, size_t len)
     {
         if ((*Ibuf).read > (*Ibuf).write)
         {
-            cerr << "ERR: Read has passed Write!\n";
+            cerr << "ERROR: Read has passed Write!\n";
             print_pointers(*Ibuf, "     Read", true);
             exit(-1);
         }

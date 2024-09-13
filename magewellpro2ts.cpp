@@ -687,10 +687,11 @@ void* audio_capture(void* param1, int param2, void* param3)
     long long int tm_last     = 0LL;
     uint64_t audio_frame_rate = 0LL;
 
-    uint8_t*  capture_buf = nullptr;
     HCHANNEL* channel_handle = reinterpret_cast<HCHANNEL* >(param1);
     int       verbose        = param2;
     OutputTS* out2ts         = reinterpret_cast<OutputTS* >(param3);
+
+    uint8_t* capture_buf     = nullptr;
 
     notify_event = MWCreateEvent();
     if (notify_event == 0)
@@ -762,7 +763,9 @@ void* audio_capture(void* param1, int param2, void* param3)
 
         channel_offset = cur_channels / 2;
 
-        const int    audio_buf_sz = 128;
+        // NOTE: capture_buf will be freed by AudioIO class
+
+        const int    audio_buf_sz = 64;
         int          buf_idx = 0;
         size_t       frame_idx = 0;
         size_t       frame_size = MWCAP_AUDIO_SAMPLES_PER_FRAME
@@ -770,7 +773,7 @@ void* audio_capture(void* param1, int param2, void* param3)
 
         size_t   capture_buf_size = audio_buf_sz * frame_size;
 
-        uint8_t* capture_buf = new uint8_t[capture_buf_size];
+        capture_buf = new uint8_t[capture_buf_size];
         if (nullptr == capture_buf)
         {
             cerr << "audio capture_buf alloc failed\n";
@@ -783,10 +786,6 @@ void* audio_capture(void* param1, int param2, void* param3)
             cerr << "audio timestamp buf alloc failed\n";
             break;
         }
-
-#if 0
-        MWGetDeviceTime(channel_handle, &tm_last);
-#endif
 
 // Channels: 2 SampleRate: 48000 FrameRate: 9216000 BytesPerSample: 2
 // perFrame 192
@@ -981,7 +980,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
     int64_t timestamp;
 
-    int buffer_cnt = 0;
+    int buffer_cnt = 2;
     int frame_idx = -1;
     int frame_wrap_idx = 4;
     int idx;
@@ -1049,7 +1048,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
         if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
         {
-            cerr << "ERR: Video signal not locked.\n";
+            cerr << "ERROR: Video signal not locked.\n";
             MWStopVideoCapture(hChannel);
             break;
         }
@@ -1088,6 +1087,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
         }
 
         free_image_buffers(hChannel);
+        if (!add_image_buffer(hChannel, dwImageSize))
+            return false;
         if (!add_image_buffer(hChannel, dwImageSize))
             return false;
 
@@ -1144,21 +1145,28 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 continue;
             }
 
-            if (frame_idx == videoBufferInfo.iNewestBufferedFullFrame)
+            if (frame_idx == -1)
             {
-                cerr << "WARN: Already processed MW video buffer "
-                     << frame_idx << " -- Skipping\n";
-                continue;
-            }
-            if (++frame_idx == frame_wrap_idx)
-                frame_idx = 0;
-            if (frame_idx != videoBufferInfo.iNewestBufferedFullFrame)
-            {
-                cerr << "WARN: Expected MW video buffer " << frame_idx
-                     << " but current is "
-                     << (int)videoBufferInfo.iNewestBufferedFullFrame
-                     << endl;
                 frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
+            }
+            else
+            {
+                if (frame_idx == videoBufferInfo.iNewestBufferedFullFrame)
+                {
+                    cerr << "WARNING: Already processed MW video buffer "
+                         << frame_idx << " -- Skipping\n";
+                    continue;
+                }
+                if (++frame_idx == frame_wrap_idx)
+                    frame_idx = 0;
+                if (frame_idx != videoBufferInfo.iNewestBufferedFullFrame)
+                {
+                    cerr << "WARNING: Expected MW video buffer " << frame_idx
+                         << " but current is "
+                         << (int)videoBufferInfo.iNewestBufferedFullFrame
+                         << endl;
+                    frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
+                }
             }
 
             if (MWGetVideoFrameInfo(hChannel, frame_idx,
@@ -1178,7 +1186,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 image_buffer_mutex.unlock();
                 add_image_buffer(hChannel, dwImageSize);
                 image_buffer_mutex.lock();
-                cerr << "WARN: video encoder is " << ++buffer_cnt << " frames behind.\n";
+                cerr << "WARNING: video encoder is " << ++buffer_cnt << " frames behind.\n";
             }
 
             pbImage = avail_image_buffers.front();
@@ -1204,7 +1212,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             }
             if (MWWaitEvent(hCaptureEvent, 1000) <= 0)
             {
-                cerr << "ERR: wait capture event error or timeout\n";
+                cerr << "ERROR: wait capture event error or timeout\n";
                 break;
             }
 

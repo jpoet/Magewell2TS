@@ -56,7 +56,7 @@ class AudioIO
             , m_timestamps(timestamps)
             , m_frame_cnt(frame_count)
         {
-            codec_name = lpcm ? "ac3" : "unknown";
+            codec_name = lpcm ? "eac3" : "unknown";
 #if 0
             std::cerr << "BUFFER " << (lpcm ? "LPCM" : "bistream")
                       << " " << codec_name << std::endl;
