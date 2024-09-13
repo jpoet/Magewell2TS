@@ -40,6 +40,7 @@
  * http://www.magewell.com/
  */
 
+#include <chrono>
 #include <iostream>
 #include <iomanip>
 #include <cstring>
@@ -547,7 +548,8 @@ void ListInputs(void)
             }
             cerr << ", LPCM: " << (aStatus.bLPCM ? "Yes" : "No")
                  << ", BPS: " << static_cast<int>(aStatus.cBitsPerSample)
-                 << ", Sample Rate: " << aStatus.dwSampleRate
+                 << ", Sample Rate: "
+                 << aStatus.dwSampleRate
                  << "\n";
         }
     }
@@ -677,7 +679,6 @@ void* audio_capture(void* param1, int param2, void* param3)
     DWORD     input_count = 0;
     int       cur_channels;
     int       channel_offset;
-    unsigned char* capture_buf = nullptr;
     MWCAP_AUDIO_SIGNAL_STATUS audio_signal_status;
     int err_cnt = 0;
     int cnt     = 0;
@@ -687,28 +688,16 @@ void* audio_capture(void* param1, int param2, void* param3)
     uint64_t audio_frame_rate = 0LL;
 
     HCHANNEL* channel_handle = reinterpret_cast<HCHANNEL* >(param1);
-    int        verbose        = param2;
+    int       verbose        = param2;
     OutputTS* out2ts         = reinterpret_cast<OutputTS* >(param3);
+
+    uint8_t* capture_buf     = nullptr;
 
     notify_event = MWCreateEvent();
     if (notify_event == 0)
     {
         if (verbose > 0)
             cerr << "create notify_event fail\n";
-        goto audio_capture_stoped;
-    }
-
-    notify_audio  = MWRegisterNotify(channel_handle, notify_event,
-                                     (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
-                                     (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE |
-                                     (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET |
-                                     (DWORD)MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO
-                                     );
-
-    if (notify_audio == 0)
-    {
-        if (verbose > 0)
-            cerr << "Register Notify audio fail\n";
         goto audio_capture_stoped;
     }
 
@@ -728,29 +717,28 @@ void* audio_capture(void* param1, int param2, void* param3)
     }
 
     if (verbose > 1)
-    cerr << "Audio capture starting\n";
+        cerr << "Audio capture starting\n";
 
     while (g_running)
     {
         if (MW_SUCCEEDED != MWGetAudioSignalStatus(channel_handle,
                                                    &audio_signal_status))
         {
-            if (++err_cnt > 50)
-                break;
-            if (verbose > 0)
+            if (err_cnt++ % 25 == 0)
                 cerr << "[" << err_cnt << "] can't get audio signal status\n";
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            if (++err_cnt > 300)
+                break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
 
-        // FALSE ==
         if (!audio_signal_status.wChannelValid)
         {
-            if (++err_cnt > 50)
-                break;
-            if (verbose > 0)
+            if (err_cnt++ % 25 == 0)
                 cerr << "[" << err_cnt << "] audio signal is invalid\n";
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            if (++err_cnt > 300)
+                break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
 
@@ -769,46 +757,69 @@ void* audio_capture(void* param1, int param2, void* param3)
             if (verbose > 0)
                 cerr << "[" << err_cnt << "] audio channel "
                      << cur_channels << " error\n";
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            std::this_thread::sleep_for(std::chrono::milliseconds(6));
             continue;
         }
 
         channel_offset = cur_channels / 2;
 
-        if (capture_buf != nullptr)
-        {
-            delete[] capture_buf;
-            capture_buf = nullptr;
-        }
+        // NOTE: capture_buf will be freed by AudioIO class
 
-        size_t frame_size = MWCAP_AUDIO_SAMPLES_PER_FRAME * cur_channels *
-                            bytes_per_sample;
+        const int    audio_buf_sz = 64;
+        int          buf_idx = 0;
+        size_t       frame_idx = 0;
+        size_t       frame_size = MWCAP_AUDIO_SAMPLES_PER_FRAME
+                                  * cur_channels * bytes_per_sample;
 
-        capture_buf = new uint8_t[frame_size];
+        size_t   capture_buf_size = audio_buf_sz * frame_size;
+
+        capture_buf = new uint8_t[capture_buf_size];
         if (nullptr == capture_buf)
         {
-            if (verbose > 0)
-                cerr << "capture_buf alloc failed\n";
+            cerr << "audio capture_buf alloc failed\n";
             break;
         }
 
-        MWGetDeviceTime(channel_handle, &tm_last);
+        int64_t* audio_timestamps = new int64_t[audio_buf_sz];
+        if (nullptr == audio_timestamps)
+        {
+            cerr << "audio timestamp buf alloc failed\n";
+            break;
+        }
 
 // Channels: 2 SampleRate: 48000 FrameRate: 9216000 BytesPerSample: 2
 // perFrame 192
         out2ts->setAudioParams(cur_channels, audio_signal_status.bLPCM,
-                               bytes_per_sample, MWCAP_AUDIO_SAMPLES_PER_FRAME,
-                               audio_signal_status.dwSampleRate);
-
+                               bytes_per_sample,
+                               audio_signal_status.dwSampleRate,
+                               MWCAP_AUDIO_SAMPLES_PER_FRAME,
+                               frame_size,
+                               capture_buf, capture_buf_size,
+                               audio_timestamps, audio_buf_sz);
         cnt = 0;
         err_cnt = 0;
 
+
+        ULONGLONG notify_status = 0;
+        unsigned char* audio_frame;
+        MWCAP_AUDIO_CAPTURE_FRAME macf;
+
+        notify_audio  = MWRegisterNotify(channel_handle, notify_event,
+                                         (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
+                                         (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE |
+                                         (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET |
+                                         (DWORD)MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO
+                                         );
+
+        if (notify_audio == 0)
+        {
+            if (verbose > 0)
+                cerr << "Register Notify audio fail\n";
+            goto audio_capture_stoped;
+        }
+
         while (g_running)
         {
-            ULONGLONG notify_status = 0;
-            unsigned char* audio_frame;
-            MWCAP_AUDIO_CAPTURE_FRAME macf;
-
             if (MWWaitEvent(notify_event, 1000) <= 0)
             {
                 if (verbose > 1)
@@ -819,41 +830,37 @@ void* audio_capture(void* param1, int param2, void* param3)
             if (MW_SUCCEEDED != MWGetNotifyStatus(channel_handle,
                                                   notify_audio,
                                                   &notify_status))
-            {
                 continue;
-            }
 
             if (notify_status & MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE)
             {
-                if (verbose > 1)
-                    cerr << "Audio signal CHANGED!\n";
+                cerr << "Audio signal CHANGED!\n";
                 break;
             }
 
             if (notify_status & MWCAP_NOTIFY_AUDIO_INPUT_RESET)
             {
-                if (verbose > 1)
-                    cerr << "Audio input RESET!\n";
+                cerr << "Audio input RESET!\n";
                 break;
             }
 
             if (notify_status & MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO)
             {
-                if (verbose > 1)
-                    cerr << "Audio HDMI INFOFRAME AUDIO!\n";
+                cerr << "Audio HDMI INFOFRAME AUDIO!\n";
             }
 
             if (!(notify_status & MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED))
-            {
                 continue;
-            }
 
             if (MW_ENODATA == MWCaptureAudioFrame(channel_handle, &macf))
             {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                std::this_thread::sleep_for(std::chrono::milliseconds(6));
                 continue;
             }
 
+#if 0
+            uint64_t timestamp = macf.llTimestamp;
+#endif
             /*
               L1L2L3L4R1R2R3R4L5L6L7L8R5R6R7R8(4byte)
               to 2channel 16bit
@@ -872,13 +879,22 @@ void* audio_capture(void* param1, int param2, void* param3)
                                  >> (32 - audio_signal_status.cBitsPerSample);
                     DWORD right = macf.adwSamples[read_pos2]
                                   >> (32 - audio_signal_status.cBitsPerSample);
-                    memcpy(&capture_buf[write_pos], &left, bytes_per_sample);
-                    memcpy(&capture_buf[write_pos + bytes_per_sample],
+                    memcpy(&capture_buf[frame_idx + write_pos], &left, bytes_per_sample);
+                    memcpy(&capture_buf[frame_idx + write_pos + bytes_per_sample],
                            &right, bytes_per_sample);
                 }
             }
 
-            out2ts->addPacket(capture_buf, frame_size, macf.llTimestamp);
+#if 0
+            cerr << " FRAME_IDX " << frame_idx
+                 << " @ " << (uint64_t)(&capture_buf[frame_idx]) << endl;
+#endif
+            audio_timestamps[buf_idx] = macf.llTimestamp;
+            out2ts->addAudio(&capture_buf[frame_idx], frame_size,
+                             macf.llTimestamp);
+            if (++buf_idx == audio_buf_sz)
+                buf_idx = 0;
+            frame_idx = frame_size * buf_idx;
         }
     }
 
@@ -909,49 +925,43 @@ using imageque_t = std::deque<uint8_t*>;
 imageque_t image_buffers;
 imageque_t avail_image_buffers;
 std::mutex image_buffer_mutex;
-std::condition_variable image_buffer_ready;
 
-bool create_image_buffers(HCHANNEL hChannel, DWORD dwImageSize, int num_buffers)
+bool add_image_buffer(HCHANNEL hChannel, DWORD dwImageSize)
 {
-    for (int idx = 0; idx < num_buffers; ++idx)
+    std::unique_lock<std::mutex> lock(image_buffer_mutex);
+
+    uint8_t* pbImage =  new uint8_t[dwImageSize];
+    if (pbImage == nullptr)
     {
-        uint8_t* pbImage       = nullptr;
-
-        pbImage = new uint8_t[dwImageSize];
-        if (pbImage == nullptr)
-        {
-            cerr << "ERROR: image buffer alloc fail!\n";
-            return false;
-        }
-
-        MWPinVideoBuffer(hChannel, (MWCAP_PTR)pbImage, dwImageSize);
-
-        image_buffers.push_back(pbImage);
-        avail_image_buffers.push_back(pbImage);
+        cerr << "ERROR: image buffer alloc fail!\n";
+        return false;
     }
 
+    MWPinVideoBuffer(hChannel, (MWCAP_PTR)pbImage, dwImageSize);
+
+    image_buffers.push_back(pbImage);
+    avail_image_buffers.push_back(pbImage);
     return true;
 }
 
 void free_image_buffers(HCHANNEL hChannel)
 {
+    std::unique_lock<std::mutex> lock(image_buffer_mutex);
     imageque_t::iterator Iimage;
 
-    for (Iimage = image_buffers.begin(); Iimage != image_buffers.end(); ++Iimage)
+    for (Iimage = image_buffers.begin();
+         Iimage != image_buffers.end(); ++Iimage)
     {
         MWUnpinVideoBuffer(hChannel, (LPBYTE)(*Iimage));
         delete[] (*Iimage);
     }
-
     image_buffers.clear();
-    avail_image_buffers.clear();
 }
 
 void image_buffer_available(uint8_t* pbImage)
 {
     std::unique_lock<std::mutex> lock(image_buffer_mutex);
     avail_image_buffers.push_back(pbImage);
-    image_buffer_ready.notify_one();
 }
 
 
@@ -959,25 +969,27 @@ bool video_capture_loop(HCHANNEL  hChannel,
                         HNOTIFY   hNotify,
                         MWCAP_PTR hNotifyEvent,
                         MWCAP_PTR hCaptureEvent,
+                        uint8_t*  pbImage,
                         int       verbose,
                         OutputTS & out2ts)
 {
     MWCAP_VIDEO_DEINTERLACE_MODE mode;
     DWORD notifyBufferMode;
+    LONGLONG llTotalTime = 0LL;
     DWORD dwFourcc = MWFOURCC_I420;
-    uint8_t* pbImage = nullptr;
-    int input_frame_wait_ms = 17;
-    int buffer_cnt = 10;
+
+    int64_t timestamp;
+
+    int buffer_cnt = 2;
     int frame_idx = -1;
     int frame_wrap_idx = 4;
-    int idx, cnt;
-    bool force_sleep = false;
+    int idx;
 
-    MWCAP_VIDEO_CAPTURE_STATUS captureStatus;
+    chrono::time_point<std::chrono::steady_clock> start, end;
+    chrono::time_point<std::chrono::steady_clock> slow_start;
+    int64_t delta;
 
-    uint64_t timestamp = 0LL;
-
-    std::chrono::time_point<std::chrono::steady_clock> start, end;
+    int slow_cnt = 0;
 
     if (out2ts.encoderType() == OutputTS::QSV ||
         out2ts.encoderType() == OutputTS::VAAPI)
@@ -990,37 +1002,26 @@ bool video_capture_loop(HCHANNEL  hChannel,
         return false;
     }
 
-    if (verbose > 0)
-        cerr << "Using " << buffer_cnt << " image buffers.\n";
-
     while (g_running)
     {
-        MWCAP_INPUT_SPECIFIC_STATUS input_status;
-        if (MWGetInputSpecificStatus(hChannel, &input_status) != MW_SUCCEEDED)
+        MWCAP_VIDEO_BUFFER_INFO videoBufferInfo;
+        if (MWGetVideoBufferInfo(hChannel, &videoBufferInfo) != MW_SUCCEEDED)
         {
-            cerr << "Invalid video input.\n";
-            return false;
+            continue;
         }
-        if (!input_status.bValid)
+
+        frame_wrap_idx = videoBufferInfo.cMaxFrames;
+
+        MWCAP_VIDEO_FRAME_INFO videoFrameInfo;
+        if (MWGetVideoFrameInfo(hChannel,
+                                videoBufferInfo.iNewestBufferedFullFrame,
+                                &videoFrameInfo) != MW_SUCCEEDED)
         {
-            cerr << "No signal!\n";
-            return false;
+            continue;
         }
 
         MWCAP_VIDEO_SIGNAL_STATUS videoSignalStatus;
         MWGetVideoSignalStatus(hChannel, &videoSignalStatus);
-
-
-        if (!out2ts.AudioReady())
-            continue;
-
-        MWCAP_VIDEO_BUFFER_INFO videoBufferInfo;
-        MWGetVideoBufferInfo(hChannel, &videoBufferInfo);
-
-        MWCAP_VIDEO_FRAME_INFO videoFrameInfo;
-        MWGetVideoFrameInfo(hChannel,
-                            videoBufferInfo.iNewestBufferedFullFrame,
-                            &videoFrameInfo);
 
         DWORD dwMinStride = FOURCC_CalcMinStride(dwFourcc,
                                                  videoSignalStatus.cx, 4);
@@ -1032,32 +1033,28 @@ bool video_capture_loop(HCHANNEL  hChannel,
         switch (videoSignalStatus.state)
         {
             case MWCAP_VIDEO_SIGNAL_NONE:
-              if (verbose > 1)
-                  cerr << "ERRPR: Input signal status: NONE\n";
+              cerr << "ERRPR: Input signal status: NONE\n";
               break;
             case MWCAP_VIDEO_SIGNAL_UNSUPPORTED:
-              if (verbose > 1)
-                  cerr << "ERRPR: Input signal status: Unsupported\n";
+              cerr << "ERRPR: Input signal status: Unsupported\n";
               break;
             case MWCAP_VIDEO_SIGNAL_LOCKING:
-              if (verbose > 1)
-                  cerr << "ERRPR: Input signal status: Locking\n";
+              cerr << "ERRPR: Input signal status: Locking\n";
               break;
             case MWCAP_VIDEO_SIGNAL_LOCKED:
-              if (verbose > 1)
-                  cerr << "Input signal status: Locked\n";
-              break;
+              cerr << "Input signal status: Locked\n";
+//              break;
         }
 
         if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
         {
+            cerr << "ERROR: Video signal not locked.\n";
             MWStopVideoCapture(hChannel);
             break;
         }
 
         double frame_duration = videoSignalStatus.dwFrameDuration;
-
-        AVRational frame_rate, frame_rate_detected, time_base;
+        AVRational frame_rate, time_base;
         if (videoSignalStatus.bInterlaced == TRUE)
         {
             frame_rate = (AVRational){20000000LL, (int)frame_duration};
@@ -1065,29 +1062,22 @@ bool video_capture_loop(HCHANNEL  hChannel,
         }
         else
         {
-            frame_rate_detected = (AVRational){10000000LL, (int)frame_duration};
-            frame_rate = (AVRational){60000, 1001};
+            frame_rate = (AVRational){10000000LL, (int)frame_duration};
             time_base = (AVRational){1, 10000000LL};
         }
-        input_frame_wait_ms = frame_duration / 10000 / buffer_cnt;
 
         // 100ns / frame_duration
         if (verbose > 2)
         {
             cerr << "========\n";
-            double fps_detected = (videoSignalStatus.bInterlaced == TRUE) ?
-                              (double)20000000LL / frame_duration :
-                              (double)10000000LL / frame_duration;
             double fps = (videoSignalStatus.bInterlaced == TRUE) ?
-                         (double)30000 / 1001 :
-                         (double)60000 / 1001;
+                         (double)20000000LL / frame_duration :
+                         (double)10000000LL / frame_duration;
             cerr << "Input signal resolution: " << videoSignalStatus.cx
                  << "x" << videoSignalStatus.cy << "\n";
-            cerr << "Input signal fps: " << fps_detected
-                 << "  " << frame_rate_detected.num << "/" << frame_rate_detected.den << "\n";
-            cerr << "Frame duration: " << frame_duration << "\n";
-            cerr << "Input signal fps (adjusted): " << fps
+            cerr << "Input signal fps: " << fps
                  << "  " << frame_rate.num << "/" << frame_rate.den << "\n";
+            cerr << "Frame duration: " << frame_duration << "\n";
             cerr << "Time base: " << time_base.num << "/" << time_base.den << "\n";
             cerr << "Input signal interlaced: "
                  << static_cast<bool>(videoSignalStatus.bInterlaced) << "\n";
@@ -1097,17 +1087,29 @@ bool video_capture_loop(HCHANNEL  hChannel,
         }
 
         free_image_buffers(hChannel);
-        if (!create_image_buffers(hChannel, dwImageSize, buffer_cnt))
+        if (!add_image_buffer(hChannel, dwImageSize))
+            return false;
+        if (!add_image_buffer(hChannel, dwImageSize))
             return false;
 
         out2ts.setVideoParams(videoSignalStatus.cx,
                               videoSignalStatus.cy,
                               videoSignalStatus.bInterlaced,
-                              time_base, frame_duration, frame_rate_detected);
+                              time_base, frame_duration, frame_rate);
 
-        notifyBufferMode = videoSignalStatus.bInterlaced ?
-                           MWCAP_NOTIFY_VIDEO_FIELD_BUFFERED :
-                           MWCAP_NOTIFY_VIDEO_FRAME_BUFFERED;
+        if(videoSignalStatus.bInterlaced)
+        {
+            notifyBufferMode = MWCAP_NOTIFY_VIDEO_FIELD_BUFFERED;
+            if (0 == videoBufferInfo.iBufferedFieldIndex)
+                mode = MWCAP_VIDEO_DEINTERLACE_TOP_FIELD;
+            else
+                mode = MWCAP_VIDEO_DEINTERLACE_BOTTOM_FIELD;
+        }
+        else
+        {
+            notifyBufferMode = MWCAP_NOTIFY_VIDEO_FRAME_BUFFERED;
+            mode = MWCAP_VIDEO_DEINTERLACE_BLEND;
+        }
 
         hNotify = MWRegisterNotify(hChannel, hNotifyEvent, notifyBufferMode);
         if (hNotify == 0)
@@ -1143,116 +1145,85 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 continue;
             }
 
-            if (videoBufferInfo.iNewestBufferedFullFrame >= frame_wrap_idx)
-                frame_wrap_idx = videoBufferInfo.iNewestBufferedFullFrame + 1;
-
-#if 0
-            cnt = 0;
-            for (;;)
+            if (frame_idx == -1)
             {
-                MWCAP_VIDEO_SIGNAL_STATUS signalStatus;
-                MWGetVideoSignalStatus(hChannel, &signalStatus);
-                if (signalStatus.dwFrameDuration != frame_duration)
-                    cerr << "\nFrame duration CHANGED " << frame_duration << " -> "
-                         << signalStatus.dwFrameDuration << endl;
-                if (frame_idx == -1)
-                    frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
-                else if (++frame_idx == frame_wrap_idx)
-                    frame_idx = 0;
-#else
                 frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
-#endif
-
-                if (MWGetVideoFrameInfo(hChannel, frame_idx,
-                                        &videoFrameInfo) != MW_SUCCEEDED)
-                {
-                    if (verbose > 0)
-                        cerr << "Failed to get video frame info.\n";
-                    continue;
-                }
-
-                if (0 == (ullStatusBits & notifyBufferMode))
-                {
-                    if (verbose > 0)
-                        cerr << "Frame not ready.\n";
-                    continue;
-                }
-
-                if(videoSignalStatus.bInterlaced)
-                {
-                    if (0 == videoBufferInfo.iBufferedFieldIndex)
-                    {
-                        mode = MWCAP_VIDEO_DEINTERLACE_TOP_FIELD;
-                    }
-                    else
-                    {
-                        mode = MWCAP_VIDEO_DEINTERLACE_BOTTOM_FIELD;
-                    }
-                }
-                else
-                {
-                    mode = MWCAP_VIDEO_DEINTERLACE_BLEND;
-                }
-
-                {
-                    start = std::chrono::steady_clock::now();
-                    std::unique_lock<std::mutex> lock(image_buffer_mutex);
-
-                    for (idx = 0; avail_image_buffers.empty(); ++idx)
-                    {
-                        image_buffer_ready.wait_for(lock,
-                                      std::chrono::milliseconds(input_frame_wait_ms));
-                    }
-                    if (idx > buffer_cnt)
-                    {
-                        end = std::chrono::steady_clock::now();
-                        cerr << "video_capture_loop: waited "
-                             << std::chrono::duration_cast<std::chrono::milliseconds>
-                                                       (end - start).count()
-                             << "ms for image buffer. Encoder is too slow!\n";
-                    }
-
-                    pbImage = avail_image_buffers.front();
-                    avail_image_buffers.pop_front();
-                }
-
-                MW_RESULT ret = MWCaptureVideoFrameToVirtualAddress
-                                (hChannel,
-                                 frame_idx,
-                                 reinterpret_cast<MWCAP_PTR>(pbImage),
-                                 dwImageSize,
-                                 dwMinStride,
-                                 0,
-                                 0,
-                                 dwFourcc,
-                                 videoSignalStatus.cx,
-                                 videoSignalStatus.cy);
-
-                if (ret != MW_SUCCEEDED)
-                {
-                    if (verbose > 0)
-                        cerr << "Frame not ready.\n";
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                    continue;
-                }
-
-                // gets the capture state while cleaning up the occupied system storage.
-                MWGetVideoCaptureStatus(hChannel, &captureStatus);
-
-                timestamp = videoSignalStatus.bInterlaced
-                            ? videoFrameInfo.allFieldBufferedTimes[1]
-                            : videoFrameInfo.allFieldBufferedTimes[0];
-
-                out2ts.AddVideo(pbImage, dwImageSize, timestamp);
-
-#if 0
-                if (frame_idx == (int)videoBufferInfo.iNewestBufferedFullFrame)
-                    break;
-                else
-                    cerr << "Processing driver buffered frame "
-                         << ++cnt << " of " << frame_wrap_idx << ".\n";
             }
-#endif
+            else
+            {
+                if (frame_idx == videoBufferInfo.iNewestBufferedFullFrame)
+                {
+                    cerr << "WARNING: Already processed MW video buffer "
+                         << frame_idx << " -- Skipping\n";
+                    continue;
+                }
+                if (++frame_idx == frame_wrap_idx)
+                    frame_idx = 0;
+                if (frame_idx != videoBufferInfo.iNewestBufferedFullFrame)
+                {
+                    cerr << "WARNING: Expected MW video buffer " << frame_idx
+                         << " but current is "
+                         << (int)videoBufferInfo.iNewestBufferedFullFrame
+                         << endl;
+                    frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
+                }
+            }
+
+            if (MWGetVideoFrameInfo(hChannel, frame_idx,
+                                    &videoFrameInfo) != MW_SUCCEEDED)
+            {
+                if (verbose > 0)
+                    cerr << "Failed to get video frame info.\n";
+                continue;
+            }
+
+            if (0 == (ullStatusBits & notifyBufferMode))
+                continue;
+
+            image_buffer_mutex.lock();
+            if (avail_image_buffers.empty())
+            {
+                image_buffer_mutex.unlock();
+                add_image_buffer(hChannel, dwImageSize);
+                image_buffer_mutex.lock();
+                cerr << "WARNING: video encoder is " << ++buffer_cnt << " frames behind.\n";
+            }
+
+            pbImage = avail_image_buffers.front();
+            avail_image_buffers.pop_front();
+            image_buffer_mutex.unlock();
+
+            MW_RESULT ret = MWCaptureVideoFrameToVirtualAddress
+                            (hChannel,
+                             frame_idx,
+                             reinterpret_cast<MWCAP_PTR>(pbImage),
+                             dwImageSize,
+                             dwMinStride,
+                             0,
+                             0,
+                             dwFourcc,
+                             videoSignalStatus.cx,
+                             videoSignalStatus.cy);
+
+            if (ret != MW_SUCCEEDED)
+            {
+//                    std::this_thread::sleep_for(std::chrono::milliseconds(6));
+                continue;
+            }
+            if (MWWaitEvent(hCaptureEvent, 1000) <= 0)
+            {
+                cerr << "ERROR: wait capture event error or timeout\n";
+                break;
+            }
+
+            MWCAP_VIDEO_CAPTURE_STATUS captureStatus;
+            MWGetVideoCaptureStatus(hChannel, &captureStatus);
+
+            timestamp = videoSignalStatus.bInterlaced
+                        ? videoFrameInfo.allFieldBufferedTimes[1]
+                        : videoFrameInfo.allFieldBufferedTimes[0];
+
+            out2ts.VideoFrame(pbImage, dwImageSize, timestamp);
         }
     }
 
@@ -1265,6 +1236,7 @@ bool video_capture(HCHANNEL hChannel, int verbose, OutputTS & out2ts)
     HNOTIFY   hNotify       = 0;
     MWCAP_PTR hNotifyEvent  = 0;
     MWCAP_PTR hCaptureEvent = 0;
+    uint8_t* pbImage       = nullptr;
 
     hCaptureEvent = MWCreateEvent();
     if (hCaptureEvent == 0)
@@ -1293,11 +1265,17 @@ bool video_capture(HCHANNEL hChannel, int verbose, OutputTS & out2ts)
     {
         if (!video_capture_loop(hChannel, hNotify,
                                 hNotifyEvent, hCaptureEvent,
-                                verbose, out2ts))
+                                pbImage, verbose, out2ts))
             break;
     }
 
     g_running = false;
+
+    if(pbImage)
+    {
+        delete[] pbImage;
+        pbImage = nullptr;
+    }
 
     MWUnregisterNotify(hChannel, hNotify);
     hNotify=0;
@@ -1797,7 +1775,8 @@ int main(int argc, char* argv[])
 
     if (do_capture)
     {
-        OutputTS out2ts(verbose, video_codec, preset, quality, look_ahead, no_audio,
+        OutputTS out2ts(verbose, video_codec, preset, quality,
+                        look_ahead, no_audio,
                         device, image_buffer_available);
 
         if (!capture(channel_handle, verbose, out2ts, no_audio))
