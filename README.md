@@ -6,24 +6,18 @@
 
 This application reads audio and video from a Magewell PRO capture card and muxes them into a Transport Stream.
 
-The audio is scanned for a S/PDIF header and if found then the audio is treated as a bitstream which is muxed directly into the resulting Transport Stream. If the S/PDIF header is not found, then the audio is assumed to be LPCM and is encoded as AC3 which is then muxed into the Transport Stream
+If bitstream audio is detected it will be muxed directly into the resulting Transport Stream. LPCM audio will be encoded as AC3 and then muxed.
 
 Both AC3 and EAC3 are supported if the source device outputs them as a bitstream.
 
-More than two channels of PCM are not currently supported. Adding such support should be easy but I do not have a source device to test with.
+More than two channels of LPCM are not currently supported. Adding such support should be easy but I do not have a source device to test with.
 
-The Magewell driver provides V4L2 and ALSA interfaces to the
-card. This application by-passes those interfaces and talks directly
-to it via the Magewell API. A big advantage to this is you don't have
-to figure out which /dev/videoX or ALSA "device" is needed to make it
-work. The other advantage is that a raw bitstream can be captured. Unfortunately, the Magewell API depends on ALSA so we have to link it even though it is not used.
+The Magewell driver provides V4L2 and ALSA interfaces to the card. This application by-passes those interfaces and talks directly to it via the Magewell API. A big advantage to this is you don't have to figure out which /dev/videoX or ALSA "device" is needed to make it work. The other advantage is that a raw bitstream can be captured. Unfortunately, the Magewell API depends on ALSA so we have to link it even though it is not used.
  
 ----
 ## Caveats
 
 The Magewell PRO capture cards capture raw audio and video. The video (at least) needs compressed and it is up to the Linux PC to do that. The only practical way of accomplishing this is with GPU assist. Intel QSV & VAAPI and nVidia nvenc are supported.
-
-NOTE (05-Aug-2024): The master branch tries very hard not to miss any frames. This means that the audio and video can get out of sync if the encoder cannot keep up. For example, an Intel A380 can record four HEVC streams easily as long as the qualiy setting is not set much lower than 25. Even at quality 25, the result looks very good!
 
 ***
 ## Magewell driver
@@ -92,7 +86,6 @@ Fedora:
 ```bash
 sudo dnf install -y make gcc gcc-c++ libstdc++-devel libv4l-devel patch kernel-devel alsa-lib-devel v4l-utils-devel-tools systemd-devel
 ```
-
 Ubuntu:
 ```bash
 sudo apt-get install build-essential libv4l-dev cmake libudev-dev nvidia-cuda-toolkit
@@ -141,6 +134,7 @@ sudo make install
 The application provides help via --help or -h:
 ```bash
 magewellpro2ts -h
+magewellpro2ts --list
 magewellpro2ts -i 1 -m -n | mpv -
 ```
 
@@ -149,59 +143,48 @@ magewellpro2ts -i 1 -m -n | mpv -
 The easiest way to use this with MythTV is to create an "External Recorder" configuration file. Something like (/home/mythtv/etc/magewell-2.conf):
 ```
 [VARIABLES]
-#TUNER=/usr/local/bin/adb-control.py
-#DEVICE=onn2
-TUNER=/usr/local/bin/roku-control.py
-DEVICE=roku2
-INPUT=2
+INPUT=1
+DEVICE=roku1
+TUNER=/usr/local/bin/roku-control.py --device %DEVICE%
 
-#CODEC=hevc_vaapi
-CODEC=hevc_qsv
-GPU=--device renderD129
+#DEVICE=onn1
+#TUNER=/usr/local/bin/adb-control.py --device %DEVICE%
 
-#CODEC=h264_nvenc
-#GPU=
+CODEC=hevc_qsv -q 25
+#CODEC=h264_nvenc -q 20
+
 
 [RECORDER]
 # The recorder command to execute.  %URL% is optional, and
 # will be replaced with the channel's "URL" as defined in the
 # [TUNER/channels] (channel conf) configuration file
-#command="curl --silent http://uhe2654/8.ts"
-
-command="/usr/local/bin/magewellpro2ts -i %INPUT% -m -c %CODEC% %GPU%"
+command="/usr/local/bin/magewellpro2ts -i %INPUT% -s 100 -m -c %CODEC%"
 
 # cleanup="/home/mythtv/mythtvguide/adb-1-finished.sh"
-cleanup="%TUNER% --device %DEVICE% --reset"
+cleanup="%TUNER% --reset"
 
 # Used in logging events, %ARG% are replaced from the channel info
 desc="%DEVICE%-%INPUT%"
 
 [TUNER]
+# An optional CONF file which provides channel details.  If it does not
+# exist, then channel changes are not supported.
+#channels=/home/mythtv/etc/adb-channels.conf
+
 # If [TUNER/command] is provided, it will be executed to "tune" the
 # channel. A %URL% parameter will be substituted with the "URL" as
 # defined in the [TUNER/channels] configuration file
 
-command="%TUNER% --device %DEVICE% --sourceid %SOURCEID% --channum %CHANNUM% --recordid %RECORDID%"
-newepisodecommand="%TUNER% --device %DEVICE% --touch %CHANNUM% &"
+command="%TUNER% --waitafter 1 --sourceid %SOURCEID% --channum %CHANNUM% --recordid %RECORDID%"
+# newepisodecommand="%TUNER% --touch %CHANNUM% &"
 #ondatastart="%TUNER% --device %DEVICE% --wait 2 --keys down"
 
 timeout=30000
-
-
-[SCANNER]
-# When MythTV scans for channels, The contents of the [TUNER/channels]
-# config file are used to populate MythTV's channel information.
-# If a command is provided here, it will be executed first, so it can
-# populate the [TUNER/channels] config file
-#command=/home/mythtv/mythtvguide/scan.sh "%CHANCONF%"
-
-# Timeout for scan command in msecs
-#timeout=60000
 ```
 
-Then configure a MythTV External Recorder capture card with an appropriate command:
+Then configure a MythTV External Recorder capture card with an appropriate command such as:
 ```bash
-/usr/local/bin/mythexternrecorder --conf /home/myth/etc/magewell-2.conf
+/usr/local/bin/mythexternrecorder --conf /home/myth/etc/magewell-1.conf
 ```
 
 ----
