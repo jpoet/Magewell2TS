@@ -1204,7 +1204,7 @@ bool OutputTS::open_spdif(void)
 
         if ((ret = av_probe_input_buffer(m_spdif_avio_context,
                                          &fmt, "", nullptr, 0,
-                                         8 * m_audio_block_size)) != 0)
+                                m_spdif_avio_context_buffer_size * 4)) != 0)
         {
             if (m_verbose > 0)
             {

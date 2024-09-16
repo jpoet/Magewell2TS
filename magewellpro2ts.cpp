@@ -765,7 +765,7 @@ void* audio_capture(void* param1, int param2, void* param3)
 
         // NOTE: capture_buf will be freed by AudioIO class
 
-        const int    audio_buf_sz = 64;
+        const int    audio_buf_sz = 128;
         int          buf_idx = 0;
         size_t       frame_idx = 0;
         size_t       frame_size = MWCAP_AUDIO_SAMPLES_PER_FRAME
@@ -1001,6 +1001,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
         cerr << "Failed to determine best magewell pixel format.\n";
         return false;
     }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(7));
 
     while (g_running)
     {
