@@ -725,7 +725,8 @@ void* audio_capture(void* param1, int param2, void* param3)
                                                    &audio_signal_status))
         {
             if (err_cnt++ % 25 == 0)
-                cerr << "[" << err_cnt << "] can't get audio signal status\n";
+                cerr << "ERROR [" << err_cnt
+                     << "] can't get audio signal status\n";
             if (++err_cnt > 300)
                 break;
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
