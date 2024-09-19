@@ -721,24 +721,39 @@ void* audio_capture(void* param1, int param2, void* param3)
 
     while (g_running)
     {
+#if 0 // Testing
+    chrono::time_point<std::chrono::steady_clock> start, end;
+    start = std::chrono::steady_clock::now();
+#endif
+
         if (MW_SUCCEEDED != MWGetAudioSignalStatus(channel_handle,
                                                    &audio_signal_status))
         {
-            if (err_cnt++ % 25 == 0)
-                cerr << "ERROR [" << err_cnt
+            if (err_cnt > 300)
+            {
+                cerr << "WARNING [" << err_cnt
                      << "] can't get audio signal status\n";
-            if (++err_cnt > 300)
                 break;
+            }
+            else if (err_cnt++ % 25 == 0)
+                cerr << "WARNING [" << err_cnt
+                     << "] can't get audio signal status\n";
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
 
         if (!audio_signal_status.wChannelValid)
         {
-            if (err_cnt++ % 25 == 0)
-                cerr << "[" << err_cnt << "] audio signal is invalid\n";
-            if (++err_cnt > 300)
+            if (err_cnt > 300)
+            {
+                cerr << "WARNING [" << err_cnt
+                     << "] can't get audio, signal is invalid\n";
                 break;
+            }
+            else if (err_cnt++ % 25 == 0)
+                cerr << "WARNING [" << err_cnt
+                     << "] can't get audio, signal is invalid\n";
+
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
@@ -753,12 +768,19 @@ void* audio_capture(void* param1, int param2, void* param3)
 
         if (0 == cur_channels)
         {
-            if (++err_cnt > 50)
+            if (err_cnt > 50)
+            {
+                cerr << "WARNING [" << err_cnt
+                     << "] Invalid audio channel count: "
+                     << cur_channels << endl;
                 break;
-            if (verbose > 0)
-                cerr << "[" << err_cnt << "] audio channel "
-                     << cur_channels << " error\n";
-            std::this_thread::sleep_for(std::chrono::milliseconds(6));
+            }
+            else if (err_cnt++ % 25 == 0)
+                cerr << "WARNING [" << err_cnt
+                     << "] Invalid audio channel count: "
+                     << cur_channels << endl;
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
 
@@ -777,14 +799,14 @@ void* audio_capture(void* param1, int param2, void* param3)
         capture_buf = new uint8_t[capture_buf_size];
         if (nullptr == capture_buf)
         {
-            cerr << "audio capture_buf alloc failed\n";
+            cerr << "ERROR: audio capture_buf alloc failed\n";
             break;
         }
 
         int64_t* audio_timestamps = new int64_t[audio_buf_sz];
         if (nullptr == audio_timestamps)
         {
-            cerr << "audio timestamp buf alloc failed\n";
+            cerr << "ERROR: audio timestamp buf alloc failed\n";
             break;
         }
 
@@ -833,21 +855,30 @@ void* audio_capture(void* param1, int param2, void* param3)
                                                   &notify_status))
                 continue;
 
+#if 0
+            end = std::chrono::steady_clock::now();
+            if (std::chrono::duration_cast<std::chrono::seconds>(end - start).count() > 60)
+            {
+                cerr << "ERROR: test error\n";
+                break;
+            }
+#endif
+
             if (notify_status & MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE)
             {
-                cerr << "Audio signal CHANGED!\n";
-                break;
+                cerr << "WARNING: Audio signal CHANGED!\n";
+                g_running = false;
             }
 
             if (notify_status & MWCAP_NOTIFY_AUDIO_INPUT_RESET)
             {
-                cerr << "Audio input RESET!\n";
-                break;
+                cerr << "WARNING: Audio input RESET!\n";
+                g_running = false;
             }
 
             if (notify_status & MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO)
             {
-                cerr << "Audio HDMI INFOFRAME AUDIO!\n";
+                cerr << "WARNING: Audio HDMI INFOFRAME AUDIO!\n";
             }
 
             if (!(notify_status & MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED))
@@ -986,10 +1017,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
     int frame_wrap_idx = 4;
     int idx;
 
-    chrono::time_point<std::chrono::steady_clock> start, end;
-    chrono::time_point<std::chrono::steady_clock> slow_start;
-    int64_t delta;
-
     int slow_cnt = 0;
 
     if (out2ts.encoderType() == OutputTS::QSV ||
@@ -999,7 +1026,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
         dwFourcc = MWFOURCC_I420;
     else
     {
-        cerr << "Failed to determine best magewell pixel format.\n";
+        cerr << "ERROR: Failed to determine best magewell pixel format.\n";
         return false;
     }
 
@@ -1036,22 +1063,22 @@ bool video_capture_loop(HCHANNEL  hChannel,
         switch (videoSignalStatus.state)
         {
             case MWCAP_VIDEO_SIGNAL_NONE:
-              cerr << "ERRPR: Input signal status: NONE\n";
+              cerr << "WARNING: Input signal status: NONE\n";
               break;
             case MWCAP_VIDEO_SIGNAL_UNSUPPORTED:
-              cerr << "ERRPR: Input signal status: Unsupported\n";
+              cerr << "WARNING: Input signal status: Unsupported\n";
               break;
             case MWCAP_VIDEO_SIGNAL_LOCKING:
-              cerr << "ERRPR: Input signal status: Locking\n";
+              cerr << "WARNING: Input signal status: Locking\n";
               break;
             case MWCAP_VIDEO_SIGNAL_LOCKED:
               cerr << "Input signal status: Locked\n";
-//              break;
+              break;
         }
 
         if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
         {
-            cerr << "ERROR: Video signal not locked.\n";
+            cerr << "WARNING: Video signal not locked.\n";
             MWStopVideoCapture(hChannel);
             break;
         }
@@ -1118,7 +1145,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
         if (hNotify == 0)
         {
             if (verbose > 0)
-                cerr << "ERROR: Register Notify error.\n";
+                cerr << "WARNING: Register Notify error.\n";
             return false;
         }
 
@@ -1136,7 +1163,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
                                                   &ullStatusBits))
             {
                 if (verbose > 0)
-                    cerr << "Failed to get Notify status.\n";
+                    cerr << "WARNING: Failed to get Notify status.\n";
                 continue;
             }
 
@@ -1144,7 +1171,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
                                                      &videoBufferInfo))
             {
                 if (verbose > 0)
-                    cerr << "Failed to get video buffer info.\n";
+                    cerr << "WARNING: Failed to get video buffer info.\n";
                 continue;
             }
 
@@ -1176,7 +1203,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
                                     &videoFrameInfo) != MW_SUCCEEDED)
             {
                 if (verbose > 0)
-                    cerr << "Failed to get video frame info.\n";
+                    cerr << "WARNING: Failed to get video frame info.\n";
                 continue;
             }
 
@@ -1215,7 +1242,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             }
             if (MWWaitEvent(hCaptureEvent, 1000) <= 0)
             {
-                cerr << "ERROR: wait capture event error or timeout\n";
+                cerr << "WARNING: wait capture event error or timeout\n";
                 break;
             }
 
@@ -1245,7 +1272,7 @@ bool video_capture(HCHANNEL hChannel, int verbose, OutputTS & out2ts)
     if (hCaptureEvent == 0)
     {
         if (verbose > 0)
-            cerr << "Create timer event error\n";
+            cerr << "ERROR: Create timer event error\n";
         return false;
     }
 
@@ -1253,7 +1280,7 @@ bool video_capture(HCHANNEL hChannel, int verbose, OutputTS & out2ts)
     if (hNotifyEvent == 0)
     {
         if (verbose > 0)
-            cerr << "Create notify event error\n";
+            cerr << "ERROR: Create notify event error\n";
         return false;
     }
 
