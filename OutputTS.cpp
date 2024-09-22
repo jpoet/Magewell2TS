@@ -77,6 +77,13 @@ std::string AV_ts2timestr(int64_t ts, AVRational* tb)
     return os.str();
 }
 
+static std::string AVerr2str(int code)
+{
+    char astr[AV_ERROR_MAX_STRING_SIZE] = { 0 };
+    av_make_error_string(astr, AV_ERROR_MAX_STRING_SIZE, code);
+    return string(astr);
+}
+
 static void log_packet(string where, const AVFormatContext* fmt_ctx,
                        const AVPacket* pkt)
 {
@@ -90,427 +97,6 @@ static void log_packet(string where, const AVFormatContext* fmt_ctx,
          << " duration_time: " << AV_ts2timestr(pkt->duration, time_base)
          << endl;
 }
-
-AudioIO::AudioIO(int verbose)
-    : m_verbose(verbose)
-{
-}
-
-void AudioIO::AddBuffer(uint8_t* begin, uint8_t* end,
-                        int frame_size, bool lpcm,
-                        int64_t* timestamps, size_t frame_count)
-{
-    const std::unique_lock<std::mutex> lock(m_mutex);
-
-    m_buffer_q.push_back(buffer_t(frame_size, begin, end, lpcm,
-                                  timestamps, frame_count));
-    buffer_que_t::iterator Ibuf = m_buffer_q.end() - 1;
-    (*Ibuf).m_own_buffer = true;
-
-    print_pointers(m_buffer_q.back(), "AddBuffer");
-}
-
-void AudioIO::print_pointers(const buffer_t & buffer,
-                             const string & where, bool force) const
-{
-    if (force || m_verbose > 4)
-    {
-        cerr << where << ": "
-             << " begin: " << (uint64_t)(buffer.begin)
-             << ", end : " << (size_t)(buffer.end - buffer.begin)
-             << ", write : " << (size_t)(buffer.write - buffer.begin)
-             << ", read : " << (size_t)(buffer.read - buffer.begin)
-             << ", frame sz: " << buffer.frame_size
-             << ", wrapped: " << (buffer.write_wrapped ? "Yes, " : "No, ")
-             << (buffer.lpcm ? " LPCM" : " bistream")
-             << " codec: " << buffer.codec_name
-             << ", timestamp: " << buffer.m_timestamp << endl;
-    }
-}
-
-AudioIO::buffer_t& AudioIO::buffer_t::operator=(const buffer_t & rhs)
-{
-    if (this == &rhs)
-        return *this;
-
-    frame_size = rhs.frame_size;
-    begin = rhs.begin;
-    end = rhs.end;
-    write = rhs.write;
-    read = rhs.read;
-    prev_frame = rhs.prev_frame;
-    lpcm = rhs.lpcm;
-    write_wrapped = rhs.write_wrapped;
-    has_wrapped = rhs.has_wrapped;
-    codec_name = rhs.codec_name;
-
-    m_timestamps = rhs.m_timestamps;
-    m_frame_cnt = rhs.m_frame_cnt;
-
-    m_own_buffer = false;
-
-    return *this;
-}
-
-bool AudioIO::buffer_t::operator==(const buffer_t & rhs)
-{
-    if (this == &rhs)
-        return true;
-    return begin == rhs.begin;
-}
-
-int64_t AudioIO::buffer_t::TimeStamp(uint8_t* P) const
-{
-    size_t idx = static_cast<uint32_t>(P - begin) / frame_size;
-#if 1
-    float fidx = (P - begin) / frame_size;
-    if ((float)idx != fidx)
-        cerr << "buffer_t::TimeStamp: calced idx: " << fidx << endl;
-#endif
-    return m_timestamps[idx];
-}
-
-size_t AudioIO::Size(void) const
-{
-    if (m_buffer_q.empty())
-        return 0;
-
-    size_t sz = 0;
-    buffer_que_t::const_iterator Ibuf;
-    for (Ibuf = m_buffer_q.begin(); Ibuf != m_buffer_q.end(); ++Ibuf)
-    {
-        if ((*Ibuf).write_wrapped)
-            sz += ((*Ibuf).end - (*Ibuf).read) +
-                  ((*Ibuf).write - (*Ibuf).begin);
-        else
-            sz += (*Ibuf).write - (*Ibuf).read;
-    }
-    return sz;
-}
-
-bool AudioIO::Empty(void) const
-{
-    if (m_buffer_q.empty())
-        return true;
-
-    buffer_que_t::const_iterator Ibuf;
-    for (Ibuf = m_buffer_q.begin(); Ibuf != m_buffer_q.end(); ++Ibuf)
-    {
-        if (!(*Ibuf).Empty())
-            return false;
-    }
-    return true;
-}
-
-int64_t AudioIO::TimeStamp(void) const
-{
-    if (m_buffer_q.empty())
-        return 0LL;
-    return m_buffer_q.begin()->m_timestamp;
-}
-
-string AudioIO::CodecName(void) const
-{
-    if (m_buffer_q.empty())
-        return string();
-    return m_buffer_q.begin()->codec_name;
-}
-
-void AudioIO::SetCodecName(const string & rhs)
-{
-    if (!m_buffer_q.empty())
-        m_buffer_q.begin()->codec_name = rhs;
-}
-
-int AudioIO::Add(uint8_t* Pframe, size_t len, int64_t timestamp)
-{
-    const std::unique_lock<std::mutex> lock(m_mutex);
-
-    if (m_buffer_q.empty())
-    {
-        cerr << "WARNING: No audio buffers to Add to\n";
-        return 0;
-    }
-    buffer_que_t::iterator Ibuf = m_buffer_q.end() - 1;
-
-    (*Ibuf).write = Pframe + len;
-    print_pointers(*Ibuf, "      Add");
-
-    if ((*Ibuf).write > (*Ibuf).end)
-    {
-        cerr << "WARNING: Add audio to " << (uint64_t)Pframe
-             << " - " << (*Ibuf).write
-             << " which is greater than the end " << (uint64_t)(*Ibuf).end
-             << endl;
-    }
-
-    if ((*Ibuf).prev_frame == (*Ibuf).end)
-    {
-        (*Ibuf).has_wrapped = true;
-        (*Ibuf).write_wrapped = true;
-        if (m_verbose > 4)
-            cerr << "AudioIO::Add: wrapped\n";
-    }
-    else if (Pframe < (*Ibuf).prev_frame)
-    {
-        cerr << "WARNING: Add audio to " << (uint64_t)Pframe
-             << " which is less than " << (uint64_t)(*Ibuf).prev_frame
-             << " but not the begining " << (uint64_t)(*Ibuf).begin
-             << endl;
-    }
-    (*Ibuf).prev_frame = (*Ibuf).write;
-
-    if ((*Ibuf).write_wrapped && (*Ibuf).read < (*Ibuf).write)
-    {
-        if (m_verbose > 0 && (*Ibuf).read != (*Ibuf).begin)
-        {
-            cerr << "WARNING: Overwrote buffer begin, moving read\n";
-            print_pointers(*Ibuf, "      Add", true);
-            (*Ibuf).read = (*Ibuf).write;
-        }
-    }
-
-    return 0;
-}
-
-int AudioIO::Read(uint8_t* dest, size_t len)
-{
-    const std::unique_lock<std::mutex> lock(m_mutex);
-    uint8_t* Pend;
-    size_t   sz;
-
-    if (m_buffer_q.empty())
-    {
-        cerr << "WARNING: No audio buffers to Read from\n";
-        return 0;
-    }
-
-    buffer_que_t::iterator Ibuf = m_buffer_q.begin();
-
-    if ((*Ibuf).Empty())
-    {
-        if (m_buffer_q.size() > 1)
-        {
-            if (m_verbose > 2)
-                cerr << " AduioIO::Read: EOF\n";
-            return AVERROR_EOF;
-        }
-        if (m_verbose > 5)
-            cerr << "AudioIO::Read: buffer is empty\n";
-        return 0;
-    }
-
-    if ((*Ibuf).write_wrapped)
-    {
-        if ((*Ibuf).read == (*Ibuf).end)
-        {
-            Pend = (*Ibuf).write;
-            (*Ibuf).read = (*Ibuf).begin;
-            (*Ibuf).write_wrapped = false;
-        }
-        else if ((*Ibuf).read > (*Ibuf).end)
-        {
-            cerr << "Read has passed the end!\n";
-            cerr << "Audio write: " << (size_t)((*Ibuf).write - (*Ibuf).begin)
-                 << " read: " << (size_t)((*Ibuf).read - (*Ibuf).begin)
-                 << " end: " << (size_t)((*Ibuf).end - (*Ibuf).begin)
-                 << endl;
-            exit(-1);
-        }
-        else
-            Pend = (*Ibuf).end;
-    }
-    else
-    {
-        if ((*Ibuf).read > (*Ibuf).write)
-        {
-            cerr << "WARNING: Read has passed Write!\n";
-            print_pointers(*Ibuf, "     Read", true);
-            exit(-1);
-        }
-        Pend = (*Ibuf).write;
-    }
-
-    if (Pend - (*Ibuf).read < len)
-    {
-        sz = Pend - (*Ibuf).read;
-        if (m_verbose > 4)
-        {
-            cerr << "AudioIO::Read: Requested " << len
-                 << " bytes, but only " << sz << " bytes available\n";
-            m_report_next = 10;
-        }
-    }
-    else
-        sz = len;
-
-    (*Ibuf).m_timestamp = (*Ibuf).TimeStamp((*Ibuf).read);
-    if (dest != nullptr)
-        memcpy(dest, (*Ibuf).read, sz);
-    (*Ibuf).read += sz;
-    print_pointers(*Ibuf, "     Read", m_report_next);
-    if (m_report_next > 0)
-        --m_report_next;
-
-    return sz;
-}
-
-int64_t AudioIO::Seek(int64_t offset, int whence)
-{
-    const std::unique_lock<std::mutex> lock(m_mutex);
-    int force = whence & AVSEEK_FORCE;
-    whence &= ~AVSEEK_FORCE;
-    int size = whence & AVSEEK_SIZE;
-    whence &= ~AVSEEK_SIZE;
-
-    if (force)
-        return -1;
-
-    string whence_str;
-    switch (whence)
-    {
-        case SEEK_END:
-          whence_str = "END";
-          break;
-        case SEEK_SET:
-          whence_str = "SET";
-          break;
-        case SEEK_CUR:
-          whence_str = "CURRENT";
-          break;
-        default:
-          whence_str = "UNHANDLED";
-          cerr << "whence = " << whence << endl;
-          break;
-    }
-    if (m_verbose > 3)
-        cerr << "Seeking from " << whence_str << " to " << offset << endl;
-
-    if (m_buffer_q.empty())
-    {
-        cerr << "WARNING: No audio buffers to Seek in\n";
-        return 0;
-    }
-    buffer_que_t::iterator Ibuf = m_buffer_q.begin();
-
-    if ((*Ibuf).read == (*Ibuf).write)
-        return 0;
-
-    int64_t desired = offset;
-
-    if (whence == SEEK_END)
-    {
-        (*Ibuf).read = (*Ibuf).write + (*Ibuf).frame_size;
-        if (desired > 0)
-            return -1;
-    }
-    else if (whence == SEEK_SET)
-    {
-        cerr << "\nAudioIO whence == SEEK_SET\n\n";
-        return -1;
-    }
-    else if (whence != SEEK_CUR)
-        return -1;
-
-    if (desired < 0)
-    {
-        desired = -desired; // To keep my head from exploading
-        // Backwards
-        if ((*Ibuf).write_wrapped)
-        {
-            if ((*Ibuf).read - desired < (*Ibuf).write)
-                (*Ibuf).read = (*Ibuf).write;
-            else
-                (*Ibuf).read -= desired;
-        }
-        else
-        {
-            if ((*Ibuf).read - desired < (*Ibuf).begin)
-            {
-                if ((*Ibuf).has_wrapped)
-                // Wrap
-                    (*Ibuf).read = (*Ibuf).end - ((*Ibuf).begin - ((*Ibuf).read - desired));
-                else
-                    (*Ibuf).read = (*Ibuf).begin;
-            }
-            else
-                (*Ibuf).read -= desired;
-        }
-    }
-    else if (desired > 0)
-    {
-        size_t len = Read(nullptr, desired);
-        if (len < desired)
-            return -1;
-        return 0;
-    }
-
-    (*Ibuf).m_timestamp = (*Ibuf).TimeStamp((*Ibuf).read);
-    return 0;
-}
-
-bool AudioIO::Bitstream(void)
-{
-    const std::unique_lock<std::mutex> lock(m_mutex);
-
-    return (m_buffer_q.empty() ? false : !m_buffer_q.front().lpcm);
-}
-
-bool AudioIO::BitstreamChanged(bool is_lpcm)
-{
-    const std::unique_lock<std::mutex> lock(m_mutex);
-    if (m_buffer_q.empty())
-        return true;
-    if (m_buffer_q.back().lpcm != is_lpcm)
-    {
-        if (m_verbose > 0)
-        {
-            if (is_lpcm)
-                cerr << "Bitstream -> LPCM\n";
-            else
-                cerr << "LPCM -> Bitstream\n";
-        }
-        return true;
-    }
-    return false;
-}
-
-bool AudioIO::CodecChanged(void)
-{
-    const std::unique_lock<std::mutex> lock(m_mutex);
-
-    if (m_buffer_q.size() < 2)
-        return false;
-
-    string codec = m_buffer_q.front().codec_name;
-    while (m_buffer_q.size() > 1 && m_buffer_q.front().Empty())
-        m_buffer_q.pop_front();
-
-    if (codec == m_buffer_q.front().codec_name)
-        return false;
-
-    if (m_verbose > 0)
-        cerr << "New audio buffer codec: "
-             << (m_buffer_q.front().lpcm ? "LPCM" : "Bitstream")
-             << endl;
-
-    return true;
-}
-
-static int read_packet(void* opaque, uint8_t* buf, int buf_size)
-{
-    AudioIO* q = reinterpret_cast<AudioIO* >(opaque);
-
-    return q->Read(buf, buf_size);
-}
-
-static int64_t seek_packet(void* opaque, int64_t offset, int whence)
-{
-    AudioIO* q = reinterpret_cast<AudioIO* >(opaque);
-
-    return q->Seek(offset, whence);
-}
-
 
 OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
                    const string & preset, int quality, int look_ahead,
@@ -538,6 +124,7 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
         cerr << "'" << m_video_codec_name << "' not supported.\n";
     }
 
+#if 0
     /* allocate the output media context */
     avformat_alloc_output_context2(&m_output_format_context,
                                    NULL, "mpegts", m_filename.c_str());
@@ -546,12 +133,14 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
         cerr << "Could not create output format context.\n";
         m_error = true;
     }
+#endif
 }
 
 /* Add an output stream. */
 void OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
                           const AVCodec* *codec)
 {
+    AVChannelLayout channel_layout = m_audioIO.ChannelLayout();
     AVCodecContext* codec_context;
     int idx;
 
@@ -589,16 +178,17 @@ void OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
               ost->enc->sample_rate = (*codec)->supported_samplerates[0];
               for (idx = 0; (*codec)->supported_samplerates[idx]; ++idx)
               {
-                  if ((*codec)->supported_samplerates[idx] == m_audio_sample_rate)
+                  if ((*codec)->supported_samplerates[idx] == m_audioIO.SampleRate())
                   {
-                      ost->enc->sample_rate = m_audio_sample_rate;
+                      ost->enc->sample_rate = m_audioIO.SampleRate();
                       break;
                   }
               }
           }
           else
               ost->enc->sample_rate = 48000;
-          av_channel_layout_copy(&ost->enc->ch_layout, &m_channel_layout);
+
+          av_channel_layout_copy(&ost->enc->ch_layout, &channel_layout);
           ost->st->time_base = (AVRational){ 1, ost->enc->sample_rate };
 
           if (ost->enc->codec->capabilities & AV_CODEC_CAP_SLICE_THREADS)
@@ -680,51 +270,59 @@ void OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
         ost->enc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 }
 
+AVFrame* OutputTS::alloc_audio_frame(enum AVSampleFormat sample_fmt,
+                                     const AVChannelLayout* channel_layout,
+                                     int sample_rate, int nb_samples)
+{
+    AVFrame* frame = av_frame_alloc();
+    int ret;
+
+    if (!frame)
+    {
+        cerr << "ERROR: Failed to allocate an audio frame\n";
+        return nullptr;
+    }
+
+    frame->format = sample_fmt;
+    av_channel_layout_copy(&frame->ch_layout, channel_layout);
+    frame->sample_rate = sample_rate;
+    frame->nb_samples = nb_samples;
+
+    if (nb_samples)
+    {
+        ret = av_frame_get_buffer(frame, 0);
+        if (ret < 0)
+        {
+            cerr << "ERROR: failed to allocate an audio buffer\n";
+            return nullptr;
+        }
+    }
+
+    return frame;
+}
+
 bool OutputTS::open_audio(void)
 {
     if (m_no_audio)
         return true;
 
-    std::unique_lock<std::mutex> lock(m_audio_mutex);
-    m_audio_cond.wait(lock, [&]{return m_audio_ready;});
+    m_audioIO.WaitForReady();
 
     close_stream(m_output_format_context, &m_audio_stream);
 
     const AVCodec* audio_codec = nullptr;
 
-    if (m_audioIO.Bitstream())
-    {
-        if (open_spdif())
-        {
-            m_audioIO.SetCodecName(m_spdif_codec->name);
-            m_audio_codec_name = m_spdif_codec->name;
-            m_channel_layout = AV_CHANNEL_LAYOUT_5POINT1;
-            if (m_verbose > 0)
-                cerr << "--> Bitstream: (" << m_audio_codec_name << ")\n";
-        }
-        else
-        {
-            m_audio_codec_name = "unknown bitstream";
-        }
-    }
-    else
-    {
-        m_audio_codec_name = m_audioIO.CodecName();
-        m_channel_layout = AV_CHANNEL_LAYOUT_STEREO;
-    }
-
-    audio_codec = avcodec_find_encoder_by_name(m_audio_codec_name.c_str());
+    audio_codec = avcodec_find_encoder_by_name(m_audioIO.CodecName().c_str());
 
     if (!audio_codec)
     {
         cerr << "Could not find audio encoder for '"
-             << m_audio_codec_name << "'\n";
+             << m_audioIO.CodecName() << "'\n";
         m_error = true;
         return false;
     }
 
-    add_stream(&m_audio_stream, m_output_format_context,
-               &audio_codec);
+    add_stream(&m_audio_stream, m_output_format_context, &audio_codec);
 
     OutputStream* ost = &m_audio_stream;
     AVFormatContext* oc = m_output_format_context;
@@ -854,7 +452,21 @@ bool OutputTS::open_container(void)
     int ret;
     AVDictionary* opt = NULL;
 
+    close_container();
+
+    /* allocate the output media context */
+    avformat_alloc_output_context2(&m_output_format_context,
+                                   NULL, "mpegts", m_filename.c_str());
+    if (!m_output_format_context)
+    {
+        cerr << "Could not create output format context.\n";
+        return false;
+    }
+
     m_fmt = m_output_format_context->oformat;
+
+    open_audio();
+    open_video();
 
     if (m_verbose > 0)
         av_dump_format(m_output_format_context, 0, m_filename.c_str(), 1);
@@ -884,33 +496,21 @@ bool OutputTS::open_container(void)
     return true;
 }
 
-void OutputTS::setAudioParams(int num_channels, bool is_lpcm,
+void OutputTS::setAudioParams(uint8_t* capture_buf, size_t capture_buf_size,
+                              int num_channels, bool is_lpcm,
                               int bytes_per_sample, int sample_rate,
                               int samples_per_frame, int frame_size,
-                              uint8_t* capture_buf, size_t capture_buf_size,
-                              int64_t* timestamps, size_t frame_count)
-
+                              int64_t* timestamps)
 {
-    if (m_audioIO.BitstreamChanged(is_lpcm) || true)
+    m_audioIO.AddBuffer(capture_buf, capture_buf + capture_buf_size,
+                        num_channels, is_lpcm,
+                        bytes_per_sample, sample_rate,
+                        samples_per_frame, frame_size,
+                        timestamps);
+
+    if (m_verbose > 1)
     {
-        m_audioIO.AddBuffer(capture_buf,
-                            capture_buf + capture_buf_size,
-                            frame_size, is_lpcm,
-                            timestamps, frame_count);
-
-        if (m_verbose > 1)
-        {
-            cerr << "setAudioParams " << (is_lpcm ? "LPCM" : "Bitstream") << endl;
-        }
-
-        m_audio_channels = num_channels;
-        m_audio_bytes_per_sample = bytes_per_sample;
-        m_audio_sample_rate = sample_rate;
-        m_audio_samples_per_frame = samples_per_frame;
-
-        m_audio_block_size = 8 * bytes_per_sample * m_audio_samples_per_frame;
-        m_audio_ready = true;
-        m_audio_cond.notify_one();
+        cerr << "setAudioParams " << (is_lpcm ? "LPCM" : "Bitstream") << endl;
     }
 }
 
@@ -941,8 +541,6 @@ void OutputTS::setVideoParams(int width, int height, bool interlaced,
 
     if (!m_initialized)
     {
-        open_audio();
-        open_video();
         open_container();
 
         if (m_image_ready_thread.joinable())
@@ -955,6 +553,11 @@ void OutputTS::setVideoParams(int width, int height, bool interlaced,
 
 OutputTS::~OutputTS(void)
 {
+    close_container();
+}
+
+void OutputTS::close_container(void)
+{
     if (m_output_format_context)
         av_write_trailer(m_output_format_context);
 
@@ -964,24 +567,17 @@ OutputTS::~OutputTS(void)
     if (have_audio)
         close_stream(m_output_format_context, &m_audio_stream);
 
-    if (!(m_fmt && m_fmt->flags & AVFMT_NOFILE))
+    if (m_fmt && !(m_fmt->flags & AVFMT_NOFILE))
         /* Close the output file. */
         avio_closep(&m_output_format_context->pb);
 
-    /* free the stream */
+    /* free the output stream */
     avformat_free_context(m_output_format_context);
 }
 
 void OutputTS::addAudio(uint8_t* buf, size_t len, int64_t timestamp)
 {
     m_audioIO.Add(buf, len, timestamp);
-}
-
-std::string OutputTS::AVerr2str(int code)
-{
-    char astr[AV_ERROR_MAX_STRING_SIZE] = { 0 };
-    av_make_error_string(astr, AV_ERROR_MAX_STRING_SIZE, code);
-    return string(astr);
 }
 
 bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
@@ -1092,180 +688,6 @@ void OutputTS::close_stream(AVFormatContext* oc, OutputStream* ost)
 /**************************************************************/
 /* audio output */
 
-AVFrame* OutputTS::alloc_audio_frame(enum AVSampleFormat sample_fmt,
-                                     const AVChannelLayout* channel_layout,
-                                     int sample_rate, int nb_samples)
-{
-    AVFrame* frame = av_frame_alloc();
-    int ret;
-
-    if (!frame)
-    {
-        cerr << "ERROR: Failed to allocate an audio frame\n";
-        return nullptr;
-    }
-
-    frame->format = sample_fmt;
-    av_channel_layout_copy(&frame->ch_layout, channel_layout);
-    frame->sample_rate = sample_rate;
-    frame->nb_samples = nb_samples;
-
-    if (nb_samples)
-    {
-        ret = av_frame_get_buffer(frame, 0);
-        if (ret < 0)
-        {
-            cerr << "ERROR: failed to allocate an audio buffer\n";
-            return nullptr;
-        }
-    }
-
-    return frame;
-}
-
-bool OutputTS::open_spdif_context(void)
-{
-    if (m_spdif_format_context)
-    {
-        avformat_close_input(&m_spdif_format_context);
-        m_spdif_format_context = nullptr;
-
-        avio_context_free(&m_spdif_avio_context);
-        m_spdif_avio_context = nullptr;
-
-#if 0
-        av_free(m_spdif_avio_context_buffer);
-        m_spdif_avio_context_buffer = nullptr;
-#endif
-
-        avformat_free_context(m_spdif_format_context);
-        m_spdif_format_context = nullptr;
-    }
-
-    if (!(m_spdif_format_context = avformat_alloc_context()))
-    {
-        cerr << "WARNING: Unable to allocate spdif format context.\n";
-        return false;
-    }
-
-    m_spdif_avio_context_buffer =
-        reinterpret_cast<uint8_t* >(av_malloc(m_spdif_avio_context_buffer_size));
-    if (!m_spdif_avio_context_buffer)
-    {
-        cerr << "WARNING: Unable to allocate spdif avio context buffer.\n";
-        return false;
-    }
-
-    m_spdif_avio_context = avio_alloc_context(m_spdif_avio_context_buffer,
-                                              m_spdif_avio_context_buffer_size,
-                                              0,
-                                              reinterpret_cast<void* >(&m_audioIO),
-                                              read_packet,
-                                              nullptr,
-                                              seek_packet);
-    if (!m_spdif_avio_context)
-    {
-        cerr << "WARNING: Unable to allocate audio input avio context.\n";
-        return false;
-    }
-
-    m_spdif_format_context->pb = m_spdif_avio_context;
-
-    const AVInputFormat* spdif_fmt = av_find_input_format("spdif");
-
-    if (0 > avformat_open_input(&m_spdif_format_context, NULL,
-                                spdif_fmt, NULL))
-    {
-        cerr << "WARNING: Could not open spdif input.\n";
-        return false;
-    }
-
-    return true;
-}
-
-bool OutputTS::open_spdif(void)
-{
-    /* retrieve stream information */
-    const AVInputFormat* fmt = nullptr;
-    int ret;
-    int idx;
-
-    int try_cnt = 5;
-    for (idx = 0; idx < try_cnt; ++idx)
-    {
-        open_spdif_context();
-
-        if ((ret = av_probe_input_buffer(m_spdif_avio_context,
-                                         &fmt, "", nullptr, 0,
-                                m_spdif_avio_context_buffer_size * 4)) != 0)
-        {
-            if (m_verbose > 0)
-            {
-                cerr << "WARNING: Failed to probe spdif input: "
-                     << AVerr2str(ret) << endl;
-            }
-            continue;
-        }
-
-        if (m_verbose > 1)
-        {
-            cerr << "--> Detected fmt '" << fmt->name
-                 << "' '" << fmt->long_name << "'\n";
-        }
-
-        if (0 > avformat_find_stream_info(m_spdif_format_context, NULL))
-        {
-            cerr << "WARNING: Could not find stream information\n";
-            continue;
-        }
-
-        if (m_spdif_format_context->nb_streams < 1)
-        {
-            cerr << "WARNING: No streams found in SPDIF.\n";
-            continue;
-        }
-
-        int audio_stream_idx = 0;
-
-        AVStream* audio_stream =
-            m_spdif_format_context->streams[audio_stream_idx];
-
-        if (m_verbose > 0)
-        {
-            /* dump input information to stderr */
-            av_dump_format(m_spdif_format_context, 0, "pipe:0", 0);
-        }
-
-        if (!audio_stream)
-        {
-            cerr << "WARNING: Could not find audio stream in spdif input.\n";
-            continue;
-        }
-
-        m_spdif_codec_id = audio_stream->codecpar->codec_id;
-
-        break;
-    }
-
-    if (idx >= try_cnt)
-    {
-        cerr << "ERROR: GAVE UP trying to find S/PDIF codec\n";
-        exit(-1);
-    }
-
-    m_audioIO.Seek(-m_spdif_avio_context_buffer_size, SEEK_CUR);
-
-    /* Find a decoder for the audio stream. */
-    if (!(m_spdif_codec = avcodec_find_decoder(m_spdif_codec_id)))
-    {
-        cerr << "WARNING: Could not find input audio codec "
-             << m_spdif_codec_id << "\n";
-        return false;
-    }
-
-    return true;
-}
-
 AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
 {
     AVFrame* frame = ost->tmp_frame;
@@ -1346,31 +768,10 @@ bool OutputTS::write_pcm_frame(AVFormatContext* oc, OutputStream* ost)
 
 bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
 {
-    if (m_audioIO.Size() < m_spdif_avio_context_buffer_size)
-    {
-        if (m_verbose > 4)
-            cerr << "write_bitstream_frame: Only "
-                 << m_audioIO.Size() << " bytes available. "
-                 <<  m_spdif_avio_context_buffer_size << " desired.\n";
-        return false;
-    }
+    AVPacket* pkt = m_audioIO.ReadSPDIF();
 
-    AVPacket* pkt = av_packet_alloc();
-    if (!pkt)
-    {
-        cerr << "WARNING: Could not allocate pkt for spdif input.\n";
+    if (pkt == nullptr)
         return false;
-    }
-
-    double ret =  av_read_frame(m_spdif_format_context, pkt);
-    if (0 > ret)
-    {
-        av_packet_free(&pkt);
-        if (ret != AVERROR_EOF && m_verbose > 0)
-            cerr << "WARNING: Failed to read spdif frame: (" << ret << ") "
-                 << AVerr2str(ret) << endl;
-        return false;
-    }
 
     pkt->pts = av_rescale_q(m_audioIO.TimeStamp(),
                             m_input_time_base,
@@ -1387,7 +788,7 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
 #if 0
     log_packet("write_bitstream_frame", oc, pkt);
 #endif
-    ret = av_interleaved_write_frame(oc, pkt);
+    int ret = av_interleaved_write_frame(oc, pkt);
     /* pkt is now blank (av_interleaved_write_frame() takes ownership of
      * its contents and resets pkt), so that no unreferencing is necessary.
      * This would be different if one used av_write_frame(). */
@@ -1408,10 +809,7 @@ bool OutputTS::write_audio_frame(AVFormatContext* oc, OutputStream* ost)
 {
     if (m_audioIO.CodecChanged())
     {
-#if 0 // Take a step back for stability
-        open_audio();
         open_container();
-#endif
     }
 
     if (m_audioIO.Bitstream())

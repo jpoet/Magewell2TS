@@ -812,13 +812,12 @@ void* audio_capture(void* param1, int param2, void* param3)
 
 // Channels: 2 SampleRate: 48000 FrameRate: 9216000 BytesPerSample: 2
 // perFrame 192
-        out2ts->setAudioParams(cur_channels, audio_signal_status.bLPCM,
+        out2ts->setAudioParams(capture_buf, capture_buf_size,
+                               cur_channels, audio_signal_status.bLPCM,
                                bytes_per_sample,
                                audio_signal_status.dwSampleRate,
                                MWCAP_AUDIO_SAMPLES_PER_FRAME,
-                               frame_size,
-                               capture_buf, capture_buf_size,
-                               audio_timestamps, audio_buf_sz);
+                               frame_size, audio_timestamps);
         cnt = 0;
         err_cnt = 0;
 
@@ -867,13 +866,13 @@ void* audio_capture(void* param1, int param2, void* param3)
             if (notify_status & MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE)
             {
                 cerr << "WARNING: Audio signal CHANGED!\n";
-                g_running = false;
+                break;
             }
 
             if (notify_status & MWCAP_NOTIFY_AUDIO_INPUT_RESET)
             {
                 cerr << "WARNING: Audio input RESET!\n";
-                g_running = false;
+                break;
             }
 
             if (notify_status & MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO)
