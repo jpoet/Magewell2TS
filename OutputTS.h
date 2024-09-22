@@ -138,6 +138,8 @@ class OutputTS
 
     bool             m_initialized       {false};
 
+    std::mutex              m_container_mutex;
+
     MagCallback             m_image_buffer_available;
     std::thread             m_image_ready_thread;
     std::mutex              m_imagepkt_mutex;

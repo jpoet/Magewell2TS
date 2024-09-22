@@ -692,6 +692,13 @@ void* audio_capture(void* param1, int param2, void* param3)
     OutputTS* out2ts         = reinterpret_cast<OutputTS* >(param3);
 
     uint8_t* capture_buf     = nullptr;
+    int      frame_idx       = 0;
+    int      buf_idx         = 0;
+    const int audio_buf_sz   = 128;
+    size_t   frame_size      = 0;
+    size_t   capture_buf_size = 0;
+
+    int64_t* audio_timestamps = nullptr;
 
     notify_event = MWCreateEvent();
     if (notify_event == 0)
@@ -719,40 +726,37 @@ void* audio_capture(void* param1, int param2, void* param3)
     if (verbose > 1)
         cerr << "Audio capture starting\n";
 
+    notify_audio  = MWRegisterNotify(channel_handle, notify_event,
+                                     (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
+                                     (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE |
+//                                         (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET |
+                                     (DWORD)MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO
+                                     );
+
+    if (notify_audio == 0)
+    {
+        if (verbose > 0)
+            cerr << "Register Notify audio fail\n";
+        goto audio_capture_stoped;
+    }
+
     while (g_running)
     {
-#if 0 // Testing
-    chrono::time_point<std::chrono::steady_clock> start, end;
-    start = std::chrono::steady_clock::now();
-#endif
-
         if (MW_SUCCEEDED != MWGetAudioSignalStatus(channel_handle,
                                                    &audio_signal_status))
         {
-            if (err_cnt > 300)
-            {
-                cerr << "WARNING [" << err_cnt
-                     << "] can't get audio signal status\n";
-                break;
-            }
-            else if (err_cnt++ % 25 == 0)
-                cerr << "WARNING [" << err_cnt
-                     << "] can't get audio signal status\n";
+            if (err_cnt++ % 50 == 0)
+                cerr << "WARNING (cnt: " << err_cnt
+                     << ") can't get audio signal status\n";
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
 
         if (!audio_signal_status.wChannelValid)
         {
-            if (err_cnt > 300)
-            {
-                cerr << "WARNING [" << err_cnt
-                     << "] can't get audio, signal is invalid\n";
-                break;
-            }
-            else if (err_cnt++ % 25 == 0)
-                cerr << "WARNING [" << err_cnt
-                     << "] can't get audio, signal is invalid\n";
+            if (err_cnt++ % 50 == 0)
+                cerr << "WARNING (cnt: " << err_cnt
+                     << ") can't get audio, signal is invalid\n";
 
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
@@ -768,19 +772,12 @@ void* audio_capture(void* param1, int param2, void* param3)
 
         if (0 == cur_channels)
         {
-            if (err_cnt > 50)
-            {
-                cerr << "WARNING [" << err_cnt
-                     << "] Invalid audio channel count: "
-                     << cur_channels << endl;
-                break;
-            }
-            else if (err_cnt++ % 25 == 0)
+            if (err_cnt++ % 25 == 0)
                 cerr << "WARNING [" << err_cnt
                      << "] Invalid audio channel count: "
                      << cur_channels << endl;
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            std::this_thread::sleep_for(std::chrono::milliseconds(6));
             continue;
         }
 
@@ -788,13 +785,12 @@ void* audio_capture(void* param1, int param2, void* param3)
 
         // NOTE: capture_buf will be freed by AudioIO class
 
-        const int    audio_buf_sz = 128;
-        int          buf_idx = 0;
-        size_t       frame_idx = 0;
-        size_t       frame_size = MWCAP_AUDIO_SAMPLES_PER_FRAME
-                                  * cur_channels * bytes_per_sample;
+        frame_idx = 0;
+        buf_idx = 0;
+        frame_size = MWCAP_AUDIO_SAMPLES_PER_FRAME
+                     * cur_channels * bytes_per_sample;
 
-        size_t   capture_buf_size = audio_buf_sz * frame_size;
+        capture_buf_size = audio_buf_sz * frame_size;
 
         capture_buf = new uint8_t[capture_buf_size];
         if (nullptr == capture_buf)
@@ -803,21 +799,20 @@ void* audio_capture(void* param1, int param2, void* param3)
             break;
         }
 
-        int64_t* audio_timestamps = new int64_t[audio_buf_sz];
+        audio_timestamps = new int64_t[audio_buf_sz];
         if (nullptr == audio_timestamps)
         {
             cerr << "ERROR: audio timestamp buf alloc failed\n";
             break;
         }
 
-// Channels: 2 SampleRate: 48000 FrameRate: 9216000 BytesPerSample: 2
-// perFrame 192
         out2ts->setAudioParams(capture_buf, capture_buf_size,
                                cur_channels, audio_signal_status.bLPCM,
                                bytes_per_sample,
                                audio_signal_status.dwSampleRate,
                                MWCAP_AUDIO_SAMPLES_PER_FRAME,
                                frame_size, audio_timestamps);
+
         cnt = 0;
         err_cnt = 0;
 
@@ -825,20 +820,6 @@ void* audio_capture(void* param1, int param2, void* param3)
         ULONGLONG notify_status = 0;
         unsigned char* audio_frame;
         MWCAP_AUDIO_CAPTURE_FRAME macf;
-
-        notify_audio  = MWRegisterNotify(channel_handle, notify_event,
-                                         (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
-                                         (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE |
-                                         (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET |
-                                         (DWORD)MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO
-                                         );
-
-        if (notify_audio == 0)
-        {
-            if (verbose > 0)
-                cerr << "Register Notify audio fail\n";
-            goto audio_capture_stoped;
-        }
 
         while (g_running)
         {
@@ -853,15 +834,6 @@ void* audio_capture(void* param1, int param2, void* param3)
                                                   notify_audio,
                                                   &notify_status))
                 continue;
-
-#if 0
-            end = std::chrono::steady_clock::now();
-            if (std::chrono::duration_cast<std::chrono::seconds>(end - start).count() > 60)
-            {
-                cerr << "ERROR: test error\n";
-                break;
-            }
-#endif
 
             if (notify_status & MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE)
             {
@@ -931,9 +903,6 @@ void* audio_capture(void* param1, int param2, void* param3)
 
   audio_capture_stoped:
     g_running = false;
-
-    if(capture_buf)
-        delete[] capture_buf;
 
     if(notify_audio)
     {
@@ -1063,23 +1032,29 @@ bool video_capture_loop(HCHANNEL  hChannel,
         {
             case MWCAP_VIDEO_SIGNAL_NONE:
               cerr << "WARNING: Input signal status: NONE\n";
-              break;
+              std::this_thread::sleep_for(std::chrono::milliseconds(6));
+              continue;
             case MWCAP_VIDEO_SIGNAL_UNSUPPORTED:
               cerr << "WARNING: Input signal status: Unsupported\n";
-              break;
+              std::this_thread::sleep_for(std::chrono::milliseconds(6));
+              continue;
             case MWCAP_VIDEO_SIGNAL_LOCKING:
               cerr << "WARNING: Input signal status: Locking\n";
-              break;
+              std::this_thread::sleep_for(std::chrono::milliseconds(6));
+              continue;
             case MWCAP_VIDEO_SIGNAL_LOCKED:
               cerr << "Input signal status: Locked\n";
-              break;
         }
 
         if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
         {
             cerr << "WARNING: Video signal not locked.\n";
+#if 0
             MWStopVideoCapture(hChannel);
             break;
+#endif
+            std::this_thread::sleep_for(std::chrono::milliseconds(6));
+            continue;
         }
 
         double frame_duration = videoSignalStatus.dwFrameDuration;
@@ -1140,7 +1115,12 @@ bool video_capture_loop(HCHANNEL  hChannel,
             mode = MWCAP_VIDEO_DEINTERLACE_BLEND;
         }
 
-        hNotify = MWRegisterNotify(hChannel, hNotifyEvent, notifyBufferMode);
+        hNotify = MWRegisterNotify(hChannel, hNotifyEvent,
+                                   notifyBufferMode |
+                                   MWCAP_NOTIFY_VIDEO_SAMPLING_PHASE_CHANGE |
+                                   MWCAP_NOTIFY_VIDEO_SMPTE_TIME_CODE |
+                                   MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE);
+
         if (hNotify == 0)
         {
             if (verbose > 0)
@@ -1148,6 +1128,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             return false;
         }
 
+        frame_idx = -1;
         while (g_running)
         {
             if (MWWaitEvent(hNotifyEvent, 1000) <= 0)
@@ -1165,6 +1146,38 @@ bool video_capture_loop(HCHANNEL  hChannel,
                     cerr << "WARNING: Failed to get Notify status.\n";
                 continue;
             }
+
+            if (hNotify & MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE)
+            {
+                cerr << "WARNING: Video signal CHANGED!\n";
+                break;
+            }
+#if 0
+            if (hNotify & MWCAP_NOTIFY_VIDEO_SMPTE_TIME_CODE)
+            {
+                cerr << "WARNING: VIDEO_SMPTE_TIME_CODE CHANGED!\n";
+                break;
+            }
+            if (hNotify & MWCAP_NOTIFY_VIDEO_SAMPLING_PHASE_CHANGE)
+            {
+                cerr << "WARNING: VIDEO_SAMPLING_PHASE_CHANGE!\n";
+                break;
+            }
+#endif
+
+#if 1
+            MWGetVideoSignalStatus(hChannel, &videoSignalStatus);
+            if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
+            {
+                cerr << "WARNING: Video signal has lost lock.\n";
+                break;
+            }
+            if (videoSignalStatus.dwFrameDuration != frame_duration)
+            {
+                cerr << "WARNING: Video frame duration has changed.\n";
+                break;
+            }
+#endif
 
             if (MW_SUCCEEDED != MWGetVideoBufferInfo(hChannel,
                                                      &videoBufferInfo))

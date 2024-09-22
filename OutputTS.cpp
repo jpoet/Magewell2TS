@@ -134,6 +134,8 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
         m_error = true;
     }
 #endif
+
+    m_image_ready_thread = std::thread(&OutputTS::Write, this);
 }
 
 /* Add an output stream. */
@@ -452,6 +454,8 @@ bool OutputTS::open_container(void)
     int ret;
     AVDictionary* opt = NULL;
 
+    std::unique_lock<std::mutex> lock(m_container_mutex);
+
     close_container();
 
     /* allocate the output media context */
@@ -539,20 +543,24 @@ void OutputTS::setVideoParams(int width, int height, bool interlaced,
             cerr << "Video Params set\n";
     }
 
-    if (!m_initialized)
-    {
-        open_container();
+#if 0
+    if (m_image_ready_thread.joinable())
+        m_image_ready_thread.join();
+#endif
 
-        if (m_image_ready_thread.joinable())
-            m_image_ready_thread.join();
+    open_container();
+
+#if 0
+    if (m_image_ready_thread == nullptr)
         m_image_ready_thread = std::thread(&OutputTS::Write, this);
-
-        m_initialized = true;
-    }
+#endif
 }
 
 OutputTS::~OutputTS(void)
 {
+    if (m_image_ready_thread.joinable())
+        m_image_ready_thread.join();
+
     close_container();
 }
 
@@ -809,6 +817,7 @@ bool OutputTS::write_audio_frame(AVFormatContext* oc, OutputStream* ost)
 {
     if (m_audioIO.CodecChanged())
     {
+        cerr << "Initializing audio\n";
         open_container();
     }
 

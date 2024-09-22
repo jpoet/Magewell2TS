@@ -96,6 +96,7 @@ class AudioBuffer
 
     int              m_id               {-1};
     int              m_verbose          {0};
+    int              m_total            {0};
     int              m_report_next      {0};
 };
 

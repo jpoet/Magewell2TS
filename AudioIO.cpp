@@ -142,6 +142,7 @@ void AudioBuffer::PrintState(const string & where, bool force) const
              << "SamplesPerFrame: " << m_samples_per_frame
              << ", SampleRate: " << m_sample_rate
              << ", BlockSize: " << m_block_size
+             << ", TotalBytes: " << m_total
              << endl;
     }
 }
@@ -150,8 +151,9 @@ void AudioBuffer::PrintPointers(const string & where, bool force) const
 {
     if (force || m_verbose > 4)
     {
-        cerr << m_id << ":" << where << ": "
-             << " begin: " << (uint64_t)(m_begin)
+        string loc = "[" + std::to_string(m_id) + "] " + where + " ";
+        cerr << loc
+             << "begin: " << (uint64_t)(m_begin)
              << ", end : " << (size_t)(m_end - m_begin)
              << ", write : " << (size_t)(m_write - m_begin)
              << ", read : " << (size_t)(m_read - m_begin)
@@ -167,6 +169,8 @@ void AudioBuffer::PrintPointers(const string & where, bool force) const
 int AudioBuffer::Add(uint8_t* Pframe, size_t len, int64_t timestamp)
 {
     const std::unique_lock<std::mutex> lock(m_write_mutex);
+
+    m_total += len;
 
     m_write = Pframe + len;
     PrintPointers("      Add");
@@ -541,10 +545,10 @@ bool AudioBuffer::open_spdif(void)
     if (idx >= try_cnt)
     {
         cerr << "ERROR: [" << m_id << "] GAVE UP trying to find S/PDIF codec\n";
-        exit(-1);
+        return false;
     }
 
-#if 1 // av_probe_input_buffer saves the data?
+#if 0 // av_probe_input_buffer saves the data?
     Seek(-m_block_size * 8, SEEK_CUR);
 #endif
 
@@ -573,7 +577,10 @@ void AudioBuffer::detect_codec(void)
         m_parent->m_codec_ready = true;
         m_parent->m_codec_mutex.unlock();
         m_parent->m_codec_cond.notify_one();
+        PrintState("SPDIF", true);
     }
+    else
+        PrintState("SPDIF", true);
 }
 
 size_t AudioBuffer::Size(void) const
