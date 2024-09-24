@@ -37,7 +37,7 @@ class OutputTS
     void setVideoParams(int width, int height, bool interlaced,
                         AVRational time_base, double frame_duration,
                         AVRational frame_rate);
-    void addAudio(uint8_t* buf, size_t len, int64_t timestamp);
+    bool addAudio(uint8_t* buf, size_t len, int64_t timestamp);
     void Write(void);
     bool VideoFrame(uint8_t*  pImage, uint32_t imageSize, int64_t timestamp);
 
@@ -149,7 +149,7 @@ class OutputTS
 
     bool                    m_running      {true};
     bool                    m_initialized  {false};
-    bool                    m_video_ready  {false};
+    bool                    m_video_ready  {true};
     bool                    m_audio_ready  {false};
     std::mutex              m_ready_mutex;
     std::condition_variable m_ready_cond;

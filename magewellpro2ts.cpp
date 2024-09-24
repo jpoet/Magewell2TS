@@ -699,7 +699,7 @@ void* audio_capture(void* param1, int param2, void* param3)
     uint8_t* capture_buf     = nullptr;
     int      frame_idx       = 0;
     int      buf_idx         = 0;
-    const int audio_buf_sz   = 128;
+    const int audio_buf_sz   = 384;
     size_t   frame_size      = 0;
     size_t   capture_buf_size = 0;
 
@@ -885,9 +885,6 @@ void* audio_capture(void* param1, int param2, void* param3)
             if (init_needed)
                 break;
 
-#if 0
-            uint64_t timestamp = macf.llTimestamp;
-#endif
             /*
               L1L2L3L4R1R2R3R4L5L6L7L8R5R6R7R8(4byte)
               to 2channel 16bit
@@ -917,11 +914,13 @@ void* audio_capture(void* param1, int param2, void* param3)
                  << " @ " << (uint64_t)(&capture_buf[frame_idx]) << endl;
 #endif
             audio_timestamps[buf_idx] = macf.llTimestamp;
-            out2ts->addAudio(&capture_buf[frame_idx], frame_size,
-                             macf.llTimestamp);
-            if (++buf_idx == audio_buf_sz)
-                buf_idx = 0;
-            frame_idx = frame_size * buf_idx;
+            if (out2ts->addAudio(&capture_buf[frame_idx], frame_size,
+                                 macf.llTimestamp))
+            {
+                if (++buf_idx == audio_buf_sz)
+                    buf_idx = 0;
+                frame_idx = frame_size * buf_idx;
+            }
         }
     }
 
@@ -1081,10 +1080,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
         if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
         {
             cerr << "WARNING: Video signal not locked.\n";
-#if 0
-            MWStopVideoCapture(hChannel);
-            break;
-#endif
             this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 2));
             continue;
         }
@@ -1278,6 +1273,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
                     cerr << "WARNING: Expected MW video buffer " << frame_idx
                          << " but current is "
                          << (int)videoBufferInfo.iNewestBufferedFullFrame
+                         << ". Frame lost."
                          << endl;
                     frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
                 }

@@ -137,7 +137,6 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
 
     if (m_no_audio)
         m_audio_ready = true;
-    m_image_ready_thread = std::thread(&OutputTS::Write, this);
 }
 
 /* Add an output stream. */
@@ -592,6 +591,7 @@ void OutputTS::setVideoParams(int width, int height, bool interlaced,
     {
         open_container();
         m_initialized = true;
+        m_image_ready_thread = std::thread(&OutputTS::Write, this);
     }
 }
 
@@ -622,9 +622,13 @@ void OutputTS::close_container(void)
     avformat_free_context(m_output_format_context);
 }
 
-void OutputTS::addAudio(uint8_t* buf, size_t len, int64_t timestamp)
+bool OutputTS::addAudio(uint8_t* buf, size_t len, int64_t timestamp)
 {
+    if (!m_video_ready)
+        return false;
+
     m_audioIO.Add(buf, len, timestamp);
+    return true;
 }
 
 bool OutputTS::write_frame(AVFormatContext* fmt_ctx,

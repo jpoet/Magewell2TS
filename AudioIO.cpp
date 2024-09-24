@@ -440,7 +440,7 @@ bool AudioBuffer::open_spdif_context(void)
     }
 
     m_spdif_avio_context_buffer =
-        reinterpret_cast<uint8_t* >(av_malloc(m_block_size));
+        reinterpret_cast<uint8_t* >(av_malloc(m_frame_size));
     if (!m_spdif_avio_context_buffer)
     {
         cerr << "WARNING: [" << m_id
