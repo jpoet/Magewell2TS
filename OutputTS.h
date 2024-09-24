@@ -25,6 +25,9 @@ class OutputTS
              MagCallback image_buffer_avail);
     ~OutputTS(void);
 
+    void AudioReady(bool val);
+    void VideoReady(bool val);
+
     EncoderType encoderType(void) const { return m_encoderType; }
     void setAudioParams(uint8_t* capture_buf, size_t capture_buf_size,
                               int num_channels, bool is_lpcm,
@@ -136,8 +139,6 @@ class OutputTS
 
     int              m_verbose;
 
-    bool             m_initialized       {false};
-
     std::mutex              m_container_mutex;
 
     MagCallback             m_image_buffer_available;
@@ -145,6 +146,13 @@ class OutputTS
     std::mutex              m_imagepkt_mutex;
     std::mutex              m_imagequeue_mutex;
     std::condition_variable m_image_ready;
+
+    bool                    m_running      {true};
+    bool                    m_initialized  {false};
+    bool                    m_video_ready  {false};
+    bool                    m_audio_ready  {false};
+    std::mutex              m_ready_mutex;
+    std::condition_variable m_ready_cond;
 };
 
 #endif

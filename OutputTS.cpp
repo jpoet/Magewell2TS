@@ -135,6 +135,8 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     }
 #endif
 
+    if (m_no_audio)
+        m_audio_ready = true;
     m_image_ready_thread = std::thread(&OutputTS::Write, this);
 }
 
@@ -329,33 +331,41 @@ bool OutputTS::open_audio(void)
     OutputStream* ost = &m_audio_stream;
     AVFormatContext* oc = m_output_format_context;
     const AVCodec* codec = audio_codec;
-    AVCodecContext* c = m_audio_stream.enc;
+    AVCodecContext* enc_ctx = m_audio_stream.enc;
     AVDictionary* opt = NULL;
     int nb_samples;
     int ret;
 
-    if ((ret = avcodec_open2(c, codec, &opt)) < 0)
+    if ((ret = avcodec_open2(enc_ctx, codec, &opt)) < 0)
     {
         cerr << "ERROR: Could not open audio codec: " << AVerr2str(ret) << endl;
         exit(1);
     }
 
-    if (c->codec->capabilities & AV_CODEC_CAP_VARIABLE_FRAME_SIZE)
+    if (enc_ctx->codec->capabilities & AV_CODEC_CAP_VARIABLE_FRAME_SIZE)
         nb_samples = 10000;
     else
-        nb_samples = c->frame_size;
+        nb_samples = enc_ctx->frame_size;
 
-    ost->frame     = alloc_audio_frame(c->sample_fmt, &c->ch_layout,
-                                      c->sample_rate, nb_samples);
+    ost->frame     = alloc_audio_frame(enc_ctx->sample_fmt, &enc_ctx->ch_layout,
+                                      enc_ctx->sample_rate, nb_samples);
     if (ost->frame == nullptr)
         m_error = true;
-    ost->tmp_frame = alloc_audio_frame(AV_SAMPLE_FMT_S16, &c->ch_layout,
-                                      c->sample_rate, nb_samples);
+
+    if (m_audioIO.BytesPerSample() == 4)
+        ost->tmp_frame = alloc_audio_frame(AV_SAMPLE_FMT_S32,
+                                           &enc_ctx->ch_layout,
+                                           enc_ctx->sample_rate, nb_samples);
+    else
+        ost->tmp_frame = alloc_audio_frame(AV_SAMPLE_FMT_S16,
+                                           &enc_ctx->ch_layout,
+                                           enc_ctx->sample_rate, nb_samples);
+
     if (ost->tmp_frame == nullptr)
         m_error = true;
 
     /* copy the stream parameters to the muxer */
-    ret = avcodec_parameters_from_context(ost->st->codecpar, c);
+    ret = avcodec_parameters_from_context(ost->st->codecpar, enc_ctx);
     if (ret < 0)
     {
         cerr << "ERROR: Could not copy the stream parameters\n";
@@ -372,17 +382,26 @@ bool OutputTS::open_audio(void)
 
     /* set options */
     av_opt_set_chlayout  (ost->swr_ctx, "in_chlayout",
-                          &c->ch_layout,     0);
+                          &enc_ctx->ch_layout,     0);
     av_opt_set_int       (ost->swr_ctx, "in_sample_rate",
-                          c->sample_rate,    0);
-    av_opt_set_sample_fmt(ost->swr_ctx, "in_sample_fmt",
-                          AV_SAMPLE_FMT_S16, 0);
+                          enc_ctx->sample_rate,    0);
+
+    if (m_audioIO.BytesPerSample() == 4)
+    {
+        av_opt_set_sample_fmt(ost->swr_ctx, "in_sample_fmt",
+                              AV_SAMPLE_FMT_S32, 0);
+//        ctx->bits_per_raw_sample = 24;
+    }
+    else
+        av_opt_set_sample_fmt(ost->swr_ctx, "in_sample_fmt",
+                              AV_SAMPLE_FMT_S16, 0);
+
     av_opt_set_chlayout  (ost->swr_ctx, "out_chlayout",
-                          &c->ch_layout,     0);
+                          &enc_ctx->ch_layout,     0);
     av_opt_set_int       (ost->swr_ctx, "out_sample_rate",
-                          c->sample_rate,    0);
+                          enc_ctx->sample_rate,    0);
     av_opt_set_sample_fmt(ost->swr_ctx, "out_sample_fmt",
-                          c->sample_fmt,     0);
+                          enc_ctx->sample_fmt,     0);
 
     /* initialize the resampling context */
     if ((ret = swr_init(ost->swr_ctx)) < 0)
@@ -449,12 +468,36 @@ bool OutputTS::open_video(void)
     return true;
 }
 
+void OutputTS::AudioReady(bool val)
+{
+    {
+        std::unique_lock<std::mutex> lock(m_ready_mutex);
+        m_audio_ready = val;
+    }
+    m_ready_cond.notify_one();
+}
+
+void OutputTS::VideoReady(bool val)
+{
+    {
+        std::unique_lock<std::mutex> lock(m_ready_mutex);
+        m_video_ready = val;
+    }
+    m_ready_cond.notify_one();
+}
+
 bool OutputTS::open_container(void)
 {
     int ret;
     AVDictionary* opt = NULL;
 
-    std::unique_lock<std::mutex> lock(m_container_mutex);
+    if (!m_no_audio)
+    {
+        std::unique_lock<std::mutex> lock(m_ready_mutex);
+        m_ready_cond.wait(lock, [&]{return m_audio_ready;});
+    }
+    std::unique_lock<std::mutex> lock(m_ready_mutex);
+    m_ready_cond.wait(lock, [&]{return m_video_ready;});
 
     close_container();
 
@@ -514,6 +557,7 @@ void OutputTS::setAudioParams(uint8_t* capture_buf, size_t capture_buf_size,
 
     if (m_verbose > 1)
     {
+        AudioReady(true);
         cerr << "setAudioParams " << (is_lpcm ? "LPCM" : "Bitstream") << endl;
     }
 }
@@ -543,17 +587,12 @@ void OutputTS::setVideoParams(int width, int height, bool interlaced,
             cerr << "Video Params set\n";
     }
 
-#if 0
-    if (m_image_ready_thread.joinable())
-        m_image_ready_thread.join();
-#endif
-
-    open_container();
-
-#if 0
-    if (m_image_ready_thread == nullptr)
-        m_image_ready_thread = std::thread(&OutputTS::Write, this);
-#endif
+    VideoReady(true);
+    if (!m_initialized)
+    {
+        open_container();
+        m_initialized = true;
+    }
 }
 
 OutputTS::~OutputTS(void)
@@ -681,10 +720,16 @@ void OutputTS::close_stream(AVFormatContext* oc, OutputStream* ost)
     ost->enc = nullptr;
     av_frame_free(&ost->frame);
     ost->frame = nullptr;
-    av_frame_free(&ost->tmp_frame);
-    ost->tmp_frame = nullptr;
-    av_packet_free(&ost->tmp_pkt);
-    ost->tmp_pkt = nullptr;
+    if (ost->tmp_frame)
+    {
+        av_frame_free(&ost->tmp_frame);
+        ost->tmp_frame = nullptr;
+    }
+    if (ost->tmp_pkt)
+    {
+        av_packet_free(&ost->tmp_pkt);
+        ost->tmp_pkt = nullptr;
+    }
     swr_free(&ost->swr_ctx);
     ost->swr_ctx = nullptr;
 #if 0
@@ -704,7 +749,8 @@ AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
     uint8_t* q = (uint8_t*)frame->data[0];
     size_t got;
 
-    size_t bytes = ost->enc->ch_layout.nb_channels * frame->nb_samples * 2;
+    size_t bytes = ost->enc->ch_layout.nb_channels *
+                   frame->nb_samples * m_audioIO.BytesPerSample();
     if (m_audioIO.Size() < bytes)
     {
         if (m_verbose > 5)
@@ -1267,7 +1313,7 @@ void OutputTS::Write(void)
     uint8_t* pImage;
     uint64_t timestamp;
 
-    for (;;)
+    while (m_running)
     {
         m_image_ready.wait_for(lock,
                                std::chrono::milliseconds(m_input_frame_wait_ms));
@@ -1293,6 +1339,14 @@ void OutputTS::Write(void)
                 timestamp = m_imagequeue.front().timestamp;
                 m_imagequeue.pop_front();
             }
+
+#if 1
+            if (!m_audio_ready)
+            {
+                m_image_buffer_available(pImage);
+                continue;
+            }
+#endif
 
             if (m_encoderType == EncoderType::NV)
                 nv_encode(m_output_format_context, &m_video_stream,

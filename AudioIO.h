@@ -48,6 +48,7 @@ class AudioBuffer
     AVChannelLayout ChannelLayout(void) const { return m_channel_layout; }
     bool LPCM(void) const { return m_lpcm; }
     int SampleRate(void) const { return m_sample_rate; }
+    int BytesPerSample(void) const { return m_bytes_per_sample; }
 
 //        int64_t TimeStamp(void) const { return m_timestamp; }
 
@@ -127,11 +128,9 @@ class AudioIO
     std::string CodecName(void) const { return m_codec_name; }
     AVChannelLayout ChannelLayout(void) const { return m_channel_layout; }
     int SampleRate(void) const { return m_sample_rate; }
+    int BytesPerSample(void) const { return m_bytes_per_sample; }
 
     bool    Bitstream(void) { return !m_lpcm; }
-#if 0
-    bool    BitstreamChanged(bool is_lpcm);
-#endif
     bool    CodecChanged(void);
 
   private:
@@ -142,6 +141,7 @@ class AudioIO
     std::string      m_codec_name;
     AVChannelLayout  m_channel_layout;
     int              m_sample_rate      {-1};
+    int              m_bytes_per_sample {0};
 
     bool             m_lpcm             {true};
     int64_t          m_timestamp        {0LL};

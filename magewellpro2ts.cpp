@@ -50,6 +50,9 @@
 #include <charconv>
 #include <string_view>
 
+#include <mutex>
+#include <condition_variable>
+
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/types.h>
@@ -67,6 +70,7 @@
 using namespace std;
 
 bool g_running = true;
+int  g_frame_ms = 17;
 
 int get_id(char c)
 {
@@ -691,6 +695,7 @@ void* audio_capture(void* param1, int param2, void* param3)
     int       verbose        = param2;
     OutputTS* out2ts         = reinterpret_cast<OutputTS* >(param3);
 
+    bool     init_needed     = true;
     uint8_t* capture_buf     = nullptr;
     int      frame_idx       = 0;
     int      buf_idx         = 0;
@@ -748,7 +753,7 @@ void* audio_capture(void* param1, int param2, void* param3)
             if (err_cnt++ % 50 == 0)
                 cerr << "WARNING (cnt: " << err_cnt
                      << ") can't get audio signal status\n";
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            this_thread::sleep_for(chrono::milliseconds(g_frame_ms));
             continue;
         }
 
@@ -758,11 +763,14 @@ void* audio_capture(void* param1, int param2, void* param3)
                 cerr << "WARNING (cnt: " << err_cnt
                      << ") can't get audio, signal is invalid\n";
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            this_thread::sleep_for(chrono::milliseconds(g_frame_ms));
             continue;
         }
 
         bytes_per_sample = audio_signal_status.cBitsPerSample / 8;
+        if (bytes_per_sample > 2)
+            bytes_per_sample = 4;
+
         cur_channels = 0;
         for (int idx = 0; idx < (MWCAP_AUDIO_MAX_NUM_CHANNELS / 2); ++idx)
         {
@@ -777,7 +785,7 @@ void* audio_capture(void* param1, int param2, void* param3)
                      << "] Invalid audio channel count: "
                      << cur_channels << endl;
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(6));
+            this_thread::sleep_for(chrono::milliseconds(g_frame_ms));
             continue;
         }
 
@@ -821,6 +829,7 @@ void* audio_capture(void* param1, int param2, void* param3)
         unsigned char* audio_frame;
         MWCAP_AUDIO_CAPTURE_FRAME macf;
 
+        init_needed = false;
         while (g_running)
         {
             if (MWWaitEvent(notify_event, 1000) <= 0)
@@ -837,14 +846,26 @@ void* audio_capture(void* param1, int param2, void* param3)
 
             if (notify_status & MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE)
             {
-                cerr << "WARNING: Audio signal CHANGED!\n";
-                break;
+                if (!init_needed)
+                {
+                    out2ts->AudioReady(false);
+                    init_needed = true;
+                    cerr << "WARNING: Audio signal CHANGED!\n";
+                }
+                this_thread::sleep_for(chrono::milliseconds(g_frame_ms));
+                continue;
             }
 
             if (notify_status & MWCAP_NOTIFY_AUDIO_INPUT_RESET)
             {
-                cerr << "WARNING: Audio input RESET!\n";
-                break;
+                if (!init_needed)
+                {
+                    out2ts->AudioReady(false);
+                    init_needed = true;
+                    cerr << "WARNING: Audio input RESET!\n";
+                }
+                this_thread::sleep_for(chrono::milliseconds(g_frame_ms));
+                continue;
             }
 
             if (notify_status & MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO)
@@ -857,9 +878,12 @@ void* audio_capture(void* param1, int param2, void* param3)
 
             if (MW_ENODATA == MWCaptureAudioFrame(channel_handle, &macf))
             {
-                std::this_thread::sleep_for(std::chrono::milliseconds(6));
+                this_thread::sleep_for(chrono::milliseconds(g_frame_ms));
                 continue;
             }
+
+            if (init_needed)
+                break;
 
 #if 0
             uint64_t timestamp = macf.llTimestamp;
@@ -921,14 +945,14 @@ void* audio_capture(void* param1, int param2, void* param3)
     return nullptr;
 }
 
-using imageque_t = std::deque<uint8_t*>;
+using imageque_t = deque<uint8_t*>;
 imageque_t image_buffers;
 imageque_t avail_image_buffers;
-std::mutex image_buffer_mutex;
+mutex image_buffer_mutex;
 
 bool add_image_buffer(HCHANNEL hChannel, DWORD dwImageSize)
 {
-    std::unique_lock<std::mutex> lock(image_buffer_mutex);
+    unique_lock<mutex> lock(image_buffer_mutex);
 
     uint8_t* pbImage =  new uint8_t[dwImageSize];
     if (pbImage == nullptr)
@@ -946,7 +970,7 @@ bool add_image_buffer(HCHANNEL hChannel, DWORD dwImageSize)
 
 void free_image_buffers(HCHANNEL hChannel)
 {
-    std::unique_lock<std::mutex> lock(image_buffer_mutex);
+    unique_lock<mutex> lock(image_buffer_mutex);
     imageque_t::iterator Iimage;
 
     for (Iimage = image_buffers.begin();
@@ -960,13 +984,22 @@ void free_image_buffers(HCHANNEL hChannel)
 
 void image_buffer_available(uint8_t* pbImage)
 {
-    std::unique_lock<std::mutex> lock(image_buffer_mutex);
+    unique_lock<mutex> lock(image_buffer_mutex);
     avail_image_buffers.push_back(pbImage);
 }
 
+void set_notify(HNOTIFY&  notify,
+                HCHANNEL  hChannel,
+                MWCAP_PTR hNotifyEvent,
+                DWORD     flags)
+{
+    if (notify)
+        MWUnregisterNotify(hChannel, notify);
+    notify = MWRegisterNotify(hChannel, hNotifyEvent, flags);
+}
 
 bool video_capture_loop(HCHANNEL  hChannel,
-                        HNOTIFY   hNotify,
+                        HNOTIFY   notify_video,
                         MWCAP_PTR hNotifyEvent,
                         MWCAP_PTR hCaptureEvent,
                         uint8_t*  pbImage,
@@ -980,6 +1013,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
     int64_t timestamp;
 
+    bool init_needed = true;
     int buffer_cnt = 2;
     int frame_idx = -1;
     int frame_wrap_idx = 4;
@@ -997,8 +1031,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
         cerr << "ERROR: Failed to determine best magewell pixel format.\n";
         return false;
     }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(7));
 
     while (g_running)
     {
@@ -1032,15 +1064,15 @@ bool video_capture_loop(HCHANNEL  hChannel,
         {
             case MWCAP_VIDEO_SIGNAL_NONE:
               cerr << "WARNING: Input signal status: NONE\n";
-              std::this_thread::sleep_for(std::chrono::milliseconds(6));
+              this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 2));
               continue;
             case MWCAP_VIDEO_SIGNAL_UNSUPPORTED:
               cerr << "WARNING: Input signal status: Unsupported\n";
-              std::this_thread::sleep_for(std::chrono::milliseconds(6));
+              this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 2));
               continue;
             case MWCAP_VIDEO_SIGNAL_LOCKING:
               cerr << "WARNING: Input signal status: Locking\n";
-              std::this_thread::sleep_for(std::chrono::milliseconds(6));
+              this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 2));
               continue;
             case MWCAP_VIDEO_SIGNAL_LOCKED:
               cerr << "Input signal status: Locked\n";
@@ -1053,11 +1085,13 @@ bool video_capture_loop(HCHANNEL  hChannel,
             MWStopVideoCapture(hChannel);
             break;
 #endif
-            std::this_thread::sleep_for(std::chrono::milliseconds(6));
+            this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 2));
             continue;
         }
 
         double frame_duration = videoSignalStatus.dwFrameDuration;
+        g_frame_ms = frame_duration / 10000;
+
         AVRational frame_rate, time_base;
         if (videoSignalStatus.bInterlaced == TRUE)
         {
@@ -1115,19 +1149,20 @@ bool video_capture_loop(HCHANNEL  hChannel,
             mode = MWCAP_VIDEO_DEINTERLACE_BLEND;
         }
 
-        hNotify = MWRegisterNotify(hChannel, hNotifyEvent,
-                                   notifyBufferMode |
-                                   MWCAP_NOTIFY_VIDEO_SAMPLING_PHASE_CHANGE |
-                                   MWCAP_NOTIFY_VIDEO_SMPTE_TIME_CODE |
-                                   MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE);
+        notifyBufferMode |= MWCAP_NOTIFY_VIDEO_SAMPLING_PHASE_CHANGE |
+                            MWCAP_NOTIFY_VIDEO_SMPTE_TIME_CODE |
+                            MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE;
 
-        if (hNotify == 0)
+        set_notify(notify_video, hChannel, hNotifyEvent, notifyBufferMode);
+
+        if (notify_video == 0)
         {
             if (verbose > 0)
                 cerr << "WARNING: Register Notify error.\n";
             return false;
         }
 
+        init_needed = false;
         frame_idx = -1;
         while (g_running)
         {
@@ -1139,7 +1174,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             }
 
             ULONGLONG ullStatusBits = 0;
-            if (MW_SUCCEEDED != MWGetNotifyStatus(hChannel, hNotify,
+            if (MW_SUCCEEDED != MWGetNotifyStatus(hChannel, notify_video,
                                                   &ullStatusBits))
             {
                 if (verbose > 0)
@@ -1147,21 +1182,40 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 continue;
             }
 
-            if (hNotify & MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE)
+            if (notify_video & MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE)
             {
-                cerr << "WARNING: Video signal CHANGED!\n";
-                break;
+                if (!init_needed)
+                {
+                    out2ts.VideoReady(false);
+                    init_needed = true;
+                    cerr << "WARNING: Video signal CHANGED!\n";
+                }
+                this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 2));
+                set_notify(notify_video, hChannel, hNotifyEvent, notifyBufferMode);
+                continue;
             }
 #if 0
-            if (hNotify & MWCAP_NOTIFY_VIDEO_SMPTE_TIME_CODE)
+            if (notify_video & MWCAP_NOTIFY_VIDEO_SMPTE_TIME_CODE)
             {
-                cerr << "WARNING: VIDEO_SMPTE_TIME_CODE CHANGED!\n";
-                break;
+                if (!init_needed)
+                {
+                    out2ts.VideoReady(false);
+                    init_needed = true;
+                    cerr << "WARNING: VIDEO_SMPTE_TIME_CODE CHANGED!\n";
+                }
+                this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 2));
+                continue;
             }
-            if (hNotify & MWCAP_NOTIFY_VIDEO_SAMPLING_PHASE_CHANGE)
+            if (notify_video & MWCAP_NOTIFY_VIDEO_SAMPLING_PHASE_CHANGE)
             {
-                cerr << "WARNING: VIDEO_SAMPLING_PHASE_CHANGE!\n";
-                break;
+                if (!init_needed)
+                {
+                    out2ts.VideoReady(false);
+                    init_needed = true;
+                    cerr << "WARNING: VIDEO_SAMPLING_PHASE_CHANGE!\n";
+                }
+                this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 2));
+                continue;
             }
 #endif
 
@@ -1169,15 +1223,33 @@ bool video_capture_loop(HCHANNEL  hChannel,
             MWGetVideoSignalStatus(hChannel, &videoSignalStatus);
             if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
             {
-                cerr << "WARNING: Video signal has lost lock.\n";
-                break;
+                if (!init_needed)
+                {
+                    out2ts.VideoReady(false);
+                    init_needed = true;
+                    cerr << "WARNING: Video signal has lost lock.\n";
+                }
+                this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 2));
+                continue;
             }
             if (videoSignalStatus.dwFrameDuration != frame_duration)
             {
-                cerr << "WARNING: Video frame duration has changed.\n";
-                break;
+                if (!init_needed)
+                {
+                    out2ts.VideoReady(false);
+                    init_needed = true;
+                    cerr << "WARNING: Video frame duration has changed.\n";
+                }
+                this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 2));
+                continue;
             }
 #endif
+
+            if (0 == (ullStatusBits & notifyBufferMode))
+                continue;
+
+            if (init_needed)
+                break;
 
             if (MW_SUCCEEDED != MWGetVideoBufferInfo(hChannel,
                                                      &videoBufferInfo))
@@ -1219,9 +1291,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 continue;
             }
 
-            if (0 == (ullStatusBits & notifyBufferMode))
-                continue;
-
             image_buffer_mutex.lock();
             if (avail_image_buffers.empty())
             {
@@ -1249,7 +1318,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
             if (ret != MW_SUCCEEDED)
             {
-//                    std::this_thread::sleep_for(std::chrono::milliseconds(6));
+//                    this_thread::sleep_for(chrono::milliseconds(6));
                 continue;
             }
             if (MWWaitEvent(hCaptureEvent, 1000) <= 0)
@@ -1275,7 +1344,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
 bool video_capture(HCHANNEL hChannel, int verbose, OutputTS & out2ts)
 {
-    HNOTIFY   hNotify       = 0;
+    HNOTIFY   notify_video       = 0;
     MWCAP_PTR hNotifyEvent  = 0;
     MWCAP_PTR hCaptureEvent = 0;
     uint8_t* pbImage       = nullptr;
@@ -1305,7 +1374,7 @@ bool video_capture(HCHANNEL hChannel, int verbose, OutputTS & out2ts)
 
     while (g_running)
     {
-        if (!video_capture_loop(hChannel, hNotify,
+        if (!video_capture_loop(hChannel, notify_video,
                                 hNotifyEvent, hCaptureEvent,
                                 pbImage, verbose, out2ts))
             break;
@@ -1319,8 +1388,8 @@ bool video_capture(HCHANNEL hChannel, int verbose, OutputTS & out2ts)
         pbImage = nullptr;
     }
 
-    MWUnregisterNotify(hChannel, hNotify);
-    hNotify=0;
+    MWUnregisterNotify(hChannel, notify_video);
+    notify_video=0;
     MWStopVideoCapture(hChannel);
     if (verbose > 2)
         cerr << "\nStop capture\n";
@@ -1367,11 +1436,11 @@ bool capture(HCHANNEL channel_handle, int verbose,
             cerr << "Start audio thread.\n";
     }
 
-    std::thread audio_thr;
+    thread audio_thr;
 
     if (!no_audio)
     {
-        audio_thr = std::thread(audio_capture, channel_handle,
+        audio_thr = thread(audio_capture, channel_handle,
                                 verbose, &out2ts);
     }
 
@@ -1651,9 +1720,9 @@ void show_help(string_view app)
 
 bool string_to_int(string_view st, int &value, string_view var)
 {
-    auto result = std::from_chars(st.data(), st.data() + st.size(),
+    auto result = from_chars(st.data(), st.data() + st.size(),
                                   value);
-    if (result.ec == std::errc::invalid_argument)
+    if (result.ec == errc::invalid_argument)
     {
         cerr << "Invalid " << var << ": " << st << endl;
         value = -1;

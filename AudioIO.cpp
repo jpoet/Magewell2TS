@@ -646,6 +646,7 @@ bool AudioIO::WaitForReady(void)
                 m_codec_name = (*Ibuf).CodecName();
                 m_channel_layout = (*Ibuf).ChannelLayout();
                 m_sample_rate = (*Ibuf).SampleRate();
+                m_bytes_per_sample = (*Ibuf).BytesPerSample();
                 m_lpcm = (*Ibuf).LPCM();
                 return true;
             }
@@ -748,27 +749,6 @@ AVPacket* AudioIO::ReadSPDIF(void)
     return (*Ibuf).ReadSPDIF();
 }
 
-#if 0
-bool AudioIO::BitstreamChanged(bool is_lpcm)
-{
-    const std::unique_lock<std::mutex> lock(m_buffer_mutex);
-    if (m_buffer_q.empty())
-        return true;
-    if (m_buffer_q.back().m_lpcm != is_lpcm)
-    {
-        if (m_verbose > 0)
-        {
-            if (is_lpcm)
-                cerr << "Bitstream -> LPCM\n";
-            else
-                cerr << "LPCM -> Bitstream\n";
-        }
-        return true;
-    }
-    return false;
-}
-#endif
-
 bool AudioIO::CodecChanged(void)
 {
     {
@@ -778,15 +758,17 @@ bool AudioIO::CodecChanged(void)
     }
 
     string codec = m_codec_name;
+    int    bytes_per_sample = m_bytes_per_sample;
     WaitForReady();
-    if (codec == m_codec_name)
+    if (codec == m_codec_name && bytes_per_sample == m_bytes_per_sample)
         return false;
 
     if (m_verbose > 0)
-        cerr << "New audio buffer codec: "
-             << (m_lpcm ? "LPCM" : "Bitstream")
-             << ": " << m_codec_name
-             << endl;
+    {
+        buffer_que_t::iterator Ibuf = m_buffer_q.begin();
+        cerr << "New audio buffer codec:\n";
+        (*Ibuf).PrintState("New");
+    }
 
     return true;
 }
