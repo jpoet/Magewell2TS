@@ -554,11 +554,9 @@ void OutputTS::setAudioParams(uint8_t* capture_buf, size_t capture_buf_size,
                         samples_per_frame, frame_size,
                         timestamps);
 
+    AudioReady(true);
     if (m_verbose > 1)
-    {
-        AudioReady(true);
         cerr << "setAudioParams " << (is_lpcm ? "LPCM" : "Bitstream") << endl;
-    }
 }
 
 void OutputTS::setVideoParams(int width, int height, bool interlaced,
