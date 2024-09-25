@@ -58,6 +58,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <cerrno>
+#include <csignal>
 
 #include <MWFOURCC.h>
 #include <LibMWCapture/MWCapture.h>
@@ -69,8 +70,13 @@
 
 using namespace std;
 
-bool g_running = true;
+std::atomic<bool> g_running(true);
 int  g_frame_ms = 17;
+
+void signal_handler(int signum)
+{
+    g_running.store(false);
+}
 
 int get_id(char c)
 {
@@ -745,7 +751,7 @@ void* audio_capture(void* param1, int param2, void* param3)
         goto audio_capture_stoped;
     }
 
-    while (g_running)
+    while (g_running.load() == true)
     {
         if (MW_SUCCEEDED != MWGetAudioSignalStatus(channel_handle,
                                                    &audio_signal_status))
@@ -830,7 +836,7 @@ void* audio_capture(void* param1, int param2, void* param3)
         MWCAP_AUDIO_CAPTURE_FRAME macf;
 
         init_needed = false;
-        while (g_running)
+        while (g_running.load() == true)
         {
             if (MWWaitEvent(notify_event, 1000) <= 0)
             {
@@ -967,10 +973,12 @@ bool add_image_buffer(HCHANNEL hChannel, DWORD dwImageSize)
     return true;
 }
 
-void free_image_buffers(HCHANNEL hChannel)
+void free_image_buffers(HCHANNEL hChannel, OutputTS& out2ts)
 {
     unique_lock<mutex> lock(image_buffer_mutex);
     imageque_t::iterator Iimage;
+
+    out2ts.ClearImageQueue();
 
     for (Iimage = image_buffers.begin();
          Iimage != image_buffers.end(); ++Iimage)
@@ -979,6 +987,7 @@ void free_image_buffers(HCHANNEL hChannel)
         delete[] (*Iimage);
     }
     image_buffers.clear();
+    avail_image_buffers.clear();
 }
 
 void image_buffer_available(uint8_t* pbImage)
@@ -1031,26 +1040,35 @@ bool video_capture_loop(HCHANNEL  hChannel,
         return false;
     }
 
-    while (g_running)
+    while (g_running.load() == true)
     {
-        MWCAP_VIDEO_BUFFER_INFO videoBufferInfo;
-        if (MWGetVideoBufferInfo(hChannel, &videoBufferInfo) != MW_SUCCEEDED)
-        {
-            continue;
-        }
-
-        frame_wrap_idx = videoBufferInfo.cMaxFrames;
-
         MWCAP_VIDEO_FRAME_INFO videoFrameInfo;
-        if (MWGetVideoFrameInfo(hChannel,
-                                videoBufferInfo.iNewestBufferedFullFrame,
-                                &videoFrameInfo) != MW_SUCCEEDED)
-        {
-            continue;
-        }
-
         MWCAP_VIDEO_SIGNAL_STATUS videoSignalStatus;
+
         MWGetVideoSignalStatus(hChannel, &videoSignalStatus);
+
+        switch (videoSignalStatus.state)
+        {
+            case MWCAP_VIDEO_SIGNAL_NONE:
+              cerr << "WARNING: Input signal status: NONE\n";
+              this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 3));
+              continue;
+            case MWCAP_VIDEO_SIGNAL_UNSUPPORTED:
+              cerr << "WARNING: Input signal status: Unsupported\n";
+              this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 3));
+              continue;
+            case MWCAP_VIDEO_SIGNAL_LOCKING:
+              cerr << "WARNING: Input signal status: Locking\n";
+              this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 3));
+              continue;
+            case MWCAP_VIDEO_SIGNAL_LOCKED:
+              cerr << "Input signal status: Locked\n";
+              break;
+            default:
+              cerr << "WARNING: Video signal not locked.\n";
+              this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 3));
+              continue;
+        }
 
         DWORD dwMinStride = FOURCC_CalcMinStride(dwFourcc,
                                                  videoSignalStatus.cx, 4);
@@ -1058,31 +1076,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
                                                  videoSignalStatus.cx,
                                                  videoSignalStatus.cy,
                                                  dwMinStride);
-
-        switch (videoSignalStatus.state)
-        {
-            case MWCAP_VIDEO_SIGNAL_NONE:
-              cerr << "WARNING: Input signal status: NONE\n";
-              this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 2));
-              continue;
-            case MWCAP_VIDEO_SIGNAL_UNSUPPORTED:
-              cerr << "WARNING: Input signal status: Unsupported\n";
-              this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 2));
-              continue;
-            case MWCAP_VIDEO_SIGNAL_LOCKING:
-              cerr << "WARNING: Input signal status: Locking\n";
-              this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 2));
-              continue;
-            case MWCAP_VIDEO_SIGNAL_LOCKED:
-              cerr << "Input signal status: Locked\n";
-        }
-
-        if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
-        {
-            cerr << "WARNING: Video signal not locked.\n";
-            this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 2));
-            continue;
-        }
 
         double frame_duration = videoSignalStatus.dwFrameDuration;
         g_frame_ms = frame_duration / 10000;
@@ -1119,7 +1112,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             cerr << "========\n";
         }
 
-        free_image_buffers(hChannel);
+        free_image_buffers(hChannel, out2ts);
         if (!add_image_buffer(hChannel, dwImageSize))
             return false;
         if (!add_image_buffer(hChannel, dwImageSize))
@@ -1129,6 +1122,15 @@ bool video_capture_loop(HCHANNEL  hChannel,
                               videoSignalStatus.cy,
                               videoSignalStatus.bInterlaced,
                               time_base, frame_duration, frame_rate);
+
+
+        MWCAP_VIDEO_BUFFER_INFO videoBufferInfo;
+        if (MWGetVideoBufferInfo(hChannel, &videoBufferInfo) != MW_SUCCEEDED)
+        {
+            continue;
+        }
+
+        frame_wrap_idx = videoBufferInfo.cMaxFrames;
 
         if(videoSignalStatus.bInterlaced)
         {
@@ -1159,7 +1161,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
         init_needed = false;
         frame_idx = -1;
-        while (g_running)
+        while (g_running.load() == true)
         {
             if (MWWaitEvent(hNotifyEvent, 1000) <= 0)
             {
@@ -1181,64 +1183,20 @@ bool video_capture_loop(HCHANNEL  hChannel,
             {
                 if (!init_needed)
                 {
-                    out2ts.VideoReady(false);
                     init_needed = true;
                     cerr << "WARNING: Video signal CHANGED!\n";
                 }
-                this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 2));
-                set_notify(notify_video, hChannel, hNotifyEvent, notifyBufferMode);
+                this_thread::sleep_for(chrono::milliseconds(g_frame_ms));
+                set_notify(notify_video, hChannel, hNotifyEvent,
+                           notifyBufferMode);
                 continue;
             }
-#if 0
-            if (notify_video & MWCAP_NOTIFY_VIDEO_SMPTE_TIME_CODE)
-            {
-                if (!init_needed)
-                {
-                    out2ts.VideoReady(false);
-                    init_needed = true;
-                    cerr << "WARNING: VIDEO_SMPTE_TIME_CODE CHANGED!\n";
-                }
-                this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 2));
-                continue;
-            }
-            if (notify_video & MWCAP_NOTIFY_VIDEO_SAMPLING_PHASE_CHANGE)
-            {
-                if (!init_needed)
-                {
-                    out2ts.VideoReady(false);
-                    init_needed = true;
-                    cerr << "WARNING: VIDEO_SAMPLING_PHASE_CHANGE!\n";
-                }
-                this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 2));
-                continue;
-            }
-#endif
 
-#if 1
             MWGetVideoSignalStatus(hChannel, &videoSignalStatus);
             if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
             {
-                if (!init_needed)
-                {
-                    out2ts.VideoReady(false);
-                    init_needed = true;
-                    cerr << "WARNING: Video signal has lost lock.\n";
-                }
-                this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 2));
-                continue;
+                break;
             }
-            if (videoSignalStatus.dwFrameDuration != frame_duration)
-            {
-                if (!init_needed)
-                {
-                    out2ts.VideoReady(false);
-                    init_needed = true;
-                    cerr << "WARNING: Video frame duration has changed.\n";
-                }
-                this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 2));
-                continue;
-            }
-#endif
 
             if (0 == (ullStatusBits & notifyBufferMode))
                 continue;
@@ -1314,7 +1272,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
             if (ret != MW_SUCCEEDED)
             {
-//                    this_thread::sleep_for(chrono::milliseconds(6));
                 continue;
             }
             if (MWWaitEvent(hCaptureEvent, 1000) <= 0)
@@ -1334,7 +1291,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
         }
     }
 
-    free_image_buffers(hChannel);
+    free_image_buffers(hChannel, out2ts);
     return true;
 }
 
@@ -1368,7 +1325,7 @@ bool video_capture(HCHANNEL hChannel, int verbose, OutputTS & out2ts)
         return false;
     }
 
-    while (g_running)
+    while (g_running.load() == true)
     {
         if (!video_capture_loop(hChannel, notify_video,
                                 hNotifyEvent, hCaptureEvent,
@@ -1755,6 +1712,15 @@ int main(int argc, char* argv[])
     bool        no_audio    = false;
 
     vector<string_view> args(argv + 1, argv + argc);
+
+    {
+        struct sigaction action;
+        action.sa_handler = signal_handler;
+        sigemptyset(&action.sa_mask);
+        action.sa_flags = 0;
+        sigaction(SIGINT, &action, NULL);
+        sigaction(SIGTERM, &action, NULL);
+    }
 
     for (auto iter = args.begin(); iter != args.end(); ++iter)
     {

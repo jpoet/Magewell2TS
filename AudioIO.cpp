@@ -65,11 +65,6 @@ bool AudioBuffer::operator==(const AudioBuffer & rhs)
 int64_t AudioBuffer::get_timestamp(uint8_t* P) const
 {
     size_t idx = static_cast<uint32_t>(P - m_begin) / m_frame_size;
-#if 1
-    float fidx = (P - m_begin) / m_frame_size;
-    if ((float)idx != fidx)
-        cerr << "Buffer::TimeStamp: calced idx: " << fidx << endl;
-#endif
     return m_timestamps[idx];
 }
 
@@ -675,6 +670,7 @@ size_t AudioIO::Size(void) const
     {
         sz += (*Ibuf).Size();
     }
+
     return sz;
 }
 

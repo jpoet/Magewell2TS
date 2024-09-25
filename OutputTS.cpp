@@ -595,6 +595,8 @@ void OutputTS::setVideoParams(int width, int height, bool interlaced,
 
 OutputTS::~OutputTS(void)
 {
+    m_running.store(false);
+
     if (m_image_ready_thread.joinable())
         m_image_ready_thread.join();
 
@@ -1315,12 +1317,12 @@ void OutputTS::Write(void)
     uint8_t* pImage;
     uint64_t timestamp;
 
-    while (m_running)
+    while (m_running.load() == true)
     {
         m_image_ready.wait_for(lock,
                                std::chrono::milliseconds(m_input_frame_wait_ms));
 
-        for (;;)
+        while (m_running.load() == true)
         {
             if (!m_no_audio)
             {
@@ -1364,6 +1366,12 @@ void OutputTS::Write(void)
             }
         }
     }
+}
+
+void OutputTS::ClearImageQueue(void)
+{
+    const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
+    m_imagequeue.clear();
 }
 
 bool OutputTS::VideoFrame(uint8_t* pImage, uint32_t imageSize,

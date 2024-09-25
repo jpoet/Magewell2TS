@@ -38,6 +38,7 @@ class OutputTS
                         AVRational time_base, double frame_duration,
                         AVRational frame_rate);
     bool addAudio(uint8_t* buf, size_t len, int64_t timestamp);
+    void ClearImageQueue(void);
     void Write(void);
     bool VideoFrame(uint8_t*  pImage, uint32_t imageSize, int64_t timestamp);
 
@@ -147,7 +148,7 @@ class OutputTS
     std::mutex              m_imagequeue_mutex;
     std::condition_variable m_image_ready;
 
-    bool                    m_running      {true};
+    std::atomic<bool>       m_running      {true};
     bool                    m_initialized  {false};
     bool                    m_video_ready  {true};
     bool                    m_audio_ready  {false};
