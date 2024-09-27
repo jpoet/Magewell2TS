@@ -34,6 +34,7 @@
 
 #include <unistd.h>
 #include <iostream>
+#include <iomanip>
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -495,8 +496,10 @@ bool OutputTS::open_container(void)
         std::unique_lock<std::mutex> lock(m_ready_mutex);
         m_ready_cond.wait(lock, [&]{return m_audio_ready;});
     }
+#if 0
     std::unique_lock<std::mutex> lock(m_ready_mutex);
     m_ready_cond.wait(lock, [&]{return m_video_ready;});
+#endif
 
     close_container();
 
@@ -625,9 +628,6 @@ void OutputTS::close_container(void)
 
 bool OutputTS::addAudio(uint8_t* buf, size_t len, int64_t timestamp)
 {
-    if (!m_video_ready)
-        return false;
-
     m_audioIO.Add(buf, len, timestamp);
     return true;
 }
@@ -737,10 +737,6 @@ void OutputTS::close_stream(AVFormatContext* oc, OutputStream* ost)
     }
     swr_free(&ost->swr_ctx);
     ost->swr_ctx = nullptr;
-#if 0
-    avcodec_free_context(&ost->st);
-    ost->st == nullptr;
-#endif
 }
 
 /**************************************************************/
@@ -866,10 +862,13 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
  */
 bool OutputTS::write_audio_frame(AVFormatContext* oc, OutputStream* ost)
 {
+
     if (m_audioIO.CodecChanged())
-    {
-        cerr << "Initializing audio\n";
         open_container();
+
+    if (!m_audioIO.BlockReady())
+    {
+        return false;
     }
 
     if (m_audioIO.Bitstream())
@@ -1327,12 +1326,15 @@ void OutputTS::Write(void)
         {
             if (!m_no_audio)
             {
+#if 0
+                cerr << "Write: video " << m_video_stream.next_pts << "\n"
+                     << "  audio [" << setw(2) << m_audioIO.BufId()
+                     << "] " << m_audio_stream.next_pts << endl;
+#endif
                 while (m_video_stream.next_pts > m_audio_stream.next_pts)
-                {
                     if (!write_audio_frame(m_output_format_context,
                                            &m_audio_stream))
                         break;
-                }
             }
 
             {

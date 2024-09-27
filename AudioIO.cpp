@@ -90,7 +90,7 @@ AudioBuffer::AudioBuffer(uint8_t* Pbegin, uint8_t* Pend,
     , m_verbose(verbose)
     , m_id(id)
 {
-    m_block_size = 8 * m_bytes_per_sample * m_samples_per_frame;
+    m_block_size = 8 * m_bytes_per_sample * m_samples_per_frame * 8;
 }
 
 AudioBuffer::~AudioBuffer(void)
@@ -120,8 +120,8 @@ void AudioBuffer::OwnBuffer(void)
     else
         m_detect_thread = std::thread(&AudioBuffer::detect_codec, this);
 
-    PrintPointers("AddBuffer");
-    PrintState("AddBuffer", true);
+    PrintPointers("OwnBuffer");
+    PrintState("OwnBuffer", true);
 }
 
 void AudioBuffer::PrintState(const string & where, bool force) const
@@ -159,6 +159,7 @@ void AudioBuffer::PrintPointers(const string & where, bool force) const
              << (m_lpcm ? " LPCM" : " bistream")
              << " codec: " << m_codec_name
 //             << ", timestamp: " << m_timestamp
+             << ", size " << Size()
              << endl;
     }
 }
@@ -184,8 +185,6 @@ int AudioBuffer::Add(uint8_t* Pframe, size_t len, int64_t timestamp)
     {
         ++m_loop_cnt;
         m_write_wrapped = true;
-        if (m_verbose > 4)
-            cerr << "AudioIO::Add: wrapped\n";
     }
     else if (Pframe < m_prev_frame)
     {
@@ -198,9 +197,9 @@ int AudioBuffer::Add(uint8_t* Pframe, size_t len, int64_t timestamp)
 
     if (m_write_wrapped && m_read < m_write)
     {
-        if (m_verbose > 0 && m_read != m_begin)
+        if (m_verbose > 1 && m_read != m_begin)
         {
-            cerr << "WARNING: [" << m_id
+            cerr << "INFO: [" << m_id
                  << "] Overwrote buffer begin, moving read\n";
             PrintPointers("      Add", true);
             m_read = m_write;
@@ -214,19 +213,28 @@ int AudioBuffer::Read(uint8_t* dest, size_t len)
 {
     uint8_t* Pend;
     size_t   sz;
+    static int empty_cnt = 0;
 
     if (Empty())
     {
         if (m_EoF)
         {
-            if (m_verbose > 0)
+            if (m_verbose > 3)
                 cerr << "[" << m_id << "] AudioIO::Read: EOF\n";
             return AVERROR_EOF;
         }
 
-        if (m_verbose > 5)
-            cerr << "[" << m_id << "] AudioIO::Read: buffer is empty\n";
+        ++empty_cnt;
         return 0;
+    }
+
+    if (empty_cnt)
+    {
+        if (m_verbose > 4)
+            cerr << "INFO: [" << m_id
+                 << "] AudioBuffer::Read: contiguously called " << empty_cnt
+                 << " times with no data available.\n";
+        empty_cnt = 0;
     }
 
     const std::unique_lock<std::mutex> lock(m_write_mutex);
@@ -386,12 +394,12 @@ int64_t AudioBuffer::Seek(int64_t offset, int whence)
 
 AVPacket* AudioBuffer::ReadSPDIF(void)
 {
-    if (Size() < m_block_size)
+    if (Size() < m_frame_size)
     {
         if (m_verbose > 4)
-            cerr << "[" << m_id << "] write_bitstream_frame: Only "
+            cerr << "[" << m_id << "] ReadSPDIF: Only "
                  << Size() << " bytes available. "
-                 << m_block_size << " desired.\n";
+                 << m_frame_size << " desired.\n";
         return nullptr;
     }
 
@@ -450,7 +458,7 @@ bool AudioBuffer::open_spdif_context(void)
     }
 
     m_spdif_avio_context = avio_alloc_context(m_spdif_avio_context_buffer,
-                                              m_block_size,
+                                              m_frame_size,
                                               0,
                                               reinterpret_cast<void* >(this),
                                               read_packet,
@@ -493,7 +501,7 @@ bool AudioBuffer::open_spdif(void)
                                          &fmt, "", nullptr, 0,
                                          /* m_block_size * 8 */ 0)) != 0)
         {
-            if (m_verbose > 0)
+            if (m_verbose > 3)
             {
                 cerr << "WARNING: [" << m_id << "] Failed to probe spdif input: "
                      << AVerr2str(ret) << endl;
@@ -635,42 +643,60 @@ void AudioIO::AddBuffer(uint8_t* Pbegin, uint8_t* Pend,
 
     Ibuf = m_buffer_q.end() - 1;
     (*Ibuf).OwnBuffer();
+    m_codec_initialized = false;
 }
 
 bool AudioIO::WaitForReady(void)
 {
+    {
+        const std::unique_lock<std::mutex> lock(m_buffer_mutex);
+        if (m_codec_initialized)
+            return true;
+    }
+
     // Wait for codecs to be detected.
     while (m_running.load() == true)
     {
-        m_buffer_mutex.lock();
-        while (m_buffer_q.size() > 1 && m_buffer_q.front().Empty())
-            m_buffer_q.pop_front();
-
-        if (!m_buffer_q.empty())
         {
-            buffer_que_t::iterator Ibuf = m_buffer_q.begin();
-            m_buffer_mutex.unlock();
+            const std::unique_lock<std::mutex> lock(m_buffer_mutex);
+            while (m_buffer_q.size() > 1 &&
+                   (m_buffer_q.front().Empty() || m_buffer_q.front().isEoF()))
+                m_buffer_q.pop_front();
 
-            if (!(*Ibuf).CodecName().empty())
+            if (!m_buffer_q.empty())
             {
-                const std::unique_lock<std::mutex> lock(m_codec_mutex);
-                m_codec_name = (*Ibuf).CodecName();
-                m_channel_layout = (*Ibuf).ChannelLayout();
-                m_sample_rate = (*Ibuf).SampleRate();
-                m_bytes_per_sample = (*Ibuf).BytesPerSample();
-                m_lpcm = (*Ibuf).LPCM();
-                return true;
+                buffer_que_t::iterator Ibuf = m_buffer_q.begin();
+
+                if (!(*Ibuf).CodecName().empty())
+                {
+                    const std::unique_lock<std::mutex> lock(m_codec_mutex);
+                    m_codec_name = (*Ibuf).CodecName();
+                    m_channel_layout = (*Ibuf).ChannelLayout();
+                    m_sample_rate = (*Ibuf).SampleRate();
+                    m_bytes_per_sample = (*Ibuf).BytesPerSample();
+                    m_lpcm = (*Ibuf).LPCM();
+                    m_codec_initialized = true;
+                    return true;
+                }
             }
         }
-        else
-            m_buffer_mutex.unlock();
-
         std::unique_lock<std::mutex> lock(m_codec_mutex);
         m_codec_cond.wait(lock, [&]{return m_codec_ready;});
-
         m_codec_ready = false;
     }
+
     return false;
+}
+
+int AudioIO::BufId(void) const
+{
+    const std::unique_lock<std::mutex> lock(m_buffer_mutex);
+
+    if (m_buffer_q.empty())
+        return 0;
+
+    buffer_que_t::const_iterator Ibuf = m_buffer_q.begin();
+    return (*Ibuf).Id();
 }
 
 size_t AudioIO::Size(void) const
@@ -704,6 +730,20 @@ bool AudioIO::Empty(void) const
             return false;
     }
     return true;
+}
+
+bool AudioIO::BlockReady(void) const
+{
+    const std::unique_lock<std::mutex> lock(m_buffer_mutex);
+
+    if (m_buffer_q.empty())
+    {
+        cerr << "q empty\n";
+        return false;
+    }
+
+    buffer_que_t::const_iterator Ibuf = m_buffer_q.begin();
+    return (*Ibuf).Size() > (*Ibuf).BlockSize();
 }
 
 int AudioIO::Add(uint8_t* Pframe, size_t len, int64_t timestamp)

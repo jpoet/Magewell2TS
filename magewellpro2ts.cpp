@@ -71,11 +71,13 @@
 using namespace std;
 
 std::atomic<bool> g_running(true);
+std::atomic<bool> g_reset(false);
 int  g_frame_ms = 17;
 
 void signal_handler(int signum)
 {
     g_running.store(false);
+    g_reset.store(true);
 }
 
 int get_id(char c)
@@ -714,23 +716,20 @@ void* audio_capture(void* param1, int param2, void* param3)
     notify_event = MWCreateEvent();
     if (notify_event == 0)
     {
-        if (verbose > 0)
-            cerr << "create notify_event fail\n";
+        cerr << "ERROR: create notify_event fail\n";
         goto audio_capture_stoped;
     }
 
     MWGetAudioInputSourceArray(channel_handle, nullptr, &input_count);
     if (input_count == 0)
     {
-        if (verbose > 0)
-            cerr << "can't find audio input\n";
+        cerr << "ERROR: can't find audio input\n";
         goto audio_capture_stoped;
     }
 
     if (MW_SUCCEEDED != MWStartAudioCapture(channel_handle))
     {
-        if (verbose > 0)
-            cerr << "start audio capture fail!\n";
+        cerr << "ERROR: start audio capture fail!\n";
         goto audio_capture_stoped;
     }
 
@@ -746,13 +745,15 @@ void* audio_capture(void* param1, int param2, void* param3)
 
     if (notify_audio == 0)
     {
-        if (verbose > 0)
-            cerr << "Register Notify audio fail\n";
+        cerr << "EROR: Register Notify audio fail\n";
         goto audio_capture_stoped;
     }
 
     while (g_running.load() == true)
     {
+        while (g_reset.load() == true && g_running.load() == true)
+            this_thread::sleep_for(chrono::milliseconds(g_frame_ms));
+
         if (MW_SUCCEEDED != MWGetAudioSignalStatus(channel_handle,
                                                    &audio_signal_status))
         {
@@ -836,7 +837,7 @@ void* audio_capture(void* param1, int param2, void* param3)
         MWCAP_AUDIO_CAPTURE_FRAME macf;
 
         init_needed = false;
-        while (g_running.load() == true)
+        while (g_reset.load() == false)
         {
             if (MWWaitEvent(notify_event, 1000) <= 0)
             {
@@ -928,10 +929,13 @@ void* audio_capture(void* param1, int param2, void* param3)
                 frame_idx = frame_size * buf_idx;
             }
         }
+#if 0
+        cerr << "\n\nAudio done.\n\n";
+#endif
     }
 
   audio_capture_stoped:
-    g_running = false;
+    g_running.store(false);
 
     if(notify_audio)
     {
@@ -1015,13 +1019,18 @@ bool video_capture_loop(HCHANNEL  hChannel,
                         OutputTS & out2ts)
 {
     MWCAP_VIDEO_DEINTERLACE_MODE mode;
-    DWORD notifyBufferMode;
+    MWCAP_VIDEO_BUFFER_INFO videoBufferInfo;
+    DWORD notify_mode;
     LONGLONG llTotalTime = 0LL;
     DWORD dwFourcc = MWFOURCC_I420;
 
     int64_t timestamp;
+    int     width  = 0;
+    int     height = 0;
+    double  frame_duration = 0;
+    DWORD   dwMinStride = 0;
+    DWORD   dwImageSize = 0;
 
-    bool init_needed = true;
     int buffer_cnt = 2;
     int frame_idx = -1;
     int frame_wrap_idx = 4;
@@ -1040,6 +1049,10 @@ bool video_capture_loop(HCHANNEL  hChannel,
         return false;
     }
 
+    DWORD notify_changes = MWCAP_NOTIFY_VIDEO_SAMPLING_PHASE_CHANGE |
+                           MWCAP_NOTIFY_VIDEO_SMPTE_TIME_CODE |
+                           MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE;
+
     while (g_running.load() == true)
     {
         MWCAP_VIDEO_FRAME_INFO videoFrameInfo;
@@ -1051,106 +1064,111 @@ bool video_capture_loop(HCHANNEL  hChannel,
         {
             case MWCAP_VIDEO_SIGNAL_NONE:
               cerr << "WARNING: Input signal status: NONE\n";
-              this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 3));
+              this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 5));
               continue;
             case MWCAP_VIDEO_SIGNAL_UNSUPPORTED:
               cerr << "WARNING: Input signal status: Unsupported\n";
-              this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 3));
+              this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 5));
               continue;
             case MWCAP_VIDEO_SIGNAL_LOCKING:
               cerr << "WARNING: Input signal status: Locking\n";
-              this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 3));
+              this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 5));
               continue;
             case MWCAP_VIDEO_SIGNAL_LOCKED:
               cerr << "Input signal status: Locked\n";
               break;
             default:
               cerr << "WARNING: Video signal not locked.\n";
-              this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 3));
+              this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 5));
               continue;
         }
 
-        DWORD dwMinStride = FOURCC_CalcMinStride(dwFourcc,
-                                                 videoSignalStatus.cx, 4);
-        DWORD dwImageSize = FOURCC_CalcImageSize(dwFourcc,
-                                                 videoSignalStatus.cx,
-                                                 videoSignalStatus.cy,
-                                                 dwMinStride);
+        g_reset.store(false);
 
-        double frame_duration = videoSignalStatus.dwFrameDuration;
-        g_frame_ms = frame_duration / 10000;
-
-        AVRational frame_rate, time_base;
-        if (videoSignalStatus.bInterlaced == TRUE)
+        if (width != videoSignalStatus.cx ||
+            height != videoSignalStatus.cy ||
+            frame_duration != videoSignalStatus.dwFrameDuration)
         {
-            frame_rate = (AVRational){20000000LL, (int)frame_duration};
-            time_base = (AVRational){1, 20000000LL};
-        }
-        else
-        {
-            frame_rate = (AVRational){10000000LL, (int)frame_duration};
-            time_base = (AVRational){1, 10000000LL};
-        }
+            width  = videoSignalStatus.cx;
+            height = videoSignalStatus.cy;
 
-        // 100ns / frame_duration
-        if (verbose > 2)
-        {
-            cerr << "========\n";
-            double fps = (videoSignalStatus.bInterlaced == TRUE) ?
-                         (double)20000000LL / frame_duration :
-                         (double)10000000LL / frame_duration;
-            cerr << "Input signal resolution: " << videoSignalStatus.cx
-                 << "x" << videoSignalStatus.cy << "\n";
-            cerr << "Input signal fps: " << fps
-                 << "  " << frame_rate.num << "/" << frame_rate.den << "\n";
-            cerr << "Frame duration: " << frame_duration << "\n";
-            cerr << "Time base: " << time_base.num << "/" << time_base.den << "\n";
-            cerr << "Input signal interlaced: "
-                 << static_cast<bool>(videoSignalStatus.bInterlaced) << "\n";
-            cerr << "Input signal frame segmented: "
-                 << static_cast<bool>(videoSignalStatus.bSegmentedFrame) << "\n";
-            cerr << "========\n";
-        }
+            dwMinStride = FOURCC_CalcMinStride(dwFourcc,
+                                               width, 4);
+            dwImageSize = FOURCC_CalcImageSize(dwFourcc,
+                                               width,
+                                               height,
+                                               dwMinStride);
 
-        free_image_buffers(hChannel, out2ts);
-        if (!add_image_buffer(hChannel, dwImageSize))
-            return false;
-        if (!add_image_buffer(hChannel, dwImageSize))
-            return false;
+            frame_duration = videoSignalStatus.dwFrameDuration;
+            g_frame_ms = frame_duration / 10000;
 
-        out2ts.setVideoParams(videoSignalStatus.cx,
-                              videoSignalStatus.cy,
-                              videoSignalStatus.bInterlaced,
-                              time_base, frame_duration, frame_rate);
-
-
-        MWCAP_VIDEO_BUFFER_INFO videoBufferInfo;
-        if (MWGetVideoBufferInfo(hChannel, &videoBufferInfo) != MW_SUCCEEDED)
-        {
-            continue;
-        }
-
-        frame_wrap_idx = videoBufferInfo.cMaxFrames;
-
-        if(videoSignalStatus.bInterlaced)
-        {
-            notifyBufferMode = MWCAP_NOTIFY_VIDEO_FIELD_BUFFERED;
-            if (0 == videoBufferInfo.iBufferedFieldIndex)
-                mode = MWCAP_VIDEO_DEINTERLACE_TOP_FIELD;
+            AVRational frame_rate, time_base;
+            if (videoSignalStatus.bInterlaced == TRUE)
+            {
+                frame_rate = (AVRational){20000000LL, (int)frame_duration};
+                time_base = (AVRational){1, 20000000LL};
+            }
             else
-                mode = MWCAP_VIDEO_DEINTERLACE_BOTTOM_FIELD;
-        }
-        else
-        {
-            notifyBufferMode = MWCAP_NOTIFY_VIDEO_FRAME_BUFFERED;
-            mode = MWCAP_VIDEO_DEINTERLACE_BLEND;
+            {
+                frame_rate = (AVRational){10000000LL, (int)frame_duration};
+                time_base = (AVRational){1, 10000000LL};
+            }
+
+            // 100ns / frame_duration
+            if (verbose > 2)
+            {
+                cerr << "========\n";
+                double fps = (videoSignalStatus.bInterlaced == TRUE) ?
+                             (double)20000000LL / frame_duration :
+                             (double)10000000LL / frame_duration;
+                cerr << "Input signal resolution: " << width
+                     << "x" << height << "\n";
+                cerr << "Input signal fps: " << fps
+                     << "  " << frame_rate.num << "/" << frame_rate.den << "\n";
+                cerr << "Frame duration: " << frame_duration << "\n";
+                cerr << "Time base: " << time_base.num << "/" << time_base.den << "\n";
+                cerr << "Input signal interlaced: "
+                     << static_cast<bool>(videoSignalStatus.bInterlaced) << "\n";
+                cerr << "Input signal frame segmented: "
+                     << static_cast<bool>(videoSignalStatus.bSegmentedFrame) << "\n";
+                cerr << "========\n";
+            }
+
+            free_image_buffers(hChannel, out2ts);
+            if (!add_image_buffer(hChannel, dwImageSize))
+                return false;
+            if (!add_image_buffer(hChannel, dwImageSize))
+                return false;
+
+            out2ts.setVideoParams(width,
+                                  height,
+                                  videoSignalStatus.bInterlaced,
+                                  time_base, frame_duration, frame_rate);
+
+            if (MWGetVideoBufferInfo(hChannel, &videoBufferInfo) != MW_SUCCEEDED)
+            {
+                continue;
+            }
+
+            frame_wrap_idx = videoBufferInfo.cMaxFrames;
+
+            notify_mode = notify_changes;
+            if(videoSignalStatus.bInterlaced)
+            {
+                notify_mode |= MWCAP_NOTIFY_VIDEO_FIELD_BUFFERED;
+                if (0 == videoBufferInfo.iBufferedFieldIndex)
+                    mode = MWCAP_VIDEO_DEINTERLACE_TOP_FIELD;
+                else
+                    mode = MWCAP_VIDEO_DEINTERLACE_BOTTOM_FIELD;
+            }
+            else
+            {
+                notify_mode |= MWCAP_NOTIFY_VIDEO_FRAME_BUFFERED;
+                mode = MWCAP_VIDEO_DEINTERLACE_BLEND;
+            }
         }
 
-        notifyBufferMode |= MWCAP_NOTIFY_VIDEO_SAMPLING_PHASE_CHANGE |
-                            MWCAP_NOTIFY_VIDEO_SMPTE_TIME_CODE |
-                            MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE;
-
-        set_notify(notify_video, hChannel, hNotifyEvent, notifyBufferMode);
+        set_notify(notify_video, hChannel, hNotifyEvent, notify_mode);
 
         if (notify_video == 0)
         {
@@ -1159,7 +1177,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             return false;
         }
 
-        init_needed = false;
+        out2ts.VideoReady(true);
         frame_idx = -1;
         while (g_running.load() == true)
         {
@@ -1181,28 +1199,23 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
             if (notify_video & MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE)
             {
-                if (!init_needed)
-                {
-                    init_needed = true;
-                    cerr << "WARNING: Video signal CHANGED!\n";
-                }
-                this_thread::sleep_for(chrono::milliseconds(g_frame_ms));
-                set_notify(notify_video, hChannel, hNotifyEvent,
-                           notifyBufferMode);
-                continue;
+                cerr << "WARNING: Video signal CHANGED.\n";
+                g_reset.store(true);
+                this_thread::sleep_for(chrono::milliseconds(5));
+                break;
             }
 
             MWGetVideoSignalStatus(hChannel, &videoSignalStatus);
             if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
             {
+                cerr << "WARNING: Video signal lost lock.\n";
+                g_reset.store(true);
+                this_thread::sleep_for(chrono::milliseconds(5));
                 break;
             }
 
-            if (0 == (ullStatusBits & notifyBufferMode))
+            if (0 == (ullStatusBits & notify_mode))
                 continue;
-
-            if (init_needed)
-                break;
 
             if (MW_SUCCEEDED != MWGetVideoBufferInfo(hChannel,
                                                      &videoBufferInfo))
@@ -1267,8 +1280,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
                              0,
                              0,
                              dwFourcc,
-                             videoSignalStatus.cx,
-                             videoSignalStatus.cy);
+                             width,
+                             height);
 
             if (ret != MW_SUCCEEDED)
             {
