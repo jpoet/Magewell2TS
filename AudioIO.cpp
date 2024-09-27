@@ -331,8 +331,12 @@ int64_t AudioBuffer::Seek(int64_t offset, int whence)
     }
     else if (whence == SEEK_SET)
     {
-        cerr << "\n[" << m_id << "] AudioIO whence == SEEK_SET\n\n";
-        return -1;
+        // Basically rewind as much as we can and seek from there.
+        if (m_loop_cnt)
+            m_read = m_write;
+        else
+            m_read = m_begin;
+        desired = std::max(desired, static_cast<int64_t>(0));
     }
     else if (whence != SEEK_CUR)
         return -1;
@@ -543,10 +547,6 @@ bool AudioBuffer::open_spdif(void)
         return false;
     }
 
-#if 0 // av_probe_input_buffer saves the data?
-    Seek(-m_block_size * 8, SEEK_CUR);
-#endif
-
     std::unique_lock<std::mutex> lock(m_parent->m_codec_mutex);
 
     /* Find a decoder for the audio stream. */
@@ -560,6 +560,13 @@ bool AudioBuffer::open_spdif(void)
 
     m_codec_name = m_spdif_codec->name;
     m_channel_layout = AV_CHANNEL_LAYOUT_5POINT1;
+
+    /* The AVIO buffer is not timestamp aware, so discard it
+     */
+    avio_flush(m_spdif_avio_context);
+    avformat_flush(m_spdif_format_context);
+    /* Now make that data available again */
+    Seek(0, SEEK_SET);
 
     return true;
 }
