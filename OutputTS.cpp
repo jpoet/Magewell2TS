@@ -595,6 +595,7 @@ void OutputTS::setVideoParams(int width, int height, bool interlaced,
 
 OutputTS::~OutputTS(void)
 {
+    m_audioIO.SetEoF();
     m_running.store(false);
 
     if (m_image_ready_thread.joinable())

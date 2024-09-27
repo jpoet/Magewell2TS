@@ -12,6 +12,7 @@ extern "C" {
 #include <mutex>
 #include <condition_variable>
 #include <thread>
+#include <atomic>
 
 class AudioIO;
 
@@ -49,8 +50,7 @@ class AudioBuffer
     bool LPCM(void) const { return m_lpcm; }
     int SampleRate(void) const { return m_sample_rate; }
     int BytesPerSample(void) const { return m_bytes_per_sample; }
-
-//        int64_t TimeStamp(void) const { return m_timestamp; }
+    int FrameSize(void) const { return m_frame_size; }
 
   private:
     bool open_spdif_context(void);
@@ -107,7 +107,8 @@ class AudioIO
 
   public:
     AudioIO(int verbose = 0);
-    ~AudioIO(void) { ; }
+    ~AudioIO(void) { m_running.store(false); }
+    void SetEoF(void);
 
     void AddBuffer(uint8_t* Pbegin, uint8_t* Pend,
                    int num_channels, bool is_lpcm,
@@ -153,6 +154,7 @@ class AudioIO
 
     int              m_buf_id           {0};
     int              m_verbose          {1};
+    std::atomic<bool> m_running         {true};
 };
 
 #endif

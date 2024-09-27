@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <iostream>
 #include <stdio.h>
+#include <iomanip>
 
 using namespace std;
 
@@ -96,6 +97,7 @@ AudioBuffer::~AudioBuffer(void)
 {
     if (m_own_buffer)
     {
+        m_EoF = true;
         if (m_detect_thread.joinable())
             m_detect_thread.join();
         delete[] m_begin;
@@ -150,8 +152,8 @@ void AudioBuffer::PrintPointers(const string & where, bool force) const
         cerr << loc
              << "begin: " << (uint64_t)(m_begin)
              << ", end : " << (size_t)(m_end - m_begin)
-             << ", write : " << (size_t)(m_write - m_begin)
-             << ", read : " << (size_t)(m_read - m_begin)
+             << ", write : " << std::setw(6) << (size_t)(m_write - m_begin)
+             << ", read : " << std::setw(6) << (size_t)(m_read - m_begin)
              << ", frame sz: " << m_frame_size
              << ", wrapped: " << (m_write_wrapped ? "Yes, " : "No, ")
              << (m_lpcm ? " LPCM" : " bistream")
@@ -602,6 +604,13 @@ AudioIO::AudioIO(int verbose)
 {
 }
 
+void AudioIO::SetEoF(void)
+{
+    buffer_que_t::iterator Ibuf;
+    for (Ibuf = m_buffer_q.begin(); Ibuf != m_buffer_q.end(); ++Ibuf)
+        (*Ibuf).setEoF();
+}
+
 void AudioIO::AddBuffer(uint8_t* Pbegin, uint8_t* Pend,
                         int num_channels, bool is_lpcm,
                         int bytes_per_sample, int sample_rate,
@@ -631,7 +640,7 @@ void AudioIO::AddBuffer(uint8_t* Pbegin, uint8_t* Pend,
 bool AudioIO::WaitForReady(void)
 {
     // Wait for codecs to be detected.
-    for (;;)
+    while (m_running.load() == true)
     {
         m_buffer_mutex.lock();
         while (m_buffer_q.size() > 1 && m_buffer_q.front().Empty())
