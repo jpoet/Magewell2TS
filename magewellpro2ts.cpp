@@ -70,6 +70,7 @@
 
 using namespace std;
 
+int               g_verbose   = 1;
 std::atomic<bool> g_running(true);
 std::atomic<bool> g_reset(false);
 int  g_frame_ms = 17;
@@ -91,7 +92,7 @@ int get_id(char c)
     return 0;
 }
 
-HCHANNEL open_channel(int verbose, int devIndex, double boardId)
+HCHANNEL open_channel(int devIndex, double boardId)
 {
     HCHANNEL hChannel = nullptr;
     int nChannelCount = MWGetChannelCount();
@@ -128,7 +129,7 @@ HCHANNEL open_channel(int verbose, int devIndex, double boardId)
         return nullptr;
     }
 
-    if (verbose > 0)
+    if (g_verbose > 0)
         cerr << "Found " << proDevCount << " pro inputs. ";
 
     // Get <board id > <channel id> or <channel index>
@@ -144,7 +145,7 @@ HCHANNEL open_channel(int verbose, int devIndex, double boardId)
 
     if (hChannel == nullptr)
     {
-        if (verbose > 0)
+        if (g_verbose > 0)
         {
             cerr << "Error: Failed to open ";
             if (boardId >= 0)
@@ -155,7 +156,7 @@ HCHANNEL open_channel(int verbose, int devIndex, double boardId)
         exit(2);
     }
 
-    if (verbose > 0)
+    if (g_verbose > 0)
     {
         cerr << "Opened ";
         if (boardId >= 0)
@@ -703,7 +704,6 @@ void* audio_capture(void* param1, int param2, void* param3)
     uint64_t audio_frame_rate = 0LL;
 
     HCHANNEL* channel_handle = reinterpret_cast<HCHANNEL* >(param1);
-    int       verbose        = param2;
     OutputTS* out2ts         = reinterpret_cast<OutputTS* >(param3);
 
     uint8_t* capture_buf     = nullptr;
@@ -739,7 +739,7 @@ void* audio_capture(void* param1, int param2, void* param3)
         goto audio_capture_stoped;
     }
 
-    if (verbose > 1)
+    if (g_verbose > 1)
         cerr << "Audio capture starting\n";
 
     notify_audio  = MWRegisterNotify(channel_handle, notify_event,
@@ -763,7 +763,7 @@ void* audio_capture(void* param1, int param2, void* param3)
         if (MW_SUCCEEDED != MWGetAudioSignalStatus(channel_handle,
                                                    &audio_signal_status))
         {
-            if (err_cnt++ % 50 == 0)
+            if (err_cnt++ % 50 == 0 && g_verbose > 0)
                 cerr << "WARNING (cnt: " << err_cnt
                      << ") can't get audio signal status\n";
             this_thread::sleep_for(chrono::milliseconds(g_frame_ms));
@@ -772,7 +772,7 @@ void* audio_capture(void* param1, int param2, void* param3)
 
         if (!audio_signal_status.wChannelValid)
         {
-            if (err_cnt++ % 50 == 0)
+            if (err_cnt++ % 50 == 0 && g_verbose > 0)
                 cerr << "WARNING (cnt: " << err_cnt
                      << ") can't get audio, signal is invalid\n";
 
@@ -801,7 +801,7 @@ void* audio_capture(void* param1, int param2, void* param3)
 
             if (0 == cur_channels)
             {
-                if (err_cnt++ % 25 == 0)
+                if (err_cnt++ % 25 == 0 && g_verbose > 0)
                     cerr << "WARNING [" << err_cnt
                          << "] Invalid audio channel count: "
                          << cur_channels << endl;
@@ -850,7 +850,7 @@ void* audio_capture(void* param1, int param2, void* param3)
         {
             if (MWWaitEvent(notify_event, 1000) <= 0)
             {
-                if (verbose > 1)
+                if (g_verbose > 1)
                     cerr << "Audio wait notify error or timeout\n";
                 continue;
             }
@@ -862,21 +862,24 @@ void* audio_capture(void* param1, int param2, void* param3)
 
             if (notify_status & MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE)
             {
-                cerr << "WARNING: Audio signal CHANGED!\n";
+                if (g_verbose > 0)
+                    cerr << "WARNING: Audio signal CHANGED!\n";
                 this_thread::sleep_for(chrono::milliseconds(g_frame_ms));
                 break;
             }
 
             if (notify_status & MWCAP_NOTIFY_AUDIO_INPUT_RESET)
             {
-                cerr << "WARNING: Audio input RESET!\n";
+                if (g_verbose > 0)
+                    cerr << "WARNING: Audio input RESET!\n";
                 this_thread::sleep_for(chrono::milliseconds(g_frame_ms));
                 break;
             }
 
             if (notify_status & MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO)
             {
-                cerr << "WARNING: Audio HDMI INFOFRAME AUDIO!\n";
+                if (g_verbose > 0)
+                    cerr << "WARNING: Audio HDMI INFOFRAME AUDIO!\n";
             }
 
             if (!(notify_status & MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED))
@@ -1010,7 +1013,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
                         HNOTIFY   notify_video,
                         MWCAP_PTR hNotifyEvent,
                         MWCAP_PTR hCaptureEvent,
-                        int       verbose,
                         OutputTS & out2ts)
 {
     MWCAP_VIDEO_DEINTERLACE_MODE mode;
@@ -1073,18 +1075,22 @@ bool video_capture_loop(HCHANNEL  hChannel,
         switch (videoSignalStatus.state)
         {
             case MWCAP_VIDEO_SIGNAL_NONE:
-              cerr << "WARNING: Input signal status: NONE\n";
+              if (g_verbose > 0)
+                  cerr << "WARNING: Input signal status: NONE\n";
               this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 5));
               continue;
             case MWCAP_VIDEO_SIGNAL_LOCKING:
-              cerr << "WARNING: Input signal status: Locking\n";
+              if (g_verbose > 0)
+                  cerr << "WARNING: Input signal status: Locking\n";
               this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 5));
               continue;
             case MWCAP_VIDEO_SIGNAL_LOCKED:
-              cerr << "Input signal status: Locked\n";
+              if (g_verbose > 0)
+                  cerr << "Input signal status: Locked\n";
               break;
             default:
-              cerr << "WARNING: Video signal not locked.\n";
+              if (g_verbose > 0)
+                  cerr << "WARNING: Video signal not locked.\n";
               this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 5));
               continue;
         }
@@ -1121,7 +1127,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             }
 
             // 100ns / frame_duration
-            if (verbose > 2)
+            if (g_verbose > 2)
             {
                 cerr << "========\n";
                 double fps = (interlaced) ?
@@ -1179,7 +1185,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
         if (notify_video == 0)
         {
-            if (verbose > 0)
+            if (g_verbose > 0)
                 cerr << "WARNING: Register Notify error.\n";
             return false;
         }
@@ -1191,7 +1197,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
         {
             if (MWWaitEvent(hNotifyEvent, 1000) <= 0)
             {
-                if (verbose > 0)
+                if (g_verbose > 0)
                     cerr << "Video wait notify error or timeout\n";
                 continue;
             }
@@ -1200,14 +1206,15 @@ bool video_capture_loop(HCHANNEL  hChannel,
             if (MW_SUCCEEDED != MWGetNotifyStatus(hChannel, notify_video,
                                                   &ullStatusBits))
             {
-                if (verbose > 0)
+                if (g_verbose > 0)
                     cerr << "WARNING: Failed to get Notify status.\n";
                 continue;
             }
 
             if (notify_video & MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE)
             {
-                cerr << "WARNING: Video signal CHANGED.\n";
+                if (g_verbose > 0)
+                    cerr << "WARNING: Video signal CHANGED.\n";
                 this_thread::sleep_for(chrono::milliseconds(5));
                 g_reset.store(true);
                 break;
@@ -1216,7 +1223,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
             MWGetVideoSignalStatus(hChannel, &videoSignalStatus);
             if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
             {
-                cerr << "WARNING: Video signal lost lock.\n";
+                if (g_verbose > 0)
+                    cerr << "WARNING: Video signal lost lock.\n";
                 this_thread::sleep_for(chrono::milliseconds(5));
                 g_reset.store(true);
                 break;
@@ -1228,7 +1236,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             if (MW_SUCCEEDED != MWGetVideoBufferInfo(hChannel,
                                                      &videoBufferInfo))
             {
-                if (verbose > 0)
+                if (g_verbose > 0)
                     cerr << "WARNING: Failed to get video buffer info.\n";
                 continue;
             }
@@ -1241,19 +1249,21 @@ bool video_capture_loop(HCHANNEL  hChannel,
             {
                 if (frame_idx == videoBufferInfo.iNewestBufferedFullFrame)
                 {
-                    cerr << "WARNING: Already processed MW video buffer "
-                         << frame_idx << " -- Skipping\n";
+                    if (g_verbose > 0)
+                        cerr << "WARNING: Already processed MW video buffer "
+                             << frame_idx << " -- Skipping\n";
                     continue;
                 }
                 if (++frame_idx == frame_wrap_idx)
                     frame_idx = 0;
                 if (frame_idx != videoBufferInfo.iNewestBufferedFullFrame)
                 {
-                    cerr << "WARNING: Expected MW video buffer " << frame_idx
-                         << " but current is "
-                         << (int)videoBufferInfo.iNewestBufferedFullFrame
-                         << ". Frame lost."
-                         << endl;
+                    if (g_verbose > 0)
+                        cerr << "WARNING: Expected MW video buffer " << frame_idx
+                             << " but current is "
+                             << (int)videoBufferInfo.iNewestBufferedFullFrame
+                             << ". Frame lost."
+                             << endl;
                     frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
                 }
             }
@@ -1261,7 +1271,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             if (MWGetVideoFrameInfo(hChannel, frame_idx,
                                     &videoFrameInfo) != MW_SUCCEEDED)
             {
-                if (verbose > 0)
+                if (g_verbose > 0)
                     cerr << "WARNING: Failed to get video frame info.\n";
                 continue;
             }
@@ -1272,7 +1282,9 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 image_buffer_mutex.unlock();
                 add_image_buffer(hChannel, dwImageSize);
                 image_buffer_mutex.lock();
-                cerr << "WARNING: video encoder is " << ++buffer_cnt << " frames behind.\n";
+                if (g_verbose > 0)
+                    cerr << "WARNING: video encoder is "
+                         << ++buffer_cnt << " frames behind.\n";
             }
 
             pbImage = avail_image_buffers.front();
@@ -1297,7 +1309,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
             }
             if (MWWaitEvent(hCaptureEvent, 1000) <= 0)
             {
-                cerr << "WARNING: wait capture event error or timeout\n";
+                if (g_verbose > 0)
+                    cerr << "WARNING: wait capture event error or timeout\n";
                 break;
             }
 
@@ -1317,16 +1330,16 @@ bool video_capture_loop(HCHANNEL  hChannel,
     return true;
 }
 
-bool video_capture(HCHANNEL hChannel, int verbose, OutputTS & out2ts)
+bool video_capture(HCHANNEL hChannel, OutputTS & out2ts)
 {
-    HNOTIFY   notify_video       = 0;
+    HNOTIFY   notify_video  = 0;
     MWCAP_PTR hNotifyEvent  = 0;
     MWCAP_PTR hCaptureEvent = 0;
 
     hCaptureEvent = MWCreateEvent();
     if (hCaptureEvent == 0)
     {
-        if (verbose > 0)
+        if (g_verbose > 0)
             cerr << "ERROR: Create timer event error\n";
         return false;
     }
@@ -1334,26 +1347,26 @@ bool video_capture(HCHANNEL hChannel, int verbose, OutputTS & out2ts)
     hNotifyEvent = MWCreateEvent();
     if (hNotifyEvent == 0)
     {
-        if (verbose > 0)
+        if (g_verbose > 0)
             cerr << "ERROR: Create notify event error\n";
         return false;
     }
 
     if (MW_SUCCEEDED != MWStartVideoCapture(hChannel, hCaptureEvent))
     {
-        if (verbose > 0)
+        if (g_verbose > 0)
             cerr << "ERROR: Start Video Capture error!\n";
         return false;
     }
 
     video_capture_loop(hChannel, notify_video,
                        hNotifyEvent, hCaptureEvent,
-                       verbose, out2ts);
+                       out2ts);
 
     MWUnregisterNotify(hChannel, notify_video);
     notify_video=0;
     MWStopVideoCapture(hChannel);
-    if (verbose > 2)
+    if (g_verbose > 2)
         cerr << "\nStop capture\n";
 
     if(hNotifyEvent != 0)
@@ -1371,19 +1384,19 @@ bool video_capture(HCHANNEL hChannel, int verbose, OutputTS & out2ts)
     return true;
 }
 
-bool capture(HCHANNEL channel_handle, int verbose,
+bool capture(HCHANNEL channel_handle,
              OutputTS & out2ts, bool no_audio)
 {
 
     MWCAP_CHANNEL_INFO channel_info;
     MWRefreshDevice();
     if (MW_SUCCEEDED != MWGetChannelInfo(channel_handle, &channel_info)) {
-        if (verbose > 0)
+        if (g_verbose > 0)
             cerr << "ERROR: Can't get channel info!\n";
         return false;
     }
 
-    if (verbose > 1)
+    if (g_verbose > 1)
     {
         cerr << "Open channel - BoardIndex = "
              << channel_info.byBoardIndex << ", "
@@ -1403,10 +1416,10 @@ bool capture(HCHANNEL channel_handle, int verbose,
     if (!no_audio)
     {
         audio_thr = thread(audio_capture, channel_handle,
-                                verbose, &out2ts);
+                                g_verbose, &out2ts);
     }
 
-    video_capture(channel_handle, verbose, out2ts);
+    video_capture(channel_handle, out2ts);
 
     if (!no_audio)
     {
@@ -1598,7 +1611,7 @@ void display_volume(HCHANNEL channel_handle)
     }
 }
 
-void save_volume(HCHANNEL channel_handle, int verbose, int volume_level)
+void save_volume(HCHANNEL channel_handle, int volume_level)
 {
     MWCAP_AUDIO_VOLUME volume;
     _MWCAP_AUDIO_NODE  node = MWCAP_AUDIO_EMBEDDED_CAPTURE;
@@ -1612,7 +1625,7 @@ void save_volume(HCHANNEL channel_handle, int verbose, int volume_level)
 
     MWSetAudioVolume(channel_handle, node, &volume);
 
-    if (verbose > 0)
+    if (g_verbose > 0)
         cerr << "Volume set to " << volume_level << " for all channels.\n";
 }
 
@@ -1705,7 +1718,6 @@ int main(int argc, char* argv[])
     string      edid_file;
     string      video_codec = "hevc_nvenc";
     string      device      = "renderD128";
-    int         verbose     = 1;
 
     bool        get_volume  = false;
     int         set_volume  = -1;
@@ -1811,10 +1823,10 @@ int main(int argc, char* argv[])
         else if (*iter == "-v" || *iter == "--verbose")
         {
             if (iter + 1 == args.end())
-                verbose = 1;
+                g_verbose = 1;
             else
             {
-                if (!string_to_int(*(++iter), verbose, "verbose"))
+                if (!string_to_int(*(++iter), g_verbose, "verbose"))
                     exit(1);
             }
         }
@@ -1837,15 +1849,14 @@ int main(int argc, char* argv[])
     if (devIndex < 1)
         return 0;
 
-    HCHANNEL channel_handle = open_channel(verbose, devIndex - 1,
-                                           boardId);
+    HCHANNEL channel_handle = open_channel(devIndex - 1, boardId);
     if (channel_handle == nullptr)
         return -1;
 
     if (get_volume)
         display_volume(channel_handle);
     if (set_volume >= 0)
-        save_volume(channel_handle, verbose, set_volume);
+        save_volume(channel_handle, set_volume);
 
     if (!edid_file.empty())
     {
@@ -1857,11 +1868,11 @@ int main(int argc, char* argv[])
 
     if (do_capture)
     {
-        OutputTS out2ts(verbose, video_codec, preset, quality,
+        OutputTS out2ts(g_verbose, video_codec, preset, quality,
                         look_ahead, no_audio,
                         device, image_buffer_available);
 
-        if (!capture(channel_handle, verbose, out2ts, no_audio))
+        if (!capture(channel_handle, out2ts, no_audio))
             return -1;
     }
 

@@ -25,6 +25,7 @@ class OutputTS
              MagCallback image_buffer_avail);
     ~OutputTS(void);
 
+    void Shutdown(void);
     void AudioReady(bool val);
     void VideoReady(bool val);
 
@@ -118,25 +119,23 @@ class OutputTS
     int have_video {0};
     int have_audio {0};
 
-    std::string      m_filename                   {"pipe:1"};
+    std::string      m_filename               {"pipe:1"};
 
-    bool             m_error                {false};
-
-    bool             m_no_audio             {false};
+    bool             m_no_audio               {false};
 
     std::string      m_video_codec_name;
     std::string      m_device;
     std::string      m_preset;
-    int              m_quality                 {-1};
-    int              m_look_ahead              {-1};
-    int              m_input_width             {1280};
-    int              m_input_height            {720};
-    double           m_input_frame_duration    {0};
-    int              m_input_frame_wait_ms     {17};
-    AVRational       m_input_frame_rate        {10000000, 166817};
-    AVRational       m_input_time_base         {1, 10000000};
+    int              m_quality                {-1};
+    int              m_look_ahead             {-1};
+    int              m_input_width            {1280};
+    int              m_input_height           {720};
+    double           m_input_frame_duration   {0};
+    int              m_input_frame_wait_ms    {17};
+    AVRational       m_input_frame_rate       {10000000, 166817};
+    AVRational       m_input_time_base        {1, 10000000};
 
-    bool             m_interlaced              {false};
+    bool             m_interlaced             {false};
 
     int              m_verbose;
 

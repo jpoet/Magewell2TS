@@ -121,7 +121,7 @@ void AudioBuffer::OwnBuffer(void)
         m_detect_thread = std::thread(&AudioBuffer::detect_codec, this);
 
     PrintPointers("OwnBuffer");
-    PrintState("OwnBuffer", true);
+    PrintState("OwnBuffer");
 }
 
 void AudioBuffer::PrintState(const string & where, bool force) const
@@ -589,7 +589,7 @@ void AudioBuffer::detect_codec(void)
         m_parent->m_codec_ready = true;
         m_parent->m_codec_mutex.unlock();
         m_parent->m_codec_cond.notify_one();
-        PrintState("SPDIF", true);
+        PrintState("SPDIF");
     }
 }
 

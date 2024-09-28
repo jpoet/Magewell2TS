@@ -122,7 +122,8 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     else
     {
         m_encoderType = EncoderType::UNKNOWN;
-        cerr << "'" << m_video_codec_name << "' not supported.\n";
+        cerr << "ERROR: '" << m_video_codec_name << "' not supported.\n";
+        Shutdown();
     }
 
 #if 0
@@ -131,13 +132,19 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
                                    NULL, "mpegts", m_filename.c_str());
     if (!m_output_format_context)
     {
-        cerr << "Could not create output format context.\n";
-        m_error = true;
+        cerr << "ERROR: Could not create output format context.\n";
+        Shutdown();
     }
 #endif
 
     if (m_no_audio)
         m_audio_ready = true;
+}
+
+void OutputTS::Shutdown(void)
+{
+    m_audioIO.SetEoF();
+    m_running.store(false);
 }
 
 /* Add an output stream. */
@@ -198,17 +205,17 @@ void OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
           if (ost->enc->codec->capabilities & AV_CODEC_CAP_SLICE_THREADS)
           {
               ost->enc->thread_type = FF_THREAD_SLICE;
-              if (m_verbose > 0)
+              if (m_verbose > 1)
                   cerr << " Audio = THREAD SLICE\n";
           }
           else if (ost->enc->codec->capabilities & AV_CODEC_CAP_FRAME_THREADS)
           {
               ost->enc->thread_type = FF_THREAD_FRAME;
-              if (m_verbose > 0)
+              if (m_verbose > 1)
                   cerr << " Audio = THREAD FRAME\n";
           }
 
-          if (m_verbose > 2)
+          if (m_verbose > 1)
           {
               cerr << "Audio time base " << ost->st->time_base.num << "/"
                    << ost->st->time_base.den << "\n";
@@ -244,17 +251,17 @@ void OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
           if (ost->enc->codec->capabilities & AV_CODEC_CAP_SLICE_THREADS)
           {
               ost->enc->thread_type = FF_THREAD_SLICE;
-              if (m_verbose > 0)
+              if (m_verbose > 1)
                   cerr << " Video = THREAD SLICE\n";
           }
           else if (ost->enc->codec->capabilities & AV_CODEC_CAP_FRAME_THREADS)
           {
               ost->enc->thread_type = FF_THREAD_FRAME;
-              if (m_verbose > 0)
+              if (m_verbose > 1)
                   cerr << " Video = THREAD FRAME\n";
           }
 
-          if (m_verbose > 2)
+          if (m_verbose > 1)
           {
               cerr << "Output stream< Video: " << ost->enc->width
                    << "x" << ost->enc->height
@@ -320,9 +327,9 @@ bool OutputTS::open_audio(void)
 
     if (!audio_codec)
     {
-        cerr << "Could not find audio encoder for '"
+        cerr << "ERROR: Could not find audio encoder for '"
              << m_audioIO.CodecName() << "'\n";
-        m_error = true;
+        Shutdown();
         return false;
     }
 
@@ -347,10 +354,13 @@ bool OutputTS::open_audio(void)
     else
         nb_samples = enc_ctx->frame_size;
 
-    ost->frame     = alloc_audio_frame(enc_ctx->sample_fmt, &enc_ctx->ch_layout,
-                                      enc_ctx->sample_rate, nb_samples);
+    ost->frame = alloc_audio_frame(enc_ctx->sample_fmt, &enc_ctx->ch_layout,
+                                   enc_ctx->sample_rate, nb_samples);
     if (ost->frame == nullptr)
-        m_error = true;
+    {
+        Shutdown();
+        return false;
+    }
 
     if (m_audioIO.BytesPerSample() == 4)
         ost->tmp_frame = alloc_audio_frame(AV_SAMPLE_FMT_S32,
@@ -362,7 +372,10 @@ bool OutputTS::open_audio(void)
                                            enc_ctx->sample_rate, nb_samples);
 
     if (ost->tmp_frame == nullptr)
-        m_error = true;
+    {
+        Shutdown();
+        return false;
+    }
 
     /* copy the stream parameters to the muxer */
     ret = avcodec_parameters_from_context(ost->st->codecpar, enc_ctx);
@@ -432,9 +445,9 @@ bool OutputTS::open_video(void)
     }
     else
     {
-        cerr << "WARNING: Could not find video encoder for '"
+        cerr << "ERROR: Could not find video encoder for '"
              << m_video_codec_name << "'\n";
-        m_error = true;
+        Shutdown();
         return false;
     }
 
@@ -460,8 +473,7 @@ bool OutputTS::open_video(void)
               exit(1);
           break;
         default:
-          cerr << "WARNING: Could not determine video encoder type.\n";
-          m_error = true;
+          cerr << "ERROR: Could not determine video encoder type.\n";
           exit(1);
     }
 
@@ -508,7 +520,8 @@ bool OutputTS::open_container(void)
                                    NULL, "mpegts", m_filename.c_str());
     if (!m_output_format_context)
     {
-        cerr << "Could not create output format context.\n";
+        cerr << "ERROR: Could not create output format context.\n";
+        Shutdown();
         return false;
     }
 
@@ -525,9 +538,9 @@ bool OutputTS::open_container(void)
         ret = avio_open(&m_output_format_context->pb,
                         m_filename.c_str(), AVIO_FLAG_WRITE);
         if (ret < 0) {
-            cerr << "WARNING: Could not open '" << m_filename << "': "
+            cerr << "ERROR: Could not open '" << m_filename << "': "
                  << AVerr2str(ret) << endl;
-            m_error = true;
+            Shutdown();
             return false;
         }
     }
@@ -536,9 +549,9 @@ bool OutputTS::open_container(void)
     ret = avformat_write_header(m_output_format_context, &opt);
     if (ret < 0)
     {
-        cerr << "WARNING: Could not open output file: %s\n"
+        cerr << "ERROR: Could not open output file: %s\n"
              << AVerr2str(ret) << endl;
-        m_error = true;
+        Shutdown();
         return false;
     }
 
@@ -558,7 +571,7 @@ void OutputTS::setAudioParams(uint8_t* capture_buf, size_t capture_buf_size,
                         timestamps);
 
     AudioReady(true);
-    if (m_verbose > 1)
+    if (m_verbose > 0)
         cerr << "setAudioParams " << (is_lpcm ? "LPCM" : "Bitstream") << endl;
 }
 
@@ -576,7 +589,7 @@ void OutputTS::setVideoParams(int width, int height, bool interlaced,
 
     double fps = static_cast<double>(frame_rate.num) / frame_rate.den;
 
-    if (m_verbose > 1)
+    if (m_verbose > 0)
     {
         cerr << "Video: " << width << "x" << height
              << " fps: " << fps
@@ -598,8 +611,7 @@ void OutputTS::setVideoParams(int width, int height, bool interlaced,
 
 OutputTS::~OutputTS(void)
 {
-    m_audioIO.SetEoF();
-    m_running.store(false);
+    Shutdown();
 
     if (m_image_ready_thread.joinable())
         m_image_ready_thread.join();
@@ -754,7 +766,7 @@ AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
                    frame->nb_samples * m_audioIO.BytesPerSample();
     if (m_audioIO.Size() < bytes)
     {
-        if (m_verbose > 5)
+        if (m_verbose > 4)
             cerr << "Not enough audio data.\n";
         return nullptr;
     }
@@ -901,7 +913,7 @@ AVFrame* OutputTS::alloc_picture(enum AVPixelFormat pix_fmt,
     if (ret < 0)
     {
         const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(pix_fmt);
-        cerr << "WARNING: Could not allocate " << desc->name
+        cerr << "ERROR: Could not allocate " << desc->name
              << " video frame of " << width << "x" << height
              << " : " << AV_ts2str(ret) << endl;
         return nullptr;
@@ -949,9 +961,9 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
     av_dict_free(&opt);
     if (ret < 0)
     {
-        cerr << "WARNING: Could not open video codec: "
+        cerr << "ERROR: Could not open video codec: "
              << AVerr2str(ret) << "\n";
-        m_error = true;
+        Shutdown();
         return false;
     }
 
@@ -959,8 +971,8 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
     ost->frame = alloc_picture(ctx->pix_fmt, ctx->width, ctx->height);
     if (!ost->frame)
     {
-        cerr << "WARNING: Could not allocate NVIDIA video frame\n";
-        m_error = true;
+        cerr << "ERROR: Could not allocate NVIDIA video frame\n";
+        Shutdown();
         return false;
     }
 
@@ -974,8 +986,8 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
                                        ctx->width, ctx->height);
         if (!ost->tmp_frame)
         {
-            cerr << "WARNING: Could not allocate temporary picture." << endl;
-            m_error = true;
+            cerr << "ERROR: Could not allocate temporary picture." << endl;
+            Shutdown();
             return false;
         }
     }
@@ -984,8 +996,8 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
     ret = avcodec_parameters_from_context(ost->st->codecpar, ctx);
     if (ret < 0)
     {
-        cerr << "WARNING: Could not copy the stream parameters." << endl;
-        m_error = true;
+        cerr << "ERROR: Could not copy the stream parameters." << endl;
+        Shutdown();
         return false;
     }
 
@@ -1029,7 +1041,7 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     {
         cerr << "ERROR: Failed to create a VAAPI device. Error code: "
              << AVerr2str(ret) << endl;
-        m_error = true;
+        Shutdown();
         return false;
     }
 
@@ -1039,8 +1051,8 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     /* set hw_frames_ctx for encoder's AVCodecContext */
     if (!(hw_frames_ref = av_hwframe_ctx_alloc(ost->hw_device_ctx)))
     {
-        cerr << "WARNING: Failed to create VAAPI frame context.\n";
-        m_error = true;
+        cerr << "ERROR: Failed to create VAAPI frame context.\n";
+        Shutdown();
         return false;
     }
     frames_ctx = reinterpret_cast<AVHWFramesContext* >(hw_frames_ref->data);
@@ -1051,29 +1063,29 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     frames_ctx->initial_pool_size = 20;
     if ((ret = av_hwframe_ctx_init(hw_frames_ref)) < 0)
     {
-        cerr << "WARNING: Failed to initialize VAAPI frame context."
+        cerr << "ERROR: Failed to initialize VAAPI frame context."
              << "Error code: " << AVerr2str(ret) << endl;
         av_buffer_unref(&hw_frames_ref);
-        m_error = true;
+        Shutdown();
         return false;
     }
     ctx->hw_frames_ctx = av_buffer_ref(hw_frames_ref);
     if (!ctx->hw_frames_ctx)
     {
         ret = AVERROR(ENOMEM);
-        cerr << "WARNING: Failed to allocate hw frame buffer. "
+        cerr << "ERROR: Failed to allocate hw frame buffer. "
              << "Error code: " << AVerr2str(ret) << endl;
         av_buffer_unref(&hw_frames_ref);
-        m_error = true;
+        Shutdown();
         return false;
     }
     av_buffer_unref(&hw_frames_ref);
 
     if ((ret = avcodec_open2(ctx, codec, &opt)) < 0)
     {
-        cerr << "WARNING: Cannot open VAAPI video encoder codec. Error code: "
+        cerr << "ERROR: Cannot open VAAPI video encoder codec. Error code: "
              << AVerr2str(ret) << endl;
-        m_error = true;
+        Shutdown();
         return false;
     }
 
@@ -1082,8 +1094,8 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
                                frames_ctx->width, frames_ctx->height);
     if (!ost->frame)
     {
-        cerr << "WARNING: Could not allocate VAAPI video frame\n";
-        m_error = true;
+        cerr << "ERROR: Could not allocate VAAPI video frame\n";
+        Shutdown();
         return false;
     }
 
@@ -1091,8 +1103,8 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     ret = avcodec_parameters_from_context(ost->st->codecpar, ctx);
     if (ret < 0)
     {
-        cerr << "WARNING: Could not copy the VAAPI stream parameters." << endl;
-        m_error = true;
+        cerr << "ERROR: Could not copy the VAAPI stream parameters." << endl;
+        Shutdown();
         return false;
     }
 
@@ -1149,7 +1161,7 @@ bool OutputTS::open_qsv(const AVCodec* codec,
                                       AV_HWDEVICE_TYPE_QSV,
                                       m_device.c_str(), opt, 0)) != 0)
     {
-        cerr << "WARNING: Failed to open QSV on " << m_device << "\n";
+        cerr << "ERROR: Failed to open QSV on " << m_device << "\n";
         return false;
     }
 
@@ -1159,8 +1171,8 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     /* set hw_frames_ctx for encoder's AVCodecContext */
     if (!(hw_frames_ref = av_hwframe_ctx_alloc(ost->hw_device_ctx)))
     {
-        cerr << "WARNING: Failed to create QSV frame context.\n";
-        m_error = true;
+        cerr << "ERROR: Failed to create QSV frame context.\n";
+        Shutdown();
         return false;
     }
     frames_ctx = reinterpret_cast<AVHWFramesContext* >(hw_frames_ref->data);
@@ -1171,29 +1183,29 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     frames_ctx->initial_pool_size = 20;
     if ((ret = av_hwframe_ctx_init(hw_frames_ref)) < 0)
     {
-        cerr << "WARNING: Failed to initialize QSV frame context."
+        cerr << "ERROR: Failed to initialize QSV frame context."
              << "Error code: " << AVerr2str(ret) << endl;
         av_buffer_unref(&hw_frames_ref);
-        m_error = true;
+        Shutdown();
         return false;
     }
     ctx->hw_frames_ctx = av_buffer_ref(hw_frames_ref);
     if (!ctx->hw_frames_ctx)
     {
         ret = AVERROR(ENOMEM);
-        cerr << "WARNING: Failed to allocate hw frame buffer. "
+        cerr << "ERROR: Failed to allocate hw frame buffer. "
              << "Error code: " << AVerr2str(ret) << endl;
         av_buffer_unref(&hw_frames_ref);
-        m_error = true;
+        Shutdown();
         return false;
     }
     av_buffer_unref(&hw_frames_ref);
 
     if ((ret = avcodec_open2(ctx, codec, &opt)) < 0)
     {
-        cerr << "WARNING: Cannot open QSV video encoder codec. Error code: "
+        cerr << "ERROR: Cannot open QSV video encoder codec. Error code: "
              << AVerr2str(ret) << endl;
-        m_error = true;
+        Shutdown();
         return false;
     }
 
@@ -1202,8 +1214,8 @@ bool OutputTS::open_qsv(const AVCodec* codec,
                                frames_ctx->width, frames_ctx->height);
     if (!ost->frame)
     {
-        cerr << "WARNING: Could not allocate QSV video frame\n";
-        m_error = true;
+        cerr << "ERROR: Could not allocate QSV video frame\n";
+        Shutdown();
         return false;
     }
 
@@ -1211,8 +1223,8 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     ret = avcodec_parameters_from_context(ost->st->codecpar, ctx);
     if (ret < 0)
     {
-        cerr << "WARNING: Could not copy the stream parameters." << endl;
-        m_error = true;
+        cerr << "ERROR: Could not copy the stream parameters." << endl;
+        Shutdown();
         return false;
     }
 
@@ -1271,33 +1283,33 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
 
     if (!(hw_frame = av_frame_alloc()))
     {
-        cerr << "WARNING: Failed to allocate hw frame.";
-        m_error = true;
+        cerr << "ERROR: Failed to allocate hw frame.";
+        Shutdown();
         return false;
     }
 
     if ((ret = av_hwframe_get_buffer(enc_ctx->hw_frames_ctx,
                                      hw_frame, 0)) < 0)
     {
-        cerr << "WARNING: Failed to get hw buffer: "
+        cerr << "ERROR: Failed to get hw buffer: "
              << AV_ts2str(ret) << endl;
-        m_error = true;
+        Shutdown();
         return false;
     }
 
     if (!hw_frame->hw_frames_ctx)
     {
-        cerr << "WARNING: Failed to allocate hw frame CTX.\n";
-        m_error = true;
+        cerr << "ERROR: Failed to allocate hw frame CTX.\n";
+        Shutdown();
         return false;
     }
 
     if ((ret = av_hwframe_transfer_data(hw_frame,
                                         ost->frame, 0)) < 0)
     {
-        cerr << "WARNING: failed transferring frame data to surface: "
+        cerr << "ERROR: failed transferring frame data to surface: "
              << AV_ts2str(ret) << endl;
-        m_error = true;
+        Shutdown();
         return false;
     }
 
@@ -1367,7 +1379,8 @@ void OutputTS::Write(void)
                                  pImage, timestamp);
             else
             {
-                cerr << "WARNING: Unknown encoderType.\n";
+                cerr << "ERROR: Unknown encoderType.\n";
+                Shutdown();
                 return;
             }
         }
