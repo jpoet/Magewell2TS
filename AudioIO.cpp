@@ -494,7 +494,7 @@ bool AudioBuffer::open_spdif(void)
 
     open_spdif_context();
 
-    int try_cnt = 5;
+    int try_cnt = 2;
     for (idx = 0; idx < try_cnt; ++idx)
     {
         if ((ret = av_probe_input_buffer(m_spdif_avio_context,
@@ -553,7 +553,7 @@ bool AudioBuffer::open_spdif(void)
 
     if (idx >= try_cnt)
     {
-        cerr << "ERROR: [" << m_id << "] GAVE UP trying to find S/PDIF codec\n";
+        cerr << "WARNING: [" << m_id << "] GAVE UP trying to find S/PDIF codec\n";
         return false;
     }
 
@@ -591,8 +591,6 @@ void AudioBuffer::detect_codec(void)
         m_parent->m_codec_cond.notify_one();
         PrintState("SPDIF", true);
     }
-    else
-        PrintState("SPDIF", true);
 }
 
 size_t AudioBuffer::Size(void) const

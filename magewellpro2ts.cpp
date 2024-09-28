@@ -1027,6 +1027,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
     int64_t timestamp;
     int     width  = 0;
     int     height = 0;
+    bool    interlaced = false;
     double  frame_duration = 0;
     DWORD   dwMinStride = 0;
     DWORD   dwImageSize = 0;
@@ -1087,10 +1088,12 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
         if (width != videoSignalStatus.cx ||
             height != videoSignalStatus.cy ||
-            frame_duration != videoSignalStatus.dwFrameDuration)
+            frame_duration != videoSignalStatus.dwFrameDuration ||
+            interlaced != static_cast<bool>(videoSignalStatus.bInterlaced))
         {
             width  = videoSignalStatus.cx;
             height = videoSignalStatus.cy;
+            interlaced = static_cast<bool>(videoSignalStatus.bInterlaced);
 
             dwMinStride = FOURCC_CalcMinStride(dwFourcc,
                                                width, 4);
@@ -1103,7 +1106,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             g_frame_ms = frame_duration / 10000;
 
             AVRational frame_rate, time_base;
-            if (videoSignalStatus.bInterlaced == TRUE)
+            if (interlaced)
             {
                 frame_rate = (AVRational){20000000LL, (int)frame_duration};
                 time_base = (AVRational){1, 20000000LL};
@@ -1118,7 +1121,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             if (verbose > 2)
             {
                 cerr << "========\n";
-                double fps = (videoSignalStatus.bInterlaced == TRUE) ?
+                double fps = (interlaced) ?
                              (double)20000000LL / frame_duration :
                              (double)10000000LL / frame_duration;
                 cerr << "Input signal resolution: " << width
@@ -1126,11 +1129,14 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 cerr << "Input signal fps: " << fps
                      << "  " << frame_rate.num << "/" << frame_rate.den << "\n";
                 cerr << "Frame duration: " << frame_duration << "\n";
-                cerr << "Time base: " << time_base.num << "/" << time_base.den << "\n";
-                cerr << "Input signal interlaced: "
-                     << static_cast<bool>(videoSignalStatus.bInterlaced) << "\n";
+                cerr << "Time base: " << time_base.num << "/"
+                     << time_base.den << "\n";
+                cerr << "Input signal " << (interlaced
+                                            ? "Interlaced" : "Progressive")
+                                            << "\n";
                 cerr << "Input signal frame segmented: "
-                     << static_cast<bool>(videoSignalStatus.bSegmentedFrame) << "\n";
+                     << static_cast<bool>(videoSignalStatus.bSegmentedFrame)
+                     << "\n";
                 cerr << "========\n";
             }
 
@@ -1140,9 +1146,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             if (!add_image_buffer(hChannel, dwImageSize))
                 return false;
 
-            out2ts.setVideoParams(width,
-                                  height,
-                                  videoSignalStatus.bInterlaced,
+            out2ts.setVideoParams(width, height, interlaced,
                                   time_base, frame_duration, frame_rate);
 
             if (MWGetVideoBufferInfo(hChannel, &videoBufferInfo) != MW_SUCCEEDED)
@@ -1153,7 +1157,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             frame_wrap_idx = videoBufferInfo.cMaxFrames;
 
             notify_mode = notify_changes;
-            if(videoSignalStatus.bInterlaced)
+            if(interlaced)
             {
                 notify_mode |= MWCAP_NOTIFY_VIDEO_FIELD_BUFFERED;
                 if (0 == videoBufferInfo.iBufferedFieldIndex)
@@ -1296,7 +1300,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             MWCAP_VIDEO_CAPTURE_STATUS captureStatus;
             MWGetVideoCaptureStatus(hChannel, &captureStatus);
 
-            timestamp = videoSignalStatus.bInterlaced
+            timestamp = interlaced
                         ? videoFrameInfo.allFieldBufferedTimes[1]
                         : videoFrameInfo.allFieldBufferedTimes[0];
 
