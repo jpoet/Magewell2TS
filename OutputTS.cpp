@@ -1322,6 +1322,9 @@ void OutputTS::Write(void)
         m_image_ready.wait_for(lock,
                                std::chrono::milliseconds(m_input_frame_wait_ms));
 
+        if (m_verbose > 2 && m_imagequeue.size() > 5)
+            cerr << "Images queued: " << m_imagequeue.size() << endl;
+
         while (m_running.load() == true)
         {
             if (!m_no_audio)

@@ -685,7 +685,10 @@ bool WriteEDID(HCHANNEL hChannel, const string & edid_file)
 
 void* audio_capture(void* param1, int param2, void* param3)
 {
-    int       bytes_per_sample;
+    bool      lpcm = false;
+    int       bytes_per_sample = 0;
+    int       sample_rate  = 0;
+    WORD      valid_channels = 0;
     MWCAP_PTR notify_event = 0;
     HNOTIFY   notify_audio = 0;
     DWORD     input_count = 0;
@@ -703,7 +706,6 @@ void* audio_capture(void* param1, int param2, void* param3)
     int       verbose        = param2;
     OutputTS* out2ts         = reinterpret_cast<OutputTS* >(param3);
 
-    bool     init_needed     = true;
     uint8_t* capture_buf     = nullptr;
     int      frame_idx       = 0;
     int      buf_idx         = 0;
@@ -712,6 +714,10 @@ void* audio_capture(void* param1, int param2, void* param3)
     size_t   capture_buf_size = 0;
 
     int64_t* audio_timestamps = nullptr;
+
+    ULONGLONG notify_status = 0;
+    unsigned char* audio_frame;
+    MWCAP_AUDIO_CAPTURE_FRAME macf;
 
     notify_event = MWCreateEvent();
     if (notify_event == 0)
@@ -739,7 +745,7 @@ void* audio_capture(void* param1, int param2, void* param3)
     notify_audio  = MWRegisterNotify(channel_handle, notify_event,
                                      (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
                                      (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE |
-//                                         (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET |
+                                     (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET |
                                      (DWORD)MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO
                                      );
 
@@ -774,69 +780,72 @@ void* audio_capture(void* param1, int param2, void* param3)
             continue;
         }
 
-        bytes_per_sample = audio_signal_status.cBitsPerSample / 8;
-        if (bytes_per_sample > 2)
-            bytes_per_sample = 4;
-
-        cur_channels = 0;
-        for (int idx = 0; idx < (MWCAP_AUDIO_MAX_NUM_CHANNELS / 2); ++idx)
+        if (lpcm != audio_signal_status.bLPCM ||
+            sample_rate != audio_signal_status.dwSampleRate ||
+            bytes_per_sample != audio_signal_status.cBitsPerSample / 8 ||
+            valid_channels != audio_signal_status.wChannelValid)
         {
-            cur_channels +=
-                (audio_signal_status.wChannelValid & (0x01 << idx)) ? 2 : 0;
+            lpcm = audio_signal_status.bLPCM;
+            sample_rate = audio_signal_status.dwSampleRate;
+            bytes_per_sample = audio_signal_status.cBitsPerSample / 8;
+            if (bytes_per_sample > 2)
+                bytes_per_sample = 4;
+            valid_channels = audio_signal_status.wChannelValid;
+
+            cur_channels = 0;
+            for (int idx = 0; idx < (MWCAP_AUDIO_MAX_NUM_CHANNELS / 2); ++idx)
+            {
+                cur_channels +=
+                    (valid_channels & (0x01 << idx)) ? 2 : 0;
+            }
+
+            if (0 == cur_channels)
+            {
+                if (err_cnt++ % 25 == 0)
+                    cerr << "WARNING [" << err_cnt
+                         << "] Invalid audio channel count: "
+                         << cur_channels << endl;
+
+                this_thread::sleep_for(chrono::milliseconds(g_frame_ms));
+                continue;
+            }
+
+            channel_offset = cur_channels / 2;
+
+            // NOTE: capture_buf/audio_timestamps will be freed by AudioIO class
+
+            frame_idx = 0;
+            buf_idx = 0;
+            frame_size = MWCAP_AUDIO_SAMPLES_PER_FRAME
+                         * cur_channels * bytes_per_sample;
+
+            capture_buf_size = audio_buf_sz * frame_size;
+
+            capture_buf = new uint8_t[capture_buf_size];
+            if (nullptr == capture_buf)
+            {
+                cerr << "ERROR: audio capture_buf alloc failed\n";
+                break;
+            }
+
+            audio_timestamps = new int64_t[audio_buf_sz];
+            if (nullptr == audio_timestamps)
+            {
+                cerr << "ERROR: audio timestamp buf alloc failed\n";
+                break;
+            }
+
+            out2ts->setAudioParams(capture_buf, capture_buf_size,
+                                   cur_channels, lpcm,
+                                   bytes_per_sample,
+                                   sample_rate,
+                                   MWCAP_AUDIO_SAMPLES_PER_FRAME,
+                                   frame_size, audio_timestamps);
         }
-
-        if (0 == cur_channels)
-        {
-            if (err_cnt++ % 25 == 0)
-                cerr << "WARNING [" << err_cnt
-                     << "] Invalid audio channel count: "
-                     << cur_channels << endl;
-
-            this_thread::sleep_for(chrono::milliseconds(g_frame_ms));
-            continue;
-        }
-
-        channel_offset = cur_channels / 2;
-
-        // NOTE: capture_buf will be freed by AudioIO class
-
-        frame_idx = 0;
-        buf_idx = 0;
-        frame_size = MWCAP_AUDIO_SAMPLES_PER_FRAME
-                     * cur_channels * bytes_per_sample;
-
-        capture_buf_size = audio_buf_sz * frame_size;
-
-        capture_buf = new uint8_t[capture_buf_size];
-        if (nullptr == capture_buf)
-        {
-            cerr << "ERROR: audio capture_buf alloc failed\n";
-            break;
-        }
-
-        audio_timestamps = new int64_t[audio_buf_sz];
-        if (nullptr == audio_timestamps)
-        {
-            cerr << "ERROR: audio timestamp buf alloc failed\n";
-            break;
-        }
-
-        out2ts->setAudioParams(capture_buf, capture_buf_size,
-                               cur_channels, audio_signal_status.bLPCM,
-                               bytes_per_sample,
-                               audio_signal_status.dwSampleRate,
-                               MWCAP_AUDIO_SAMPLES_PER_FRAME,
-                               frame_size, audio_timestamps);
 
         cnt = 0;
         err_cnt = 0;
 
-
-        ULONGLONG notify_status = 0;
-        unsigned char* audio_frame;
-        MWCAP_AUDIO_CAPTURE_FRAME macf;
-
-        init_needed = false;
         while (g_reset.load() == false)
         {
             if (MWWaitEvent(notify_event, 1000) <= 0)
@@ -853,26 +862,16 @@ void* audio_capture(void* param1, int param2, void* param3)
 
             if (notify_status & MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE)
             {
-                if (!init_needed)
-                {
-                    out2ts->AudioReady(false);
-                    init_needed = true;
-                    cerr << "WARNING: Audio signal CHANGED!\n";
-                }
+                cerr << "WARNING: Audio signal CHANGED!\n";
                 this_thread::sleep_for(chrono::milliseconds(g_frame_ms));
-                continue;
+                break;
             }
 
             if (notify_status & MWCAP_NOTIFY_AUDIO_INPUT_RESET)
             {
-                if (!init_needed)
-                {
-                    out2ts->AudioReady(false);
-                    init_needed = true;
-                    cerr << "WARNING: Audio input RESET!\n";
-                }
+                cerr << "WARNING: Audio input RESET!\n";
                 this_thread::sleep_for(chrono::milliseconds(g_frame_ms));
-                continue;
+                break;
             }
 
             if (notify_status & MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO)
@@ -888,9 +887,6 @@ void* audio_capture(void* param1, int param2, void* param3)
                 this_thread::sleep_for(chrono::milliseconds(g_frame_ms));
                 continue;
             }
-
-            if (init_needed)
-                break;
 
             /*
               L1L2L3L4R1R2R3R4L5L6L7L8R5R6R7R8(4byte)
@@ -1014,7 +1010,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
                         HNOTIFY   notify_video,
                         MWCAP_PTR hNotifyEvent,
                         MWCAP_PTR hCaptureEvent,
-                        uint8_t*  pbImage,
                         int       verbose,
                         OutputTS & out2ts)
 {
@@ -1032,6 +1027,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
     DWORD   dwMinStride = 0;
     DWORD   dwImageSize = 0;
 
+    uint8_t* pbImage = nullptr;
     int buffer_cnt = 2;
     int frame_idx = -1;
     int frame_wrap_idx = 4;
@@ -1061,14 +1057,23 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
         MWGetVideoSignalStatus(hChannel, &videoSignalStatus);
 
+        if (videoSignalStatus.state == MWCAP_VIDEO_SIGNAL_UNSUPPORTED)
+        {
+            // There doesn't seem to be any recovery from this.
+            cerr << "ERROR: Input signal status: Unsupported\n";
+#if 1
+            this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 10));
+            continue;
+#else
+            g_running.store(false);
+            break;
+#endif
+        }
+
         switch (videoSignalStatus.state)
         {
             case MWCAP_VIDEO_SIGNAL_NONE:
               cerr << "WARNING: Input signal status: NONE\n";
-              this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 5));
-              continue;
-            case MWCAP_VIDEO_SIGNAL_UNSUPPORTED:
-              cerr << "WARNING: Input signal status: Unsupported\n";
               this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 5));
               continue;
             case MWCAP_VIDEO_SIGNAL_LOCKING:
@@ -1083,8 +1088,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
               this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 5));
               continue;
         }
-
-        g_reset.store(false);
 
         if (width != videoSignalStatus.cx ||
             height != videoSignalStatus.cy ||
@@ -1181,6 +1184,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             return false;
         }
 
+        g_reset.store(false);
         out2ts.VideoReady(true);
         frame_idx = -1;
         while (g_running.load() == true)
@@ -1204,8 +1208,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
             if (notify_video & MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE)
             {
                 cerr << "WARNING: Video signal CHANGED.\n";
-                g_reset.store(true);
                 this_thread::sleep_for(chrono::milliseconds(5));
+                g_reset.store(true);
                 break;
             }
 
@@ -1213,8 +1217,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
             if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
             {
                 cerr << "WARNING: Video signal lost lock.\n";
-                g_reset.store(true);
                 this_thread::sleep_for(chrono::milliseconds(5));
+                g_reset.store(true);
                 break;
             }
 
@@ -1308,6 +1312,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
         }
     }
 
+    g_running.store(false);
     free_image_buffers(hChannel, out2ts);
     return true;
 }
@@ -1317,7 +1322,6 @@ bool video_capture(HCHANNEL hChannel, int verbose, OutputTS & out2ts)
     HNOTIFY   notify_video       = 0;
     MWCAP_PTR hNotifyEvent  = 0;
     MWCAP_PTR hCaptureEvent = 0;
-    uint8_t* pbImage       = nullptr;
 
     hCaptureEvent = MWCreateEvent();
     if (hCaptureEvent == 0)
@@ -1342,21 +1346,9 @@ bool video_capture(HCHANNEL hChannel, int verbose, OutputTS & out2ts)
         return false;
     }
 
-    while (g_running.load() == true)
-    {
-        if (!video_capture_loop(hChannel, notify_video,
-                                hNotifyEvent, hCaptureEvent,
-                                pbImage, verbose, out2ts))
-            break;
-    }
-
-    g_running = false;
-
-    if(pbImage)
-    {
-        delete[] pbImage;
-        pbImage = nullptr;
-    }
+    video_capture_loop(hChannel, notify_video,
+                       hNotifyEvent, hCaptureEvent,
+                       verbose, out2ts);
 
     MWUnregisterNotify(hChannel, notify_video);
     notify_video=0;

@@ -615,6 +615,7 @@ void AudioIO::SetEoF(void)
     buffer_que_t::iterator Ibuf;
     for (Ibuf = m_buffer_q.begin(); Ibuf != m_buffer_q.end(); ++Ibuf)
         (*Ibuf).setEoF();
+    m_running.store(false);
 }
 
 void AudioIO::AddBuffer(uint8_t* Pbegin, uint8_t* Pend,
@@ -679,7 +680,9 @@ bool AudioIO::WaitForReady(void)
             }
         }
         std::unique_lock<std::mutex> lock(m_codec_mutex);
-        m_codec_cond.wait(lock, [&]{return m_codec_ready;});
+        m_codec_cond.wait(lock,
+                          [&]{return m_codec_ready ||
+                                  m_running.load() == false;});
         m_codec_ready = false;
     }
 
