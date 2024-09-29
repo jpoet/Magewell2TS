@@ -30,12 +30,12 @@ class OutputTS
     void VideoReady(bool val);
 
     EncoderType encoderType(void) const { return m_encoderType; }
-    void setAudioParams(uint8_t* capture_buf, size_t capture_buf_size,
-                              int num_channels, bool is_lpcm,
-                              int bytes_per_sample, int sample_rate,
-                              int samples_per_frame, int frame_size,
-                              int64_t* timestamps);
-    void setVideoParams(int width, int height, bool interlaced,
+    bool setAudioParams(uint8_t* capture_buf, size_t capture_buf_size,
+                        int num_channels, bool is_lpcm,
+                        int bytes_per_sample, int sample_rate,
+                        int samples_per_frame, int frame_size,
+                        int64_t* timestamps);
+    bool setVideoParams(int width, int height, bool interlaced,
                         AVRational time_base, double frame_duration,
                         AVRational frame_rate);
     bool addAudio(uint8_t* buf, size_t len, int64_t timestamp);
@@ -71,7 +71,7 @@ class OutputTS
     using imageque_t = std::deque<imagepkt_t>;
     imageque_t m_imagequeue;
 
-    void add_stream(OutputStream* ost, AVFormatContext* oc,
+    bool add_stream(OutputStream* ost, AVFormatContext* oc,
                     const AVCodec* *codec);
     static void close_stream(AVFormatContext* oc, OutputStream* ost);
 

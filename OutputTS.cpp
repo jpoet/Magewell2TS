@@ -28,6 +28,8 @@
  * SOFTWARE.
  */
 
+// #define DEBUG_WAIT 1
+
 /**
  * Output a Transport Stream
  */
@@ -148,7 +150,7 @@ void OutputTS::Shutdown(void)
 }
 
 /* Add an output stream. */
-void OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
+bool OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
                           const AVCodec* *codec)
 {
     AVChannelLayout channel_layout = m_audioIO.ChannelLayout();
@@ -159,21 +161,21 @@ void OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
     if (!ost->tmp_pkt)
     {
         cerr << "ERROR: Could not allocate AVPacket\n";
-        exit(1);
+        return false;
     }
 
     ost->st = avformat_new_stream(oc, NULL);
     if (!ost->st)
     {
         cerr << "ERROR: Could not allocate stream\n";
-        exit(1);
+        return false;
     }
     ost->st->id = oc->nb_streams-1;
     codec_context = avcodec_alloc_context3(*codec);
     if (!codec_context)
     {
         cerr << "ERROR: Could not alloc an encoding context\n";
-        exit(1);
+        return false;
     }
     ost->enc = codec_context;
 
@@ -279,6 +281,8 @@ void OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
     /* Some formats want stream headers to be separate. */
     if (oc->oformat->flags & AVFMT_GLOBALHEADER)
         ost->enc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+
+    return true;
 }
 
 AVFrame* OutputTS::alloc_audio_frame(enum AVSampleFormat sample_fmt,
@@ -317,7 +321,8 @@ bool OutputTS::open_audio(void)
     if (m_no_audio)
         return true;
 
-    m_audioIO.WaitForReady();
+    if (!m_audioIO.WaitForReady())
+        return false;
 
     close_stream(m_output_format_context, &m_audio_stream);
 
@@ -333,7 +338,8 @@ bool OutputTS::open_audio(void)
         return false;
     }
 
-    add_stream(&m_audio_stream, m_output_format_context, &audio_codec);
+    if (!add_stream(&m_audio_stream, m_output_format_context, &audio_codec))
+        return false;
 
     OutputStream* ost = &m_audio_stream;
     AVFormatContext* oc = m_output_format_context;
@@ -346,7 +352,7 @@ bool OutputTS::open_audio(void)
     if ((ret = avcodec_open2(enc_ctx, codec, &opt)) < 0)
     {
         cerr << "ERROR: Could not open audio codec: " << AVerr2str(ret) << endl;
-        exit(1);
+        return false;
     }
 
     if (enc_ctx->codec->capabilities & AV_CODEC_CAP_VARIABLE_FRAME_SIZE)
@@ -382,7 +388,7 @@ bool OutputTS::open_audio(void)
     if (ret < 0)
     {
         cerr << "ERROR: Could not copy the stream parameters\n";
-        exit(1);
+        return false;
     }
 
     /* create resampler context */
@@ -390,7 +396,7 @@ bool OutputTS::open_audio(void)
     if (!ost->swr_ctx)
     {
         cerr << "ERROR: Could not allocate resampler context\n";
-        exit(1);
+        return false;
     }
 
     /* set options */
@@ -420,7 +426,7 @@ bool OutputTS::open_audio(void)
     if ((ret = swr_init(ost->swr_ctx)) < 0)
     {
         cerr << "ERROR: Failed to initialize the resampling context\n";
-        exit(1);
+        return false;
     }
 
     return true;
@@ -447,14 +453,14 @@ bool OutputTS::open_video(void)
     {
         cerr << "ERROR: Could not find video encoder for '"
              << m_video_codec_name << "'\n";
-        Shutdown();
         return false;
     }
 
     /* Add the audio and video streams using the default format codecs
      * and initialize the codecs. */
-    add_stream(&m_video_stream, m_output_format_context,
-               &video_codec);
+    if (!add_stream(&m_video_stream, m_output_format_context,
+                    &video_codec))
+        return false;
 
     /* Now that all the parameters are set, we can open the audio and
      * video codecs and allocate the necessary encode buffers. */
@@ -462,19 +468,19 @@ bool OutputTS::open_video(void)
     {
         case EncoderType::QSV:
           if (!open_qsv(video_codec, &m_video_stream, opt))
-              exit(1);
+              return false;
           break;
         case EncoderType::VAAPI:
           if (!open_vaapi(video_codec, &m_video_stream, opt))
-              exit(1);
+              return false;
           break;
         case EncoderType::NV:
           if (!open_nvidia(video_codec, &m_video_stream, opt))
-              exit(1);
+              return false;
           break;
         default:
           cerr << "ERROR: Could not determine video encoder type.\n";
-          exit(1);
+          return false;
     }
 
     return true;
@@ -505,8 +511,14 @@ bool OutputTS::open_container(void)
 
     if (!m_no_audio)
     {
+#if DEBUG_WAIT
+        cerr << "open_container: Waiting for m_audio_ready" << endl;
+#endif
         std::unique_lock<std::mutex> lock(m_ready_mutex);
         m_ready_cond.wait(lock, [&]{return m_audio_ready;});
+#if DEBUG_WAIT
+        cerr << "open_container: Done Waiting for m_audio_ready" << endl;
+#endif
     }
 #if 0
     std::unique_lock<std::mutex> lock(m_ready_mutex);
@@ -527,8 +539,10 @@ bool OutputTS::open_container(void)
 
     m_fmt = m_output_format_context->oformat;
 
-    open_audio();
-    open_video();
+    if (!open_audio())
+        return false;
+    if (!open_video())
+        return false;
 
     if (m_verbose > 0)
         av_dump_format(m_output_format_context, 0, m_filename.c_str(), 1);
@@ -558,24 +572,26 @@ bool OutputTS::open_container(void)
     return true;
 }
 
-void OutputTS::setAudioParams(uint8_t* capture_buf, size_t capture_buf_size,
+bool OutputTS::setAudioParams(uint8_t* capture_buf, size_t capture_buf_size,
                               int num_channels, bool is_lpcm,
                               int bytes_per_sample, int sample_rate,
                               int samples_per_frame, int frame_size,
                               int64_t* timestamps)
 {
-    m_audioIO.AddBuffer(capture_buf, capture_buf + capture_buf_size,
-                        num_channels, is_lpcm,
-                        bytes_per_sample, sample_rate,
-                        samples_per_frame, frame_size,
-                        timestamps);
+    if (!m_audioIO.AddBuffer(capture_buf, capture_buf + capture_buf_size,
+                             num_channels, is_lpcm,
+                             bytes_per_sample, sample_rate,
+                             samples_per_frame, frame_size,
+                             timestamps))
+        return false;
 
     AudioReady(true);
     if (m_verbose > 0)
         cerr << "setAudioParams " << (is_lpcm ? "LPCM" : "Bitstream") << endl;
+    return true;
 }
 
-void OutputTS::setVideoParams(int width, int height, bool interlaced,
+bool OutputTS::setVideoParams(int width, int height, bool interlaced,
                               AVRational time_base, double frame_duration,
                               AVRational frame_rate)
 {
@@ -603,10 +619,16 @@ void OutputTS::setVideoParams(int width, int height, bool interlaced,
     VideoReady(true);
     if (!m_initialized)
     {
-        open_container();
+        if (!open_container())
+        {
+            Shutdown();
+            return false;
+        }
         m_initialized = true;
         m_image_ready_thread = std::thread(&OutputTS::Write, this);
     }
+
+    return true;
 }
 
 OutputTS::~OutputTS(void)
@@ -1244,7 +1266,7 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
     if (av_frame_make_writable(ost->frame) < 0)
     {
         cerr << "ERROR: get_video_frame: Make frame writable failed.\n";
-        exit(1);
+        return false;
     }
 #endif
 

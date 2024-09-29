@@ -846,6 +846,7 @@ void* audio_capture(void* param1, int param2, void* param3)
         cnt = 0;
         err_cnt = 0;
 
+//        g_reset.store(false);
         while (g_reset.load() == false)
         {
             if (MWWaitEvent(notify_event, 1000) <= 0)
@@ -1190,9 +1191,9 @@ bool video_capture_loop(HCHANNEL  hChannel,
             return false;
         }
 
-        g_reset.store(false);
         out2ts.VideoReady(true);
         frame_idx = -1;
+        g_reset.store(false);
         while (g_running.load() == true)
         {
             if (MWWaitEvent(hNotifyEvent, 1000) <= 0)

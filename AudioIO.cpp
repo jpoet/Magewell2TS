@@ -1,3 +1,5 @@
+#define DEBUG_WAIT 1
+
 #include "AudioIO.h"
 
 #include <unistd.h>
@@ -19,7 +21,6 @@ AudioBuffer& AudioBuffer::operator=(const AudioBuffer & rhs)
     if (this == &rhs)
         return *this;
 
-    m_EoF           = rhs.m_EoF;
     m_loop_cnt      = rhs.m_loop_cnt;
     m_begin         = rhs.m_begin;
     m_end           = rhs.m_end;
@@ -97,7 +98,7 @@ AudioBuffer::~AudioBuffer(void)
 {
     if (m_own_buffer)
     {
-        m_EoF = true;
+        m_EoF.store(true);
         if (m_detect_thread.joinable())
             m_detect_thread.join();
         delete[] m_begin;
@@ -108,6 +109,7 @@ AudioBuffer::~AudioBuffer(void)
 void AudioBuffer::OwnBuffer(void)
 {
     m_own_buffer = true;
+    m_EoF.store(false);
 
     if (m_lpcm)
     {
@@ -217,7 +219,7 @@ int AudioBuffer::Read(uint8_t* dest, size_t len)
 
     if (Empty())
     {
-        if (m_EoF)
+        if (m_EoF.load() == true)
         {
             if (m_verbose > 3)
                 cerr << "[" << m_id << "] AudioIO::Read: EOF\n";
@@ -591,6 +593,11 @@ void AudioBuffer::detect_codec(void)
         m_parent->m_codec_cond.notify_one();
         PrintState("SPDIF");
     }
+    else
+    {
+        cerr << "Error: Failed to detect SPDIF codec." << endl;
+        setEoF();
+    }
 }
 
 size_t AudioBuffer::Size(void) const
@@ -618,7 +625,7 @@ void AudioIO::SetEoF(void)
     m_running.store(false);
 }
 
-void AudioIO::AddBuffer(uint8_t* Pbegin, uint8_t* Pend,
+bool AudioIO::AddBuffer(uint8_t* Pbegin, uint8_t* Pend,
                         int num_channels, bool is_lpcm,
                         int bytes_per_sample, int sample_rate,
                         int samples_per_frame, int frame_size,
@@ -639,10 +646,12 @@ void AudioIO::AddBuffer(uint8_t* Pbegin, uint8_t* Pend,
                                      samples_per_frame, frame_size,
                                      timestamps,
                                      this, m_verbose, m_buf_id++));
+    m_codec_initialized = false;
 
     Ibuf = m_buffer_q.end() - 1;
     (*Ibuf).OwnBuffer();
-    m_codec_initialized = false;
+
+    return true;
 }
 
 bool AudioIO::WaitForReady(void)
@@ -675,14 +684,23 @@ bool AudioIO::WaitForReady(void)
                     m_bytes_per_sample = (*Ibuf).BytesPerSample();
                     m_lpcm = (*Ibuf).LPCM();
                     m_codec_initialized = true;
+#if 1
+                    (*Ibuf).PrintState("Ready", true);
+#endif
                     return true;
                 }
             }
         }
         std::unique_lock<std::mutex> lock(m_codec_mutex);
-        m_codec_cond.wait(lock,
+#if DEBUG_WAIT
+        cerr << "WaitForReady: Waiting for m_codec_ready\n";
+#endif
+        m_codec_cond.wait_for(lock, chrono::milliseconds(8),
                           [&]{return m_codec_ready ||
                                   m_running.load() == false;});
+#if DEBUG_WAIT
+        cerr << "WaitForReady: DONE Waiting for m_codec_ready\n";
+#endif
         m_codec_ready = false;
     }
 

@@ -28,8 +28,8 @@ class AudioBuffer
     AudioBuffer(const AudioBuffer & rhs) { *this = rhs; }
     ~AudioBuffer(void);
     void OwnBuffer(void);
-    void setEoF(void) { m_EoF = true; }
-    bool isEoF(void) const { return m_EoF == true; }
+    void setEoF(void) { m_EoF.store(true); }
+    bool isEoF(void) const { return m_EoF.load() == true; }
     void PrintState(const std::string & where,
                     bool force = false) const;
     void PrintPointers(const std::string & where,
@@ -61,7 +61,7 @@ class AudioBuffer
     void detect_codec(void);
     int64_t get_timestamp(uint8_t* P) const;
 
-    bool     m_EoF           {false};
+    std::atomic<bool> m_EoF  {false};
     uint32_t m_loop_cnt      {0};
     uint8_t* m_begin         {nullptr};
     uint8_t* m_end           {nullptr};
@@ -113,7 +113,7 @@ class AudioIO
     ~AudioIO(void) { m_running.store(false); }
     void SetEoF(void);
 
-    void AddBuffer(uint8_t* Pbegin, uint8_t* Pend,
+    bool AddBuffer(uint8_t* Pbegin, uint8_t* Pend,
                    int num_channels, bool is_lpcm,
                    int bytes_per_sample, int sample_rate,
                    int samples_per_frame, int frame_size,
