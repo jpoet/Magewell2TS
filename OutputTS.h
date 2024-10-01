@@ -52,11 +52,13 @@ class OutputTS
 
         /* pts of the next frame that will be generated */
         int64_t next_pts           {-1};
+
         int samples_count          {0};
 
         AVFrame* frame             {nullptr};
         AVFrame* tmp_frame         {nullptr};
         int64_t  prev_pts          {-1};
+        int64_t  prev_audio_pts    {-1};
         int64_t  prev_dts          {-1};
 
         AVPacket* tmp_pkt          {nullptr};
@@ -122,6 +124,7 @@ class OutputTS
     std::string      m_filename               {"pipe:1"};
 
     bool             m_no_audio               {false};
+    int              m_slow_audio_cnt         {0};
 
     std::string      m_video_codec_name;
     std::string      m_device;
@@ -148,7 +151,7 @@ class OutputTS
     std::condition_variable m_image_ready;
 
     std::atomic<bool>       m_running      {true};
-    bool                    m_initialized  {false};
+    bool                    m_init_needed  {true};
     bool                    m_video_ready  {true};
     bool                    m_audio_ready  {false};
     std::mutex              m_ready_mutex;

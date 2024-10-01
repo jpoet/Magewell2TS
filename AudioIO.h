@@ -27,6 +27,8 @@ class AudioBuffer
                 AudioIO* parent, int verbose, int id);
     AudioBuffer(const AudioBuffer & rhs) { *this = rhs; }
     ~AudioBuffer(void);
+    void CleanupThread(void);
+    void RescanSPDIF(void);
     void OwnBuffer(void);
     void setEoF(void) { m_EoF.store(true); }
     bool isEoF(void) const { return m_EoF.load() == true; }
@@ -40,8 +42,11 @@ class AudioBuffer
 
     int Add(uint8_t* Pframe, size_t len, int64_t timestamp);
     int Read(uint8_t* dest, size_t len);
-    int64_t Seek(int64_t offset, int whence);
     AVPacket* ReadSPDIF(void);
+
+    int64_t Seek(int64_t offset, int whence);
+    void SetMark(void);
+    void ReturnToMark(void);
 
     int Id(void) const { return m_id; }
     bool Empty(void) const { return m_read == m_write; }
@@ -75,6 +80,11 @@ class AudioBuffer
     size_t   m_frame_cnt   {0};
 //        int64_t  m_timestamp   {0LL};
     bool     m_own_buffer  {false};
+
+    struct {
+        uint8_t* read_pos {0};
+        size_t   loop_cnt {0};
+    }                m_mark;
 
     AVFormatContext* m_spdif_format_context {nullptr};
     AVIOContext*     m_spdif_avio_context   {nullptr};
@@ -120,6 +130,7 @@ class AudioIO
                    int64_t* timestamps);
     bool WaitForReady(void);
 
+    void    RescanSPDIF(void);
     int     Add(uint8_t* Pframe, size_t len, int64_t timestamp);
     int64_t Seek(int64_t offset, int whence);
     int     Read(uint8_t* dest, size_t len);

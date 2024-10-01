@@ -77,8 +77,18 @@ int  g_frame_ms = 17;
 
 void signal_handler(int signum)
 {
-    g_running.store(false);
-    g_reset.store(true);
+    if (signum == SIGHUP || signum == SIGUSR1)
+    {
+        cerr << "\n\nResetting audio.\n" << endl;
+        g_reset.store(true);
+    }
+    else if (signum == SIGINT || signum == SIGTERM)
+    {
+        g_running.store(false);
+        g_reset.store(true);
+    }
+    else
+        cerr << "Unhandled interrupt." << endl;
 }
 
 int get_id(char c)
@@ -560,7 +570,7 @@ void ListInputs(void)
                     cerr << " " << (i * 2 + 1) << "&" << (i * 2 + 2);
             }
             cerr << ", LPCM: " << (aStatus.bLPCM ? "Yes" : "No")
-                 << ", BPS: " << static_cast<int>(aStatus.cBitsPerSample)
+                 << ", BPSample: " << static_cast<int>(aStatus.cBitsPerSample)
                  << ", Sample Rate: "
                  << aStatus.dwSampleRate
                  << "\n";
@@ -699,10 +709,6 @@ void* audio_capture(void* param1, int param2, void* param3)
     int err_cnt = 0;
     int cnt     = 0;
 
-    long long int tm_current  = 0LL;
-    long long int tm_last     = 0LL;
-    uint64_t audio_frame_rate = 0LL;
-
     HCHANNEL* channel_handle = reinterpret_cast<HCHANNEL* >(param1);
     OutputTS* out2ts         = reinterpret_cast<OutputTS* >(param3);
 
@@ -716,7 +722,6 @@ void* audio_capture(void* param1, int param2, void* param3)
     int64_t* audio_timestamps = nullptr;
 
     ULONGLONG notify_status = 0;
-    unsigned char* audio_frame;
     MWCAP_AUDIO_CAPTURE_FRAME macf;
 
     notify_event = MWCreateEvent();
@@ -757,9 +762,6 @@ void* audio_capture(void* param1, int param2, void* param3)
 
     while (g_running.load() == true)
     {
-        while (g_reset.load() == true && g_running.load() == true)
-            this_thread::sleep_for(chrono::milliseconds(g_frame_ms));
-
         if (MW_SUCCEEDED != MWGetAudioSignalStatus(channel_handle,
                                                    &audio_signal_status))
         {
@@ -780,7 +782,8 @@ void* audio_capture(void* param1, int param2, void* param3)
             continue;
         }
 
-        if (lpcm != audio_signal_status.bLPCM ||
+        if (g_reset.load() == true ||
+            lpcm != audio_signal_status.bLPCM ||
             sample_rate != audio_signal_status.dwSampleRate ||
             bytes_per_sample != audio_signal_status.cBitsPerSample / 8 ||
             valid_channels != audio_signal_status.wChannelValid)
@@ -841,12 +844,13 @@ void* audio_capture(void* param1, int param2, void* param3)
                                    sample_rate,
                                    MWCAP_AUDIO_SAMPLES_PER_FRAME,
                                    frame_size, audio_timestamps);
+
+            g_reset.store(false);
         }
 
         cnt = 0;
         err_cnt = 0;
 
-//        g_reset.store(false);
         while (g_reset.load() == false)
         {
             if (MWWaitEvent(notify_event, 1000) <= 0)
@@ -880,7 +884,7 @@ void* audio_capture(void* param1, int param2, void* param3)
             if (notify_status & MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO)
             {
                 if (g_verbose > 0)
-                    cerr << "WARNING: Audio HDMI INFOFRAME AUDIO!\n";
+                    cerr << "WARNING: Audio HDMI INFOFRAME AUDIO -- unhandled!\n";
             }
 
             if (!(notify_status & MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED))
@@ -1193,7 +1197,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
         out2ts.VideoReady(true);
         frame_idx = -1;
-        g_reset.store(false);
         while (g_running.load() == true)
         {
             if (MWWaitEvent(hNotifyEvent, 1000) <= 0)
@@ -1217,7 +1220,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 if (g_verbose > 0)
                     cerr << "WARNING: Video signal CHANGED.\n";
                 this_thread::sleep_for(chrono::milliseconds(5));
-                g_reset.store(true);
                 break;
             }
 
@@ -1227,7 +1229,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 if (g_verbose > 0)
                     cerr << "WARNING: Video signal lost lock.\n";
                 this_thread::sleep_for(chrono::milliseconds(5));
-                g_reset.store(true);
                 break;
             }
 
@@ -1742,6 +1743,8 @@ int main(int argc, char* argv[])
         action.sa_flags = 0;
         sigaction(SIGINT, &action, NULL);
         sigaction(SIGTERM, &action, NULL);
+        sigaction(SIGHUP, &action, NULL);
+        sigaction(SIGUSR1, &action, NULL);
     }
 
     for (auto iter = args.begin(); iter != args.end(); ++iter)

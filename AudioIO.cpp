@@ -1,5 +1,3 @@
-#define DEBUG_WAIT 1
-
 #include "AudioIO.h"
 
 #include <unistd.h>
@@ -99,11 +97,23 @@ AudioBuffer::~AudioBuffer(void)
     if (m_own_buffer)
     {
         m_EoF.store(true);
-        if (m_detect_thread.joinable())
-            m_detect_thread.join();
+        CleanupThread();
         delete[] m_begin;
         delete[] m_timestamps;
     }
+}
+
+void AudioBuffer::CleanupThread(void)
+{
+    if (m_detect_thread.joinable())
+        m_detect_thread.join();
+}
+
+void AudioBuffer::RescanSPDIF(void)
+{
+    m_codec_name.clear();
+    Seek(-m_frame_size, SEEK_CUR);
+    detect_codec();
 }
 
 void AudioBuffer::OwnBuffer(void)
@@ -288,15 +298,59 @@ int AudioBuffer::Read(uint8_t* dest, size_t len)
 
     if (dest != nullptr)
         memcpy(dest, m_read, sz);
+    m_parent->m_timestamp = get_timestamp(m_read);
     m_read += sz;
     PrintPointers("     Read", m_report_next);
     if (m_report_next > 0)
         --m_report_next;
 
-    m_parent->m_timestamp = get_timestamp(m_read - m_frame_size);
-//    cerr << "\nTS: " << m_parent->m_timestamp << endl;
+#if 0
+    cerr << "\nTS: " << m_parent->m_timestamp
+         << " sz " << sz << " Frames " << sz / m_frame_size << endl;
+#endif
 
     return sz;
+}
+
+AVPacket* AudioBuffer::ReadSPDIF(void)
+{
+    if (Size() < m_frame_size)
+    {
+        if (m_verbose > 2)
+            cerr << "[" << m_id << "] ReadSPDIF: Only "
+                 << Size() << " bytes available. "
+                 << m_frame_size << " desired.\n";
+        return nullptr;
+    }
+
+    AVPacket* pkt = av_packet_alloc();
+    if (!pkt)
+    {
+        cerr << "WARNING: [" << m_id
+             << "] Could not allocate pkt for spdif input.\n";
+        return nullptr;
+    }
+
+    double ret =  av_read_frame(m_spdif_format_context, pkt);
+#if 0
+    cerr << "ReadSPDIF [" << pkt->stream_index << "] pts: " << pkt->pts
+         << " dts: " << AV_ts2str(pkt->dts)
+         << " duration: " << AV_ts2str(pkt->duration)
+         << " size: " << pkt->size
+         << endl;
+#endif
+
+    if (0 > ret)
+    {
+        av_packet_free(&pkt);
+        if (ret != AVERROR_EOF && m_verbose > 0)
+            cerr << "WARNING: [" << m_id
+                 << "] Failed to read spdif frame: (" << ret << ") "
+                 << AVerr2str(ret) << endl;
+        return nullptr;
+    }
+
+    return pkt;
 }
 
 int64_t AudioBuffer::Seek(int64_t offset, int whence)
@@ -394,37 +448,17 @@ int64_t AudioBuffer::Seek(int64_t offset, int whence)
     return 0;
 }
 
-AVPacket* AudioBuffer::ReadSPDIF(void)
+void AudioBuffer::SetMark(void)
 {
-    if (Size() < m_frame_size)
-    {
-        if (m_verbose > 4)
-            cerr << "[" << m_id << "] ReadSPDIF: Only "
-                 << Size() << " bytes available. "
-                 << m_frame_size << " desired.\n";
-        return nullptr;
-    }
+    m_mark.read_pos = m_read;
+    m_mark.loop_cnt = m_loop_cnt;
+}
 
-    AVPacket* pkt = av_packet_alloc();
-    if (!pkt)
-    {
-        cerr << "WARNING: [" << m_id
-             << "] Could not allocate pkt for spdif input.\n";
-        return nullptr;
-    }
-
-    double ret =  av_read_frame(m_spdif_format_context, pkt);
-    if (0 > ret)
-    {
-        av_packet_free(&pkt);
-        if (ret != AVERROR_EOF && m_verbose > 0)
-            cerr << "WARNING: [" << m_id
-                 << "] Failed to read spdif frame: (" << ret << ") "
-                 << AVerr2str(ret) << endl;
-        return nullptr;
-    }
-
-    return pkt;
+void AudioBuffer::ReturnToMark(void)
+{
+    size_t diff = m_read - m_mark.read_pos;
+    diff += (m_loop_cnt - m_mark.loop_cnt) * (m_end - m_begin);
+    Seek(-diff, SEEK_CUR);
 }
 
 static int read_packet(void* opaque, uint8_t* buf, int buf_size)
@@ -443,6 +477,23 @@ static int64_t seek_packet(void* opaque, int64_t offset, int whence)
 
 bool AudioBuffer::open_spdif_context(void)
 {
+    if (m_spdif_format_context)
+    {
+        avformat_close_input(&m_spdif_format_context);
+        m_spdif_format_context = nullptr;
+
+        avio_context_free(&m_spdif_avio_context);
+        m_spdif_avio_context = nullptr;
+
+#if 0
+        av_free(m_spdif_avio_context_buffer);
+        m_spdif_avio_context_buffer = nullptr;
+#endif
+
+        avformat_free_context(m_spdif_format_context);
+        m_spdif_format_context = nullptr;
+    }
+
     if (!(m_spdif_format_context = avformat_alloc_context()))
     {
         cerr << "WARNING: [" << m_id
@@ -493,6 +544,8 @@ bool AudioBuffer::open_spdif(void)
     const AVInputFormat* fmt = nullptr;
     int ret;
     int idx;
+
+    SetMark();
 
     open_spdif_context();
 
@@ -578,7 +631,7 @@ bool AudioBuffer::open_spdif(void)
     avio_flush(m_spdif_avio_context);
     avformat_flush(m_spdif_format_context);
     /* Now make that data available again */
-    Seek(0, SEEK_SET);
+    ReturnToMark();
 
     return true;
 }
@@ -654,6 +707,13 @@ bool AudioIO::AddBuffer(uint8_t* Pbegin, uint8_t* Pend,
     return true;
 }
 
+void AudioIO::RescanSPDIF(void)
+{
+    const std::unique_lock<std::mutex> lock(m_buffer_mutex);
+    if (!m_buffer_q.empty())
+        m_buffer_q.begin()->RescanSPDIF();
+}
+
 bool AudioIO::WaitForReady(void)
 {
     {
@@ -687,20 +747,15 @@ bool AudioIO::WaitForReady(void)
 #if 1
                     (*Ibuf).PrintState("Ready", true);
 #endif
+                    (*Ibuf).CleanupThread();
                     return true;
                 }
             }
         }
         std::unique_lock<std::mutex> lock(m_codec_mutex);
-#if DEBUG_WAIT
-        cerr << "WaitForReady: Waiting for m_codec_ready\n";
-#endif
         m_codec_cond.wait_for(lock, chrono::milliseconds(8),
                           [&]{return m_codec_ready ||
                                   m_running.load() == false;});
-#if DEBUG_WAIT
-        cerr << "WaitForReady: DONE Waiting for m_codec_ready\n";
-#endif
         m_codec_ready = false;
     }
 
@@ -824,7 +879,7 @@ bool AudioIO::CodecChanged(void)
 {
     {
         const std::unique_lock<std::mutex> lock(m_buffer_mutex);
-        if (m_buffer_q.size() < 2)
+        if (m_buffer_q.size() < 2 && m_codec_initialized)
             return false;
     }
 

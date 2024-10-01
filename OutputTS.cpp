@@ -28,8 +28,6 @@
  * SOFTWARE.
  */
 
-// #define DEBUG_WAIT 1
-
 /**
  * Output a Transport Stream
  */
@@ -128,23 +126,15 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
         Shutdown();
     }
 
-#if 0
-    /* allocate the output media context */
-    avformat_alloc_output_context2(&m_output_format_context,
-                                   NULL, "mpegts", m_filename.c_str());
-    if (!m_output_format_context)
-    {
-        cerr << "ERROR: Could not create output format context.\n";
-        Shutdown();
-    }
-#endif
-
     if (m_no_audio)
         m_audio_ready = true;
+
+    m_image_ready_thread = std::thread(&OutputTS::Write, this);
 }
 
 void OutputTS::Shutdown(void)
 {
+    cerr << "\n\nCapture Terminating\n\n" << endl;
     m_audioIO.SetEoF();
     m_running.store(false);
 }
@@ -301,6 +291,7 @@ AVFrame* OutputTS::alloc_audio_frame(enum AVSampleFormat sample_fmt,
     frame->format = sample_fmt;
     av_channel_layout_copy(&frame->ch_layout, channel_layout);
     frame->sample_rate = sample_rate;
+    /* Frame size passed from magewell includes all channels */
     frame->nb_samples = nb_samples;
 
     if (nb_samples)
@@ -358,7 +349,9 @@ bool OutputTS::open_audio(void)
     if (enc_ctx->codec->capabilities & AV_CODEC_CAP_VARIABLE_FRAME_SIZE)
         nb_samples = 10000;
     else
+    {
         nb_samples = enc_ctx->frame_size;
+    }
 
     ost->frame = alloc_audio_frame(enc_ctx->sample_fmt, &enc_ctx->ch_layout,
                                    enc_ctx->sample_rate, nb_samples);
@@ -511,21 +504,17 @@ bool OutputTS::open_container(void)
 
     if (!m_no_audio)
     {
-#if DEBUG_WAIT
-        cerr << "open_container: Waiting for m_audio_ready" << endl;
-#endif
         std::unique_lock<std::mutex> lock(m_ready_mutex);
-        m_ready_cond.wait(lock, [&]{return m_audio_ready;});
-#if DEBUG_WAIT
-        cerr << "open_container: Done Waiting for m_audio_ready" << endl;
-#endif
+        m_ready_cond.wait(lock, [&]{return m_audio_ready || m_running.load() == false;});
     }
 #if 0
     std::unique_lock<std::mutex> lock(m_ready_mutex);
-    m_ready_cond.wait(lock, [&]{return m_video_ready;});
+    m_ready_cond.wait(lock, [&]{return m_video_ready || m_running.load() == false;});
 #endif
 
     close_container();
+    if (m_running.load() == false)
+        return false;
 
     /* allocate the output media context */
     avformat_alloc_output_context2(&m_output_format_context,
@@ -588,6 +577,7 @@ bool OutputTS::setAudioParams(uint8_t* capture_buf, size_t capture_buf_size,
     AudioReady(true);
     if (m_verbose > 0)
         cerr << "setAudioParams " << (is_lpcm ? "LPCM" : "Bitstream") << endl;
+    m_init_needed = true;
     return true;
 }
 
@@ -617,16 +607,7 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     }
 
     VideoReady(true);
-    if (!m_initialized)
-    {
-        if (!open_container())
-        {
-            Shutdown();
-            return false;
-        }
-        m_initialized = true;
-        m_image_ready_thread = std::thread(&OutputTS::Write, this);
-    }
+    m_init_needed = true;
 
     return true;
 }
@@ -865,8 +846,28 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
     pkt->pts = av_rescale_q(m_audioIO.TimeStamp(),
                             m_input_time_base,
                             ost->st->time_base);
-    ost->next_pts = m_audioIO.TimeStamp() +
-                    (ost->frame->nb_samples /* * m_audio_channels */);
+
+    if (pkt->pts - ost->prev_audio_pts > ost->frame->nb_samples * 3)
+    {
+        /* This a bit of hack, but seems to solve the problem.
+           Jumping around in some applications can cause the S/PDIF
+           to get out of sync for some reason.
+        */
+        if (++m_slow_audio_cnt > 15)
+        {
+            cerr << "WARNING: S/PDIF audio out of sync, resetting.\n";
+            m_slow_audio_cnt = 0;
+            m_audioIO.RescanSPDIF();
+            return false;
+        }
+    }
+    else
+        m_slow_audio_cnt = 0;
+
+    ost->prev_audio_pts = pkt->pts;
+
+    /* Frame size passed from magewell includes all channels */
+    ost->next_pts = m_audioIO.TimeStamp() + ost->frame->nb_samples;
 
     pkt->duration = pkt->pts;
     pkt->dts = pkt->pts;
@@ -898,7 +899,10 @@ bool OutputTS::write_audio_frame(AVFormatContext* oc, OutputStream* ost)
 {
 
     if (m_audioIO.CodecChanged())
-        open_container();
+    {
+        m_init_needed = true;
+        return false;
+    }
 
     if (!m_audioIO.BlockReady())
     {
@@ -1356,8 +1360,18 @@ void OutputTS::Write(void)
         m_image_ready.wait_for(lock,
                                std::chrono::milliseconds(m_input_frame_wait_ms));
 
-        if (m_verbose > 2 && m_imagequeue.size() > 5)
+        if (m_verbose > 2 && m_imagequeue.size() > 2)
             cerr << "Images queued: " << m_imagequeue.size() << endl;
+
+        if (m_init_needed)
+        {
+            if (!open_container())
+            {
+                Shutdown();
+                break;
+            }
+            m_init_needed = false;
+        }
 
         while (m_running.load() == true)
         {
