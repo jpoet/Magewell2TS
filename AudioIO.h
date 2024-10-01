@@ -121,7 +121,7 @@ class AudioIO
   public:
     AudioIO(int verbose = 0);
     ~AudioIO(void) { m_running.store(false); }
-    void SetEoF(void);
+    void Shutdown(void);
 
     bool AddBuffer(uint8_t* Pbegin, uint8_t* Pend,
                    int num_channels, bool is_lpcm,

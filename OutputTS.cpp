@@ -134,8 +134,7 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
 
 void OutputTS::Shutdown(void)
 {
-    cerr << "\n\nCapture Terminating\n\n" << endl;
-    m_audioIO.SetEoF();
+    m_audioIO.Shutdown();
     m_running.store(false);
 }
 
@@ -497,6 +496,11 @@ void OutputTS::VideoReady(bool val)
     m_ready_cond.notify_one();
 }
 
+bool OutputTS::WaitForAudio(void)
+{
+    return m_audioIO.WaitForReady();
+}
+
 bool OutputTS::open_container(void)
 {
     int ret;
@@ -853,9 +857,10 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
            Jumping around in some applications can cause the S/PDIF
            to get out of sync for some reason.
         */
-        if (++m_slow_audio_cnt > 15)
+        if (++m_slow_audio_cnt > 10)
         {
-            cerr << "WARNING: S/PDIF audio out of sync, resetting.\n";
+            if (m_verbose > 0)
+                cerr << "WARNING: S/PDIF audio out of sync, resetting.\n";
             m_slow_audio_cnt = 0;
             m_audioIO.RescanSPDIF();
             return false;
@@ -1360,9 +1365,6 @@ void OutputTS::Write(void)
         m_image_ready.wait_for(lock,
                                std::chrono::milliseconds(m_input_frame_wait_ms));
 
-        if (m_verbose > 2 && m_imagequeue.size() > 2)
-            cerr << "Images queued: " << m_imagequeue.size() << endl;
-
         if (m_init_needed)
         {
             if (!open_container())
@@ -1398,13 +1400,11 @@ void OutputTS::Write(void)
                 m_imagequeue.pop_front();
             }
 
-#if 1
             if (!m_audio_ready)
             {
                 m_image_buffer_available(pImage);
                 continue;
             }
-#endif
 
             if (m_encoderType == EncoderType::NV)
                 nv_encode(m_output_format_context, &m_video_stream,
@@ -1429,12 +1429,14 @@ void OutputTS::ClearImageQueue(void)
     m_imagequeue.clear();
 }
 
-bool OutputTS::VideoFrame(uint8_t* pImage, uint32_t imageSize,
+bool OutputTS::AddVideoFrame(uint8_t* pImage, uint32_t imageSize,
                           int64_t timestamp)
 {
     const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
-    m_imagequeue.push_back(imagepkt_t{timestamp, pImage});
-
+    if (!m_init_needed)
+        m_imagequeue.push_back(imagepkt_t{timestamp, pImage});
+    else
+        m_image_buffer_available(pImage);
     m_image_ready.notify_one();
 
     return true;

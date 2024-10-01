@@ -70,6 +70,7 @@
 
 using namespace std;
 
+OutputTS*         g_out2ts = nullptr;
 int               g_verbose   = 1;
 std::atomic<bool> g_running(true);
 std::atomic<bool> g_reset(false);
@@ -84,6 +85,8 @@ void signal_handler(int signum)
     }
     else if (signum == SIGINT || signum == SIGTERM)
     {
+        if (g_out2ts)
+            g_out2ts->Shutdown();
         g_running.store(false);
         g_reset.store(true);
     }
@@ -694,7 +697,7 @@ bool WriteEDID(HCHANNEL hChannel, const string & edid_file)
 }
 
 
-void* audio_capture(void* param1, int param2, void* param3)
+void* audio_capture(void* param1, int param2)
 {
     bool      lpcm = false;
     int       bytes_per_sample = 0;
@@ -710,7 +713,6 @@ void* audio_capture(void* param1, int param2, void* param3)
     int cnt     = 0;
 
     HCHANNEL* channel_handle = reinterpret_cast<HCHANNEL* >(param1);
-    OutputTS* out2ts         = reinterpret_cast<OutputTS* >(param3);
 
     uint8_t* capture_buf     = nullptr;
     int      frame_idx       = 0;
@@ -838,7 +840,7 @@ void* audio_capture(void* param1, int param2, void* param3)
                 break;
             }
 
-            out2ts->setAudioParams(capture_buf, capture_buf_size,
+            g_out2ts->setAudioParams(capture_buf, capture_buf_size,
                                    cur_channels, lpcm,
                                    bytes_per_sample,
                                    sample_rate,
@@ -925,7 +927,7 @@ void* audio_capture(void* param1, int param2, void* param3)
                  << " @ " << (uint64_t)(&capture_buf[frame_idx]) << endl;
 #endif
             audio_timestamps[buf_idx] = macf.llTimestamp;
-            if (out2ts->addAudio(&capture_buf[frame_idx], frame_size,
+            if (g_out2ts->addAudio(&capture_buf[frame_idx], frame_size,
                                  macf.llTimestamp))
             {
                 if (++buf_idx == audio_buf_sz)
@@ -933,9 +935,6 @@ void* audio_capture(void* param1, int param2, void* param3)
                 frame_idx = frame_size * buf_idx;
             }
         }
-#if 0
-        cerr << "\n\nAudio done.\n\n";
-#endif
     }
 
   audio_capture_stoped:
@@ -981,12 +980,12 @@ bool add_image_buffer(HCHANNEL hChannel, DWORD dwImageSize)
     return true;
 }
 
-void free_image_buffers(HCHANNEL hChannel, OutputTS& out2ts)
+void free_image_buffers(HCHANNEL hChannel)
 {
     unique_lock<mutex> lock(image_buffer_mutex);
     imageque_t::iterator Iimage;
 
-    out2ts.ClearImageQueue();
+    g_out2ts->ClearImageQueue();
 
     for (Iimage = image_buffers.begin();
          Iimage != image_buffers.end(); ++Iimage)
@@ -1017,8 +1016,7 @@ void set_notify(HNOTIFY&  notify,
 bool video_capture_loop(HCHANNEL  hChannel,
                         HNOTIFY   notify_video,
                         MWCAP_PTR hNotifyEvent,
-                        MWCAP_PTR hCaptureEvent,
-                        OutputTS & out2ts)
+                        MWCAP_PTR hCaptureEvent)
 {
     MWCAP_VIDEO_DEINTERLACE_MODE mode;
     MWCAP_VIDEO_BUFFER_INFO videoBufferInfo;
@@ -1042,10 +1040,10 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
     int slow_cnt = 0;
 
-    if (out2ts.encoderType() == OutputTS::QSV ||
-        out2ts.encoderType() == OutputTS::VAAPI)
+    if (g_out2ts->encoderType() == OutputTS::QSV ||
+        g_out2ts->encoderType() == OutputTS::VAAPI)
         dwFourcc = MWFOURCC_NV12;
-    else if (out2ts.encoderType() == OutputTS::NV)
+    else if (g_out2ts->encoderType() == OutputTS::NV)
         dwFourcc = MWFOURCC_I420;
     else
     {
@@ -1059,6 +1057,16 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
     while (g_running.load() == true)
     {
+#if 0
+        while (!g_out2ts->WaitForAudio())
+        {
+            if (g_running.load() == false)
+                break;
+        }
+        if (g_running.load() == false)
+            break;
+#endif
+
         MWCAP_VIDEO_FRAME_INFO videoFrameInfo;
         MWCAP_VIDEO_SIGNAL_STATUS videoSignalStatus;
 
@@ -1066,15 +1074,10 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
         if (videoSignalStatus.state == MWCAP_VIDEO_SIGNAL_UNSUPPORTED)
         {
-            // There doesn't seem to be any recovery from this.
+            // This often doesn't recover, so use ERROR
             cerr << "ERROR: Input signal status: Unsupported\n";
-#if 1
             this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 10));
             continue;
-#else
-            g_running.store(false);
-            break;
-#endif
         }
 
         switch (videoSignalStatus.state)
@@ -1091,7 +1094,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
               continue;
             case MWCAP_VIDEO_SIGNAL_LOCKED:
               if (g_verbose > 0)
-                  cerr << "Input signal status: Locked\n";
+                  cerr << "INFO: Input signal status: Locked\n";
               break;
             default:
               if (g_verbose > 0)
@@ -1154,13 +1157,13 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 cerr << "========\n";
             }
 
-            free_image_buffers(hChannel, out2ts);
+            free_image_buffers(hChannel);
             if (!add_image_buffer(hChannel, dwImageSize))
                 return false;
             if (!add_image_buffer(hChannel, dwImageSize))
                 return false;
 
-            out2ts.setVideoParams(width, height, interlaced,
+            g_out2ts->setVideoParams(width, height, interlaced,
                                   time_base, frame_duration, frame_rate);
 
             if (MWGetVideoBufferInfo(hChannel, &videoBufferInfo) != MW_SUCCEEDED)
@@ -1195,7 +1198,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             return false;
         }
 
-        out2ts.VideoReady(true);
+        g_out2ts->VideoReady(true);
         frame_idx = -1;
         while (g_running.load() == true)
         {
@@ -1307,12 +1310,14 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
             if (ret != MW_SUCCEEDED)
             {
+                image_buffer_available(pbImage);
                 continue;
             }
             if (MWWaitEvent(hCaptureEvent, 1000) <= 0)
             {
                 if (g_verbose > 0)
                     cerr << "WARNING: wait capture event error or timeout\n";
+                image_buffer_available(pbImage);
                 break;
             }
 
@@ -1323,16 +1328,16 @@ bool video_capture_loop(HCHANNEL  hChannel,
                         ? videoFrameInfo.allFieldBufferedTimes[1]
                         : videoFrameInfo.allFieldBufferedTimes[0];
 
-            out2ts.VideoFrame(pbImage, dwImageSize, timestamp);
+            g_out2ts->AddVideoFrame(pbImage, dwImageSize, timestamp);
         }
     }
 
     g_running.store(false);
-    free_image_buffers(hChannel, out2ts);
+    free_image_buffers(hChannel);
     return true;
 }
 
-bool video_capture(HCHANNEL hChannel, OutputTS & out2ts)
+bool video_capture(HCHANNEL hChannel)
 {
     HNOTIFY   notify_video  = 0;
     MWCAP_PTR hNotifyEvent  = 0;
@@ -1362,14 +1367,13 @@ bool video_capture(HCHANNEL hChannel, OutputTS & out2ts)
     }
 
     video_capture_loop(hChannel, notify_video,
-                       hNotifyEvent, hCaptureEvent,
-                       out2ts);
+                       hNotifyEvent, hCaptureEvent);
 
     MWUnregisterNotify(hChannel, notify_video);
     notify_video=0;
     MWStopVideoCapture(hChannel);
     if (g_verbose > 2)
-        cerr << "\nStop capture\n";
+        cerr << "Capture finished.\n";
 
     if(hNotifyEvent != 0)
     {
@@ -1386,8 +1390,7 @@ bool video_capture(HCHANNEL hChannel, OutputTS & out2ts)
     return true;
 }
 
-bool capture(HCHANNEL channel_handle,
-             OutputTS & out2ts, bool no_audio)
+bool capture(HCHANNEL channel_handle, bool no_audio)
 {
 
     MWCAP_CHANNEL_INFO channel_info;
@@ -1418,10 +1421,10 @@ bool capture(HCHANNEL channel_handle,
     if (!no_audio)
     {
         audio_thr = thread(audio_capture, channel_handle,
-                                g_verbose, &out2ts);
+                                g_verbose);
     }
 
-    video_capture(channel_handle, out2ts);
+    video_capture(channel_handle);
 
     if (!no_audio)
     {
@@ -1713,6 +1716,7 @@ int main(int argc, char* argv[])
 {
 //    parse_cmd(argc, argv);
 
+    int    ret = 0;
     int    boardId  = -1;
     int    devIndex = -1;
 
@@ -1872,12 +1876,12 @@ int main(int argc, char* argv[])
 
     if (do_capture)
     {
-        OutputTS out2ts(g_verbose, video_codec, preset, quality,
-                        look_ahead, no_audio,
-                        device, image_buffer_available);
+        g_out2ts = new OutputTS(g_verbose, video_codec, preset, quality,
+                                look_ahead, no_audio,
+                                device, image_buffer_available);
 
-        if (!capture(channel_handle, out2ts, no_audio))
-            return -1;
+        ret = capture(channel_handle, no_audio);
+        delete g_out2ts;
     }
 
     if (channel_handle != nullptr)
@@ -1885,5 +1889,5 @@ int main(int argc, char* argv[])
 
     MWCaptureExitInstance();
 
-    return 0;
+    return ret;
 }

@@ -670,7 +670,7 @@ AudioIO::AudioIO(int verbose)
 {
 }
 
-void AudioIO::SetEoF(void)
+void AudioIO::Shutdown(void)
 {
     buffer_que_t::iterator Ibuf;
     for (Ibuf = m_buffer_q.begin(); Ibuf != m_buffer_q.end(); ++Ibuf)

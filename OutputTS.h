@@ -28,6 +28,7 @@ class OutputTS
     void Shutdown(void);
     void AudioReady(bool val);
     void VideoReady(bool val);
+    bool WaitForAudio(void);
 
     EncoderType encoderType(void) const { return m_encoderType; }
     bool setAudioParams(uint8_t* capture_buf, size_t capture_buf_size,
@@ -41,7 +42,8 @@ class OutputTS
     bool addAudio(uint8_t* buf, size_t len, int64_t timestamp);
     void ClearImageQueue(void);
     void Write(void);
-    bool VideoFrame(uint8_t*  pImage, uint32_t imageSize, int64_t timestamp);
+    bool AddVideoFrame(uint8_t*  pImage,
+                       uint32_t imageSize, int64_t timestamp);
 
   private:
     // a wrapper around a single output AVStream
