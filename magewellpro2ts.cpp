@@ -76,6 +76,14 @@ std::atomic<bool> g_running(true);
 std::atomic<bool> g_reset(false);
 int  g_frame_ms = 17;
 
+void Shutdown(void)
+{
+    if (g_out2ts)
+        g_out2ts->Shutdown();
+    g_running.store(false);
+    g_reset.store(true);
+}
+
 void signal_handler(int signum)
 {
     if (signum == SIGHUP || signum == SIGUSR1)
@@ -85,10 +93,7 @@ void signal_handler(int signum)
     }
     else if (signum == SIGINT || signum == SIGTERM)
     {
-        if (g_out2ts)
-            g_out2ts->Shutdown();
-        g_running.store(false);
-        g_reset.store(true);
+        Shutdown();
     }
     else
         cerr << "Unhandled interrupt." << endl;
@@ -938,7 +943,7 @@ void* audio_capture(void* param1, int param2)
     }
 
   audio_capture_stoped:
-    g_running.store(false);
+    Shutdown();
 
     if(notify_audio)
     {
@@ -1332,7 +1337,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
         }
     }
 
-    g_running.store(false);
+    Shutdown();
     free_image_buffers(hChannel);
     return true;
 }
@@ -1368,6 +1373,7 @@ bool video_capture(HCHANNEL hChannel)
 
     video_capture_loop(hChannel, notify_video,
                        hNotifyEvent, hCaptureEvent);
+    Shutdown();
 
     MWUnregisterNotify(hChannel, notify_video);
     notify_video=0;

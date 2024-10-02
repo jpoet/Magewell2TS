@@ -122,7 +122,7 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     else
     {
         m_encoderType = EncoderType::UNKNOWN;
-        cerr << "ERROR: '" << m_video_codec_name << "' not supported.\n";
+        cerr << "ERROR: Codec '" << m_video_codec_name << "' not supported.\n";
         Shutdown();
     }
 
