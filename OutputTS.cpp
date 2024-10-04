@@ -126,9 +126,6 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
         Shutdown();
     }
 
-    if (m_no_audio)
-        m_audio_ready = true;
-
     m_image_ready_thread = std::thread(&OutputTS::Write, this);
 }
 
@@ -478,43 +475,13 @@ bool OutputTS::open_video(void)
     return true;
 }
 
-void OutputTS::AudioReady(bool val)
-{
-    {
-        std::unique_lock<std::mutex> lock(m_ready_mutex);
-        m_audio_ready = val;
-    }
-    m_ready_cond.notify_one();
-}
-
-void OutputTS::VideoReady(bool val)
-{
-    {
-        std::unique_lock<std::mutex> lock(m_ready_mutex);
-        m_video_ready = val;
-    }
-    m_ready_cond.notify_one();
-}
-
-bool OutputTS::WaitForAudio(void)
-{
-    return m_audioIO.WaitForReady();
-}
-
 bool OutputTS::open_container(void)
 {
     int ret;
     AVDictionary* opt = NULL;
 
     if (!m_no_audio)
-    {
-        std::unique_lock<std::mutex> lock(m_ready_mutex);
-        m_ready_cond.wait(lock, [&]{return m_audio_ready || m_running.load() == false;});
-    }
-#if 0
-    std::unique_lock<std::mutex> lock(m_ready_mutex);
-    m_ready_cond.wait(lock, [&]{return m_video_ready || m_running.load() == false;});
-#endif
+        m_audioIO.WaitForReady();
 
     close_container();
     if (m_running.load() == false)
@@ -578,7 +545,6 @@ bool OutputTS::setAudioParams(uint8_t* capture_buf, size_t capture_buf_size,
                              timestamps))
         return false;
 
-    AudioReady(true);
     if (m_verbose > 0)
         cerr << "setAudioParams " << (is_lpcm ? "LPCM" : "Bitstream") << endl;
     m_init_needed = true;
@@ -610,7 +576,6 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
             cerr << "Video Params set\n";
     }
 
-    VideoReady(true);
     m_init_needed = true;
 
     return true;
@@ -862,6 +827,7 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
             if (m_verbose > 0)
                 cerr << "WARNING: S/PDIF audio out of sync, resetting.\n";
             m_slow_audio_cnt = 0;
+
             m_audioIO.RescanSPDIF();
             return false;
         }
@@ -902,7 +868,6 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
  */
 bool OutputTS::write_audio_frame(AVFormatContext* oc, OutputStream* ost)
 {
-
     if (m_audioIO.CodecChanged())
     {
         m_init_needed = true;
@@ -1400,12 +1365,6 @@ void OutputTS::Write(void)
                 m_imagequeue.pop_front();
             }
 
-            if (!m_audio_ready)
-            {
-                m_image_buffer_available(pImage);
-                continue;
-            }
-
             if (m_encoderType == EncoderType::NV)
                 nv_encode(m_output_format_context, &m_video_stream,
                           pImage, timestamp);
@@ -1433,10 +1392,16 @@ bool OutputTS::AddVideoFrame(uint8_t* pImage, uint32_t imageSize,
                           int64_t timestamp)
 {
     const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
-    if (!m_init_needed)
-        m_imagequeue.push_back(imagepkt_t{timestamp, pImage});
-    else
+
+    static int cnt = 0;
+
+    m_imagequeue.push_back(imagepkt_t{timestamp, pImage});
+    if (!m_audioIO.Ready() && m_imagequeue.size() > 3)
+    {
+        pImage = m_imagequeue.front().image;
         m_image_buffer_available(pImage);
+    }
+
     m_image_ready.notify_one();
 
     return true;

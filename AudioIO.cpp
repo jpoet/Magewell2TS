@@ -111,8 +111,7 @@ void AudioBuffer::CleanupThread(void)
 
 void AudioBuffer::RescanSPDIF(void)
 {
-    m_codec_name.clear();
-    Seek(-m_frame_size, SEEK_CUR);
+    Seek(-m_frame_size * 32 * 10, SEEK_CUR);
     detect_codec();
 }
 
@@ -214,8 +213,8 @@ int AudioBuffer::Add(uint8_t* Pframe, size_t len, int64_t timestamp)
             cerr << "INFO: [" << m_id
                  << "] Overwrote buffer begin, moving read\n";
             PrintPointers("      Add", true);
-            m_read = m_write;
         }
+        m_read = m_write;
     }
 
     return 0;
@@ -638,6 +637,11 @@ bool AudioBuffer::open_spdif(void)
 
 void AudioBuffer::detect_codec(void)
 {
+    m_parent->m_codec_mutex.lock();
+    m_codec_name.clear();
+    m_parent->m_codec_ready = false;
+    m_parent->m_codec_mutex.unlock();
+
     if (open_spdif())
     {
         m_parent->m_codec_mutex.lock();
@@ -714,6 +718,12 @@ void AudioIO::RescanSPDIF(void)
         m_buffer_q.begin()->RescanSPDIF();
 }
 
+bool AudioIO::Ready(void)
+{
+    std::unique_lock<std::mutex> lock(m_codec_mutex);
+    return m_codec_ready;
+}
+
 bool AudioIO::WaitForReady(void)
 {
     {
@@ -722,7 +732,7 @@ bool AudioIO::WaitForReady(void)
             return true;
     }
 
-    // Wait for codecs to be detected.
+    // Wait for codec to be detected.
     while (m_running.load() == true)
     {
         {
@@ -756,7 +766,6 @@ bool AudioIO::WaitForReady(void)
         m_codec_cond.wait_for(lock, chrono::milliseconds(8),
                           [&]{return m_codec_ready ||
                                   m_running.load() == false;});
-        m_codec_ready = false;
     }
 
     return false;

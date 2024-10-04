@@ -130,6 +130,7 @@ class AudioIO
                    int64_t* timestamps);
     bool WaitForReady(void);
 
+    bool    Ready(void);
     void    RescanSPDIF(void);
     int     Add(uint8_t* Pframe, size_t len, int64_t timestamp);
     int64_t Seek(int64_t offset, int whence);

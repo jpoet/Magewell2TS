@@ -1062,16 +1062,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
     while (g_running.load() == true)
     {
-#if 0
-        while (!g_out2ts->WaitForAudio())
-        {
-            if (g_running.load() == false)
-                break;
-        }
-        if (g_running.load() == false)
-            break;
-#endif
-
         MWCAP_VIDEO_FRAME_INFO videoFrameInfo;
         MWCAP_VIDEO_SIGNAL_STATUS videoSignalStatus;
 
@@ -1203,7 +1193,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
             return false;
         }
 
-        g_out2ts->VideoReady(true);
         frame_idx = -1;
         while (g_running.load() == true)
         {
