@@ -1130,7 +1130,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             }
 
             // 100ns / frame_duration
-            if (g_verbose > 2)
+            if (g_verbose > 1)
             {
                 cerr << "========\n";
                 double fps = (interlaced) ?

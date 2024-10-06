@@ -1393,8 +1393,6 @@ bool OutputTS::AddVideoFrame(uint8_t* pImage, uint32_t imageSize,
 {
     const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
 
-    static int cnt = 0;
-
     m_imagequeue.push_back(imagepkt_t{timestamp, pImage});
     if (!m_audioIO.Ready() && m_imagequeue.size() > 3)
     {

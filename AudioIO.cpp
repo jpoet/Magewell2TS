@@ -111,7 +111,7 @@ void AudioBuffer::CleanupThread(void)
 
 void AudioBuffer::RescanSPDIF(void)
 {
-    Seek(-m_frame_size * 32 * 10, SEEK_CUR);
+    Seek(-m_frame_size * 32, SEEK_CUR);
     detect_codec();
 }
 
