@@ -123,7 +123,7 @@ void AudioBuffer::OwnBuffer(void)
     if (m_lpcm)
     {
         std::unique_lock<std::mutex> lock(m_parent->m_codec_mutex);
-        m_codec_name = "eac3";
+        m_codec_name = "ac3";
         m_channel_layout = AV_CHANNEL_LAYOUT_STEREO;
         m_parent->m_codec_ready = true;
         m_parent->m_codec_cond.notify_one();
@@ -651,10 +651,7 @@ void AudioBuffer::detect_codec(void)
         PrintState("SPDIF");
     }
     else
-    {
-        cerr << "Error: Failed to detect SPDIF codec." << endl;
         setEoF();
-    }
 }
 
 size_t AudioBuffer::Size(void) const
