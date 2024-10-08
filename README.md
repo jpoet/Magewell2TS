@@ -19,6 +19,18 @@ The Magewell driver provides V4L2 and ALSA interfaces to the card. This applicat
 
 The Magewell PRO capture cards capture raw audio and video. The video (at least) needs compressed and it is up to the Linux PC to do that. The only practical way of accomplishing this is with GPU assist. Intel QSV & VAAPI and nVidia nvenc are supported.
 
+----
+## Versions
+* release/v1
+
+        - Supports hevc_nvenc and h264_nvenc for video codec.
+        - Does not handle audio or video changes at all, which can usually be worked around by using the '-n' (no audio) option.
+
+* release/v2
+
+        - Adds support for hevc_qsv and h264_qsv for video codec.
+        - Does a decent job at handling audio and video changes midstream.
+
 ***
 ## Magewell driver
 The Magewell driver can be found here:
