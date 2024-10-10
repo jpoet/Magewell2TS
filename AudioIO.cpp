@@ -544,8 +544,6 @@ bool AudioBuffer::open_spdif(void)
     int ret;
     int idx;
 
-    SetMark();
-
     open_spdif_context();
 
     int try_cnt = 2;
@@ -629,8 +627,6 @@ bool AudioBuffer::open_spdif(void)
      */
     avio_flush(m_spdif_avio_context);
     avformat_flush(m_spdif_format_context);
-    /* Now make that data available again */
-    ReturnToMark();
 
     return true;
 }
