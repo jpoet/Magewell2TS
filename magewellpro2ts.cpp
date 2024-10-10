@@ -963,13 +963,14 @@ void* audio_capture(void* param1, int param2)
 }
 
 using imageque_t = deque<uint8_t*>;
-imageque_t image_buffers;
-imageque_t avail_image_buffers;
-mutex image_buffer_mutex;
+imageque_t         g_image_buffers;
+imageque_t         g_avail_image_buffers;
+mutex              g_image_buffer_mutex;
+condition_variable g_image_returned;
 
 bool add_image_buffer(HCHANNEL hChannel, DWORD dwImageSize)
 {
-    unique_lock<mutex> lock(image_buffer_mutex);
+    unique_lock<mutex> lock(g_image_buffer_mutex);
 
     uint8_t* pbImage =  new uint8_t[dwImageSize];
     if (pbImage == nullptr)
@@ -980,32 +981,37 @@ bool add_image_buffer(HCHANNEL hChannel, DWORD dwImageSize)
 
     MWPinVideoBuffer(hChannel, (MWCAP_PTR)pbImage, dwImageSize);
 
-    image_buffers.push_back(pbImage);
-    avail_image_buffers.push_back(pbImage);
+    g_image_buffers.push_back(pbImage);
+    g_avail_image_buffers.push_back(pbImage);
     return true;
 }
 
 void free_image_buffers(HCHANNEL hChannel)
 {
-    unique_lock<mutex> lock(image_buffer_mutex);
+    unique_lock<mutex> lock(g_image_buffer_mutex);
     imageque_t::iterator Iimage;
 
     g_out2ts->ClearImageQueue();
 
-    for (Iimage = image_buffers.begin();
-         Iimage != image_buffers.end(); ++Iimage)
+    size_t num_bufs = g_image_buffers.size();
+    g_image_returned.wait_for(lock, chrono::milliseconds(g_frame_ms),
+              [num_bufs]{return g_avail_image_buffers.size() == num_bufs;});
+
+    for (Iimage = g_image_buffers.begin();
+         Iimage != g_image_buffers.end(); ++Iimage)
     {
         MWUnpinVideoBuffer(hChannel, (LPBYTE)(*Iimage));
         delete[] (*Iimage);
     }
-    image_buffers.clear();
-    avail_image_buffers.clear();
+    g_image_buffers.clear();
+    g_avail_image_buffers.clear();
 }
 
 void image_buffer_available(uint8_t* pbImage)
 {
-    unique_lock<mutex> lock(image_buffer_mutex);
-    avail_image_buffers.push_back(pbImage);
+    unique_lock<mutex> lock(g_image_buffer_mutex);
+    g_avail_image_buffers.push_back(pbImage);
+    g_image_returned.notify_one();
 }
 
 void set_notify(HNOTIFY&  notify,
@@ -1069,8 +1075,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
         if (videoSignalStatus.state == MWCAP_VIDEO_SIGNAL_UNSUPPORTED)
         {
-            // This often doesn't recover, so use ERROR
-            cerr << "ERROR: Input signal status: Unsupported\n";
+            cerr << "WARNING: Input signal status: Unsupported\n";
             this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 10));
             continue;
         }
@@ -1275,20 +1280,20 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 continue;
             }
 
-            image_buffer_mutex.lock();
-            if (avail_image_buffers.empty())
+            g_image_buffer_mutex.lock();
+            if (g_avail_image_buffers.empty())
             {
-                image_buffer_mutex.unlock();
+                g_image_buffer_mutex.unlock();
                 add_image_buffer(hChannel, dwImageSize);
-                image_buffer_mutex.lock();
+                g_image_buffer_mutex.lock();
                 if (g_verbose > 0)
                     cerr << "WARNING: video encoder is "
                          << ++buffer_cnt << " frames behind.\n";
             }
 
-            pbImage = avail_image_buffers.front();
-            avail_image_buffers.pop_front();
-            image_buffer_mutex.unlock();
+            pbImage = g_avail_image_buffers.front();
+            g_avail_image_buffers.pop_front();
+            g_image_buffer_mutex.unlock();
 
             MW_RESULT ret = MWCaptureVideoFrameToVirtualAddress
                             (hChannel,
