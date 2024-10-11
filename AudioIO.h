@@ -40,25 +40,25 @@ class AudioBuffer
     AudioBuffer& operator=(const AudioBuffer & rhs);
     bool operator==(const AudioBuffer & rhs);
 
-    int Add(uint8_t* Pframe, size_t len, int64_t timestamp);
-    int Read(uint8_t* dest, size_t len);
+    int Add(uint8_t* Pframe, int len, int64_t timestamp);
+    int Read(uint8_t* dest, int len);
     AVPacket* ReadSPDIF(void);
 
     int64_t Seek(int64_t offset, int whence);
     void SetMark(void);
     void ReturnToMark(void);
 
-    int Id(void) const { return m_id; }
+    int  Id(void) const { return m_id; }
     bool Empty(void) const { return m_read == m_write; }
-    size_t Size(void) const;
+    int  Size(void) const;
 
     std::string CodecName(void) const { return m_codec_name; }
     AVChannelLayout ChannelLayout(void) const { return m_channel_layout; }
     bool LPCM(void) const { return m_lpcm; }
-    int SampleRate(void) const { return m_sample_rate; }
-    int BytesPerSample(void) const { return m_bytes_per_sample; }
-    int FrameSize(void) const { return m_frame_size; }
-    int BlockSize(void) const { return m_block_size; }
+    int  SampleRate(void) const { return m_sample_rate; }
+    int  BytesPerSample(void) const { return m_bytes_per_sample; }
+    int  FrameSize(void) const { return m_frame_size; }
+    int  BlockSize(void) const { return m_block_size; }
 
   private:
     bool open_spdif_context(void);
@@ -77,13 +77,12 @@ class AudioBuffer
     AVChannelLayout  m_channel_layout;
 
     int64_t* m_timestamps  {nullptr};
-    size_t   m_frame_cnt   {0};
-//        int64_t  m_timestamp   {0LL};
+    int      m_frame_cnt   {0};
     bool     m_own_buffer  {false};
 
     struct {
         uint8_t* read_pos {0};
-        size_t   loop_cnt {0};
+        int   loop_cnt {0};
     }                m_mark;
 
     AVFormatContext* m_spdif_format_context {nullptr};
@@ -130,23 +129,23 @@ class AudioIO
                    int64_t* timestamps);
     bool WaitForReady(void);
 
-    bool    Ready(void);
-    void    RescanSPDIF(void);
-    int     Add(uint8_t* Pframe, size_t len, int64_t timestamp);
-    int64_t Seek(int64_t offset, int whence);
-    int     Read(uint8_t* dest, size_t len);
+    bool      Ready(void);
+    void      RescanSPDIF(void);
+    int       Add(uint8_t* Pframe, int len, int64_t timestamp);
+    int64_t   Seek(int64_t offset, int whence);
+    int       Read(uint8_t* dest, int32_t len);
     AVPacket* ReadSPDIF(void);
 
     int     BufId(void) const;
-    size_t  Buffers(void) const { return m_buffer_q.size(); }
-    size_t  Size(void) const;
+    int     Buffers(void) const { return m_buffer_q.size(); }
+    int     Size(void) const;
     bool    Empty(void) const;
     bool    BlockReady(void) const;
     int64_t TimeStamp(void) const { return m_timestamp; }
     std::string CodecName(void) const { return m_codec_name; }
     AVChannelLayout ChannelLayout(void) const { return m_channel_layout; }
-    int SampleRate(void) const { return m_sample_rate; }
-    int BytesPerSample(void) const { return m_bytes_per_sample; }
+    int     SampleRate(void) const { return m_sample_rate; }
+    int     BytesPerSample(void) const { return m_bytes_per_sample; }
 
     bool    Bitstream(void) { return !m_lpcm; }
     bool    CodecChanged(void);

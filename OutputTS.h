@@ -120,6 +120,8 @@ class OutputTS
     int have_video {0};
     int have_audio {0};
 
+    int              m_verbose;
+
     std::string      m_filename               {"pipe:1"};
 
     bool             m_no_audio               {false};
@@ -138,8 +140,6 @@ class OutputTS
     AVRational       m_input_time_base        {1, 10000000};
 
     bool             m_interlaced             {false};
-
-    int              m_verbose;
 
     std::mutex              m_container_mutex;
 

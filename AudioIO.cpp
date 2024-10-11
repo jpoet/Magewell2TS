@@ -64,7 +64,7 @@ bool AudioBuffer::operator==(const AudioBuffer & rhs)
 
 int64_t AudioBuffer::get_timestamp(uint8_t* P) const
 {
-    size_t idx = static_cast<uint32_t>(P - m_begin) / m_frame_size;
+    int idx = static_cast<uint32_t>(P - m_begin) / m_frame_size;
     return m_timestamps[idx];
 }
 
@@ -76,18 +76,18 @@ AudioBuffer::AudioBuffer(uint8_t* Pbegin, uint8_t* Pend,
                          AudioIO* parent, int verbose, int id)
     : m_begin(Pbegin)
     , m_end(Pend)
-    , m_num_channels(num_channels)
-    , m_lpcm(is_lpcm)
-    , m_bytes_per_sample(bytes_per_sample)
-    , m_sample_rate(sample_rate)
-    , m_samples_per_frame(samples_per_frame)
-    , m_frame_size(frame_size)
     , m_write(Pbegin)
     , m_read(Pbegin)
     , m_timestamps(timestamps)
+    , m_lpcm(is_lpcm)
+    , m_num_channels(num_channels)
+    , m_bytes_per_sample(bytes_per_sample)
+    , m_frame_size(frame_size)
+    , m_samples_per_frame(samples_per_frame)
+    , m_sample_rate(sample_rate)
     , m_parent(parent)
-    , m_verbose(verbose)
     , m_id(id)
+    , m_verbose(verbose)
 {
     m_block_size = 8 * m_bytes_per_sample * m_samples_per_frame * 8;
 }
@@ -162,9 +162,9 @@ void AudioBuffer::PrintPointers(const string & where, bool force) const
         string loc = "[" + std::to_string(m_id) + "] " + where + " ";
         cerr << loc
              << "begin: " << (uint64_t)(m_begin)
-             << ", end : " << (size_t)(m_end - m_begin)
-             << ", write : " << std::setw(6) << (size_t)(m_write - m_begin)
-             << ", read : " << std::setw(6) << (size_t)(m_read - m_begin)
+             << ", end : " << (int)(m_end - m_begin)
+             << ", write : " << std::setw(6) << (int)(m_write - m_begin)
+             << ", read : " << std::setw(6) << (int)(m_read - m_begin)
              << ", frame sz: " << m_frame_size
              << ", wrapped: " << (m_write_wrapped ? "Yes, " : "No, ")
              << (m_lpcm ? " LPCM" : " bistream")
@@ -175,7 +175,7 @@ void AudioBuffer::PrintPointers(const string & where, bool force) const
     }
 }
 
-int AudioBuffer::Add(uint8_t* Pframe, size_t len, int64_t timestamp)
+int AudioBuffer::Add(uint8_t* Pframe, int len, int64_t timestamp)
 {
     const std::unique_lock<std::mutex> lock(m_write_mutex);
 
@@ -220,10 +220,10 @@ int AudioBuffer::Add(uint8_t* Pframe, size_t len, int64_t timestamp)
     return 0;
 }
 
-int AudioBuffer::Read(uint8_t* dest, size_t len)
+int AudioBuffer::Read(uint8_t* dest, int32_t len)
 {
     uint8_t* Pend;
-    size_t   sz;
+    int   sz;
     static int empty_cnt = 0;
 
     if (Empty())
@@ -262,9 +262,9 @@ int AudioBuffer::Read(uint8_t* dest, size_t len)
         {
             cerr << "[" << m_id << "] Read has passed the end!\n";
             cerr << "[" << m_id << "] Audio write: "
-                 << (size_t)(m_write - m_begin)
-                 << " read: " << (size_t)(m_read - m_begin)
-                 << " end: " << (size_t)(m_end - m_begin)
+                 << (int)(m_write - m_begin)
+                 << " read: " << (int)(m_read - m_begin)
+                 << " end: " << (int)(m_end - m_begin)
                  << endl;
             exit(-1);
         }
@@ -359,7 +359,9 @@ int64_t AudioBuffer::Seek(int64_t offset, int whence)
 
     int force = whence & AVSEEK_FORCE;
     whence &= ~AVSEEK_FORCE;
+#if 0
     int size = whence & AVSEEK_SIZE;
+#endif
     whence &= ~AVSEEK_SIZE;
 
     if (force)
@@ -438,7 +440,7 @@ int64_t AudioBuffer::Seek(int64_t offset, int whence)
     }
     else if (desired > 0)
     {
-        size_t len = Read(nullptr, desired);
+        int len = Read(nullptr, desired);
         if (len < desired)
             return -1;
         return 0;
@@ -455,7 +457,7 @@ void AudioBuffer::SetMark(void)
 
 void AudioBuffer::ReturnToMark(void)
 {
-    size_t diff = m_read - m_mark.read_pos;
+    int diff = m_read - m_mark.read_pos;
     diff += (m_loop_cnt - m_mark.loop_cnt) * (m_end - m_begin);
     Seek(-diff, SEEK_CUR);
 }
@@ -650,7 +652,7 @@ void AudioBuffer::detect_codec(void)
         setEoF();
 }
 
-size_t AudioBuffer::Size(void) const
+int AudioBuffer::Size(void) const
 {
     if (m_write_wrapped)
         return (m_end - m_read) +
@@ -775,14 +777,14 @@ int AudioIO::BufId(void) const
     return (*Ibuf).Id();
 }
 
-size_t AudioIO::Size(void) const
+int AudioIO::Size(void) const
 {
     const std::unique_lock<std::mutex> lock(m_buffer_mutex);
 
     if (m_buffer_q.empty())
         return 0;
 
-    size_t sz = 0;
+    int sz = 0;
     buffer_que_t::const_iterator Ibuf;
     for (Ibuf = m_buffer_q.begin(); Ibuf != m_buffer_q.end(); ++Ibuf)
     {
@@ -822,7 +824,7 @@ bool AudioIO::BlockReady(void) const
     return (*Ibuf).Size() > (*Ibuf).BlockSize();
 }
 
-int AudioIO::Add(uint8_t* Pframe, size_t len, int64_t timestamp)
+int AudioIO::Add(uint8_t* Pframe, int len, int64_t timestamp)
 {
 //    const std::unique_lock<std::mutex> lock(m_buffer_mutex);
 
@@ -849,7 +851,7 @@ int64_t AudioIO::Seek(int64_t offset, int whence)
     return (*Ibuf).Seek(offset, whence);
 }
 
-int AudioIO::Read(uint8_t* dest, size_t len)
+int AudioIO::Read(uint8_t* dest, int len)
 {
 //    const std::unique_lock<std::mutex> lock(m_buffer_mutex);
 

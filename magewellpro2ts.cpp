@@ -126,7 +126,7 @@ HCHANNEL open_channel(int devIndex, double boardId)
     for (int idx = 0; idx < nChannelCount; ++idx)
     {
         MWCAP_CHANNEL_INFO info;
-        MW_RESULT mr = MWGetChannelInfoByIndex(idx, &info);
+        /* MW_RESULT mr = */ MWGetChannelInfoByIndex(idx, &info);
 
         if (0 == (strcmp(info.szFamilyName, "Pro Capture")))
         {
@@ -629,7 +629,7 @@ bool ReadEDID(HCHANNEL hChannel, const string & edid_file)
     xr = MWGetEDID(hChannel, byData, &ulSize);
     if (xr == MW_SUCCEEDED)
     {
-        int nWriteSize = (int)fwrite(byData, 1, 256, pFile);
+        ULONG nWriteSize = (int)fwrite(byData, 1, 256, pFile);
 
         if (nWriteSize == ulSize)
         {
@@ -706,16 +706,17 @@ void* audio_capture(void* param1, int param2)
 {
     bool      lpcm = false;
     int       bytes_per_sample = 0;
-    int       sample_rate  = 0;
+    unsigned int sample_rate  = 0;
     WORD      valid_channels = 0;
     MWCAP_PTR notify_event = 0;
     HNOTIFY   notify_audio = 0;
     DWORD     input_count = 0;
     int       cur_channels;
+#if 0
     int       channel_offset;
+#endif
     MWCAP_AUDIO_SIGNAL_STATUS audio_signal_status;
     int err_cnt = 0;
-    int cnt     = 0;
 
     HCHANNEL* channel_handle = reinterpret_cast<HCHANNEL* >(param1);
 
@@ -820,7 +821,9 @@ void* audio_capture(void* param1, int param2)
                 continue;
             }
 
+#if 0
             channel_offset = cur_channels / 2;
+#endif
 
             // NOTE: capture_buf/audio_timestamps will be freed by AudioIO class
 
@@ -855,7 +858,6 @@ void* audio_capture(void* param1, int param2)
             g_reset.store(false);
         }
 
-        cnt = 0;
         err_cnt = 0;
 
         while (g_reset.load() == false)
@@ -1029,10 +1031,11 @@ bool video_capture_loop(HCHANNEL  hChannel,
                         MWCAP_PTR hNotifyEvent,
                         MWCAP_PTR hCaptureEvent)
 {
+#if 0
     MWCAP_VIDEO_DEINTERLACE_MODE mode;
+#endif
     MWCAP_VIDEO_BUFFER_INFO videoBufferInfo;
     DWORD notify_mode;
-    LONGLONG llTotalTime = 0LL;
     DWORD dwFourcc = MWFOURCC_I420;
 
     int64_t timestamp;
@@ -1047,9 +1050,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
     int buffer_cnt = 2;
     int frame_idx = -1;
     int frame_wrap_idx = 4;
-    int idx;
-
-    int slow_cnt = 0;
 
     if (g_out2ts->encoderType() == OutputTS::QSV ||
         g_out2ts->encoderType() == OutputTS::VAAPI)
@@ -1177,15 +1177,19 @@ bool video_capture_loop(HCHANNEL  hChannel,
             if(interlaced)
             {
                 notify_mode |= MWCAP_NOTIFY_VIDEO_FIELD_BUFFERED;
+#if 0
                 if (0 == videoBufferInfo.iBufferedFieldIndex)
                     mode = MWCAP_VIDEO_DEINTERLACE_TOP_FIELD;
                 else
                     mode = MWCAP_VIDEO_DEINTERLACE_BOTTOM_FIELD;
+#endif
             }
             else
             {
                 notify_mode |= MWCAP_NOTIFY_VIDEO_FRAME_BUFFERED;
+#if 0
                 mode = MWCAP_VIDEO_DEINTERLACE_BLEND;
+#endif
             }
         }
 

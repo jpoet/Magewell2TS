@@ -105,12 +105,12 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
                    MagCallback image_buffer_avail)
     : m_audioIO(verbose_level)
     , m_verbose(verbose_level)
+    , m_no_audio(no_audio)
     , m_video_codec_name(video_codec_name)
+    , m_device("/dev/dri/" + device)
     , m_preset(preset)
     , m_quality(quality)
     , m_look_ahead(look_ahead)
-    , m_no_audio(no_audio)
-    , m_device("/dev/dri/" + device)
     , m_image_buffer_available(image_buffer_avail)
 {
     if (m_video_codec_name.find("qsv") != string::npos)
@@ -329,7 +329,7 @@ bool OutputTS::open_audio(void)
         return false;
 
     OutputStream* ost = &m_audio_stream;
-    AVFormatContext* oc = m_output_format_context;
+//    AVFormatContext* oc = m_output_format_context;
     const AVCodec* codec = audio_codec;
     AVCodecContext* enc_ctx = m_audio_stream.enc;
     AVDictionary* opt = NULL;
@@ -730,19 +730,17 @@ AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
 {
     AVFrame* frame = ost->tmp_frame;
 
-    int j, i;
     uint8_t* q = (uint8_t*)frame->data[0];
-    size_t got;
 
-    size_t bytes = ost->enc->ch_layout.nb_channels *
-                   frame->nb_samples * m_audioIO.BytesPerSample();
+    int bytes = ost->enc->ch_layout.nb_channels *
+                frame->nb_samples * m_audioIO.BytesPerSample();
     if (m_audioIO.Size() < bytes)
     {
         if (m_verbose > 4)
             cerr << "Not enough audio data.\n";
         return nullptr;
     }
-    if ((got = m_audioIO.Read(q, bytes)) == 0)
+    if (m_audioIO.Read(q, bytes) == 0)
         return nullptr;
 
     frame->pts = m_audioIO.TimeStamp();
