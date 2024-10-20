@@ -74,7 +74,7 @@ class OutputTS
 
     bool add_stream(OutputStream* ost, AVFormatContext* oc,
                     const AVCodec* *codec);
-    static void close_stream(AVFormatContext* oc, OutputStream* ost);
+    static void close_stream(OutputStream* ost);
 
     bool open_audio(void);
     bool open_video(void);
@@ -117,8 +117,6 @@ class OutputTS
     AVFormatContext* m_output_format_context {nullptr};
     OutputStream m_video_stream { 0 };
     OutputStream m_audio_stream { 0 };
-    int have_video {0};
-    int have_audio {0};
 
     int              m_verbose;
 

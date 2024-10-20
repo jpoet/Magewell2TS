@@ -93,6 +93,7 @@ void signal_handler(int signum)
     }
     else if (signum == SIGINT || signum == SIGTERM)
     {
+        cerr << "Received SIGINT/SIGTERM." << endl;
         Shutdown();
     }
     else
@@ -717,6 +718,7 @@ void* audio_capture(void* param1, int param2)
 #endif
     MWCAP_AUDIO_SIGNAL_STATUS audio_signal_status;
     int err_cnt = 0;
+    int frame_cnt = 0;
 
     HCHANNEL* channel_handle = reinterpret_cast<HCHANNEL* >(param1);
 
@@ -724,8 +726,8 @@ void* audio_capture(void* param1, int param2)
     int      frame_idx       = 0;
     int      buf_idx         = 0;
     const int audio_buf_sz   = 384;
-    size_t   frame_size      = 0;
-    size_t   capture_buf_size = 0;
+    int      frame_size      = 0;
+    int      capture_buf_size = 0;
 
     int64_t* audio_timestamps = nullptr;
 
@@ -859,7 +861,7 @@ void* audio_capture(void* param1, int param2)
         }
 
         err_cnt = 0;
-
+        frame_cnt = 0;
         while (g_reset.load() == false)
         {
             if (MWWaitEvent(notify_event, 1000) <= 0)
@@ -877,7 +879,8 @@ void* audio_capture(void* param1, int param2)
             if (notify_status & MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE)
             {
                 if (g_verbose > 0)
-                    cerr << "WARNING: Audio signal CHANGED!\n";
+                    cerr << "WARNING: Audio signal CHANGED after "
+                         << frame_cnt << " frames!\n";
                 this_thread::sleep_for(chrono::milliseconds(g_frame_ms));
                 break;
             }
@@ -905,6 +908,8 @@ void* audio_capture(void* param1, int param2)
                 continue;
             }
 
+            ++frame_cnt;
+
             /*
               L1L2L3L4R1R2R3R4L5L6L7L8R5R6R7R8(4byte)
               to 2channel 16bit
@@ -923,6 +928,11 @@ void* audio_capture(void* param1, int param2)
                                  >> (32 - audio_signal_status.cBitsPerSample);
                     DWORD right = macf.adwSamples[read_pos2]
                                   >> (32 - audio_signal_status.cBitsPerSample);
+#if 0
+                    if (capture_buf_size < frame_idx + write_pos + bytes_per_sample * 2)
+                        cerr << "\n==========+++++++++>> BAD NEWS: overwrote end of audio capture_buf.\n"
+                             << endl;
+#endif
                     memcpy(&capture_buf[frame_idx + write_pos], &left, bytes_per_sample);
                     memcpy(&capture_buf[frame_idx + write_pos + bytes_per_sample],
                            &right, bytes_per_sample);
@@ -945,6 +955,7 @@ void* audio_capture(void* param1, int param2)
     }
 
   audio_capture_stoped:
+    cerr << "\nAudio Capture finished.\n" << endl;
     Shutdown();
 
     if(notify_audio)
@@ -1049,6 +1060,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
     uint8_t* pbImage = nullptr;
     int buffer_cnt = 2;
     int frame_idx = -1;
+    int frame_cnt = 0;
     int frame_wrap_idx = 4;
 
     if (g_out2ts->encoderType() == OutputTS::QSV ||
@@ -1194,7 +1206,6 @@ bool video_capture_loop(HCHANNEL  hChannel,
         }
 
         set_notify(notify_video, hChannel, hNotifyEvent, notify_mode);
-
         if (notify_video == 0)
         {
             if (g_verbose > 0)
@@ -1202,6 +1213,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             return false;
         }
 
+        frame_cnt = 0;
         frame_idx = -1;
         while (g_running.load() == true)
         {
@@ -1224,7 +1236,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
             if (notify_video & MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE)
             {
                 if (g_verbose > 0)
-                    cerr << "WARNING: Video signal CHANGED.\n";
+                    cerr << "WARNING: Video signal CHANGED after "
+                         << frame_cnt << " frames.\n";
                 this_thread::sleep_for(chrono::milliseconds(5));
                 break;
             }
@@ -1311,6 +1324,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
                              width,
                              height);
 
+            ++frame_cnt;
+
             if (ret != MW_SUCCEEDED)
             {
                 image_buffer_available(pbImage);
@@ -1321,7 +1336,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 if (g_verbose > 0)
                     cerr << "WARNING: wait capture event error or timeout\n";
                 image_buffer_available(pbImage);
-                break;
+                continue;
             }
 
             MWCAP_VIDEO_CAPTURE_STATUS captureStatus;
@@ -1335,6 +1350,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
         }
     }
 
+    cerr << "\nVideo Capture finished.\n" << endl;
     Shutdown();
     free_image_buffers(hChannel);
     return true;
@@ -1434,11 +1450,6 @@ bool capture(HCHANNEL channel_handle, bool no_audio)
     {
         audio_thr.join();
     }
-
-    if (channel_handle)
-        MWCloseChannel(channel_handle);
-
-    MWCaptureExitInstance();
 
     return 0;
 }
@@ -1888,8 +1899,11 @@ int main(int argc, char* argv[])
         delete g_out2ts;
     }
 
-    if (channel_handle != nullptr)
+    if (channel_handle)
+    {
         MWCloseChannel(channel_handle);
+        channel_handle = nullptr;
+    }
 
     MWCaptureExitInstance();
 

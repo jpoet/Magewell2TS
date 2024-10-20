@@ -18,7 +18,7 @@ SET(CMAKE_COLOR_DIAGNOSTICS ON)
 # specify the C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
-add_compile_options(-Wall)
+add_compile_options(-Wall -Wreturn-type)
 
 # set the project name
 project(magewellpro2ts VERSION 0.1)

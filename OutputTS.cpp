@@ -311,7 +311,7 @@ bool OutputTS::open_audio(void)
     if (!m_audioIO.WaitForReady())
         return false;
 
-    close_stream(m_output_format_context, &m_audio_stream);
+    close_stream(&m_audio_stream);
 
     const AVCodec* audio_codec = nullptr;
 
@@ -368,6 +368,7 @@ bool OutputTS::open_audio(void)
 
     if (ost->tmp_frame == nullptr)
     {
+        cerr << "ERROR: Unable to allocate a temporary audio frame.\n";
         Shutdown();
         return false;
     }
@@ -423,7 +424,7 @@ bool OutputTS::open_audio(void)
 
 bool OutputTS::open_video(void)
 {
-    close_stream(m_output_format_context, &m_video_stream);
+    close_stream(&m_video_stream);
 
     AVDictionary* opt = NULL;
     const AVCodec* video_codec =
@@ -597,10 +598,8 @@ void OutputTS::close_container(void)
         av_write_trailer(m_output_format_context);
 
     /* Close each codec. */
-    if (have_video)
-        close_stream(m_output_format_context, &m_video_stream);
-    if (have_audio)
-        close_stream(m_output_format_context, &m_audio_stream);
+    close_stream(&m_video_stream);
+    close_stream(&m_audio_stream);
 
     if (m_fmt && !(m_fmt->flags & AVFMT_NOFILE))
         /* Close the output file. */
@@ -703,24 +702,41 @@ bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
 }
 
 
-void OutputTS::close_stream(AVFormatContext* oc, OutputStream* ost)
+void OutputTS::close_stream(/* AVFormatContext* oc, */ OutputStream* ost)
 {
-    avcodec_free_context(&ost->enc);
-    ost->enc = nullptr;
-    av_frame_free(&ost->frame);
-    ost->frame = nullptr;
-    if (ost->tmp_frame)
+    if (ost == nullptr)
+        return;
+
+    if (ost->tmp_frame /*  && ost->tmp_frame->data[0] */)
     {
+#if 0
         av_frame_free(&ost->tmp_frame);
+#else
+        av_free(&ost->frame->data[0]);
+#endif
         ost->tmp_frame = nullptr;
     }
+
+    if (ost->swr_ctx)
+    {
+        swr_free(&ost->swr_ctx);
+        ost->swr_ctx = nullptr;
+    }
+
+    if (ost->enc)
+    {
+        avcodec_free_context(&ost->enc);
+        ost->enc = nullptr;
+    }
+
+//    avformat_free_context(ost->st);
+    ost->st = nullptr;
+
     if (ost->tmp_pkt)
     {
         av_packet_free(&ost->tmp_pkt);
         ost->tmp_pkt = nullptr;
     }
-    swr_free(&ost->swr_ctx);
-    ost->swr_ctx = nullptr;
 }
 
 /**************************************************************/
@@ -1392,7 +1408,8 @@ bool OutputTS::AddVideoFrame(uint8_t* pImage, uint32_t imageSize,
     const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
 
     m_imagequeue.push_back(imagepkt_t{timestamp, pImage});
-    if (!m_audioIO.Ready() && m_imagequeue.size() > 3)
+    int sz = m_imagequeue.size();
+    if ((!m_audioIO.Ready() && sz > 3) or sz > 40)
     {
         pImage = m_imagequeue.front().image;
         m_image_buffer_available(pImage);
