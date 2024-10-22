@@ -592,25 +592,6 @@ OutputTS::~OutputTS(void)
     close_container();
 }
 
-void OutputTS::close_container(void)
-{
-    return;  // Leaks! but doesn't segfault?
-
-    if (m_output_format_context)
-        av_write_trailer(m_output_format_context);
-
-    /* Close each codec. */
-    close_stream(&m_video_stream);
-    close_stream(&m_audio_stream);
-
-    if (m_fmt && !(m_fmt->flags & AVFMT_NOFILE))
-        /* Close the output file. */
-        avio_closep(&m_output_format_context->pb);
-
-    /* free the output stream */
-    avformat_free_context(m_output_format_context);
-}
-
 bool OutputTS::addAudio(uint8_t* buf, size_t len, int64_t timestamp)
 {
     m_audioIO.Add(buf, len, timestamp);
@@ -704,12 +685,39 @@ bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
 }
 
 
+void OutputTS::close_container(void)
+{
+
+#if 0
+    if (m_output_format_context)
+        av_write_trailer(m_output_format_context);
+#endif
+
+    /* Close each codec. */
+    close_stream(&m_video_stream);
+    close_stream(&m_audio_stream);
+
+    if (m_fmt && !(m_fmt->flags & AVFMT_NOFILE))
+        /* Close the output file. */
+        avio_closep(&m_output_format_context->pb);
+
+    /* free the output stream */
+    avformat_free_context(m_output_format_context);
+}
+
 void OutputTS::close_stream(/* AVFormatContext* oc, */ OutputStream* ost)
 {
-    return;  // Leaks! but doesn't segfault?
 
     if (ost == nullptr)
         return;
+
+
+    if (ost->hw_device)
+    {
+        av_buffer_unref(&ost->hw_device_ctx);
+        av_buffer_unref(&ost->enc->hw_frames_ctx);
+        ost->hw_device = false;
+    }
 
     if (ost->tmp_frame /*  && ost->tmp_frame->data[0] */)
     {
@@ -733,14 +741,13 @@ void OutputTS::close_stream(/* AVFormatContext* oc, */ OutputStream* ost)
         ost->enc = nullptr;
     }
 
-//    avformat_free_context(ost->st);
+    /* Documentation says to call avformat_free_context, but
+       that does not compile. The example code does not free
+       the stream either, so... */
+#if 0
+    avformat_free_context(&ost->st);
     ost->st = nullptr;
-
-    if (ost->tmp_pkt)
-    {
-        av_packet_free(&ost->tmp_pkt);
-        ost->tmp_pkt = nullptr;
-    }
+#endif
 }
 
 /**************************************************************/
@@ -1094,6 +1101,7 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
         return false;
     }
     av_buffer_unref(&hw_frames_ref);
+    ost->hw_device = true;
 
     if ((ret = avcodec_open2(ctx, codec, &opt)) < 0)
     {

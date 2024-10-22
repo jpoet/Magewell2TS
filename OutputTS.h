@@ -46,6 +46,8 @@ class OutputTS
     // a wrapper around a single output AVStream
     using OutputStream = struct {
         AVBufferRef* hw_device_ctx {nullptr};
+        bool         hw_device     {false};
+
         AVStream* st               {nullptr};
         AVCodecContext* enc        {nullptr};
 
