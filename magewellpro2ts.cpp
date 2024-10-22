@@ -1062,6 +1062,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
     int frame_idx = -1;
     int frame_cnt = 0;
     int frame_wrap_idx = 4;
+    deque<int> processed_frames;
+    deque<int>::iterator  Iprocessed;
 
     if (g_out2ts->encoderType() == OutputTS::QSV ||
         g_out2ts->encoderType() == OutputTS::VAAPI)
@@ -1280,15 +1282,28 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 if (frame_idx != videoBufferInfo.iNewestBufferedFullFrame)
                 {
                     if (g_verbose > 0)
+                    {
                         cerr << "WARNING: Expected MW video buffer " << frame_idx
                              << " but current is "
                              << (int)videoBufferInfo.iNewestBufferedFullFrame
                              << ". Frame lost."
                              << endl;
+                        cerr << "Most recent processed frames: ";
+                        for (Iprocessed = processed_frames.begin();
+                             Iprocessed != processed_frames.begin(); ++Iprocessed)
+                            cerr << (*Iprocessed) << " ";
+                        cerr << endl;
+                        processed_frames.clear();
+                    }
                     frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
                 }
+                else
+                {
+                    processed_frames.push_back(videoBufferInfo.iNewestBufferedFullFrame);
+                    if (processed_frames.size() > 40)
+                        processed_frames.pop_front();
+                }
             }
-
             if (MWGetVideoFrameInfo(hChannel, frame_idx,
                                     &videoFrameInfo) != MW_SUCCEEDED)
             {

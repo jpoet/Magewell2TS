@@ -594,6 +594,8 @@ OutputTS::~OutputTS(void)
 
 void OutputTS::close_container(void)
 {
+    return;  // Leaks! but doesn't segfault?
+
     if (m_output_format_context)
         av_write_trailer(m_output_format_context);
 
@@ -704,6 +706,8 @@ bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
 
 void OutputTS::close_stream(/* AVFormatContext* oc, */ OutputStream* ost)
 {
+    return;  // Leaks! but doesn't segfault?
+
     if (ost == nullptr)
         return;
 
