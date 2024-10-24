@@ -589,6 +589,11 @@ OutputTS::~OutputTS(void)
     if (m_image_ready_thread.joinable())
         m_image_ready_thread.join();
 
+    close_stream(&m_video_stream);
+    if (m_video_stream.hw_device_ctx != nullptr)
+        av_buffer_unref(&m_video_stream.hw_device_ctx);
+
+    close_stream(&m_audio_stream);
     close_container();
 }
 
@@ -693,10 +698,6 @@ void OutputTS::close_container(void)
         av_write_trailer(m_output_format_context);
 #endif
 
-    /* Close each codec. */
-    close_stream(&m_video_stream);
-    close_stream(&m_audio_stream);
-
     if (m_fmt && !(m_fmt->flags & AVFMT_NOFILE))
         /* Close the output file. */
         avio_closep(&m_output_format_context->pb);
@@ -705,20 +706,18 @@ void OutputTS::close_container(void)
     avformat_free_context(m_output_format_context);
 }
 
-void OutputTS::close_stream(/* AVFormatContext* oc, */ OutputStream* ost)
+void OutputTS::close_stream(OutputStream* ost)
 {
-
     if (ost == nullptr)
         return;
 
-
     if (ost->hw_device)
     {
-        av_buffer_unref(&ost->hw_device_ctx);
         av_buffer_unref(&ost->enc->hw_frames_ctx);
         ost->hw_device = false;
     }
 
+#if 1
     if (ost->tmp_frame /*  && ost->tmp_frame->data[0] */)
     {
 #if 0
@@ -728,6 +727,7 @@ void OutputTS::close_stream(/* AVFormatContext* oc, */ OutputStream* ost)
 #endif
         ost->tmp_frame = nullptr;
     }
+#endif
 
     if (ost->swr_ctx)
     {
@@ -737,8 +737,17 @@ void OutputTS::close_stream(/* AVFormatContext* oc, */ OutputStream* ost)
 
     if (ost->enc)
     {
+        /*
+          FFmpeg docs now say:
+          Opening and closing a codec context multiple times is not
+          supported anymore – use multiple codec contexts instead.
+
+          So, does this mean to never free a codect context?
+         */
+#if 0
         avcodec_free_context(&ost->enc);
         ost->enc = nullptr;
+#endif
     }
 
     /* Documentation says to call avformat_free_context, but
@@ -1043,31 +1052,34 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     av_opt_set_int(ctx->priv_data, "bf", 0, 0);
     av_opt_set_int(ctx->priv_data, "qp", 25, 0); // 25 is default
 
-    vector<std::string> drivers{ "iHD", "i965" };
-    vector<std::string>::iterator Idriver;
-    for (Idriver = drivers.begin(); Idriver != drivers.end(); ++Idriver)
+    if (ost->hw_device_ctx == nullptr)
     {
-        static string envstr = "LIBVA_DRIVER_NAME=" + *Idriver;
-        char* env = envstr.data();
-        putenv(env);
+        vector<std::string> drivers{ "iHD", "i965" };
+        vector<std::string>::iterator Idriver;
+        for (Idriver = drivers.begin(); Idriver != drivers.end(); ++Idriver)
+        {
+            static string envstr = "LIBVA_DRIVER_NAME=" + *Idriver;
+            char* env = envstr.data();
+            putenv(env);
 
-        if ((ret = av_hwdevice_ctx_create(&ost->hw_device_ctx,
-                                          AV_HWDEVICE_TYPE_VAAPI,
-                                          m_device.c_str(), opt, 0)) < 0)
-            cerr << "ERROR: Failed to open VAPPI driver '" << *Idriver << "'\n";
-        else
-            break;
-    }
-    if (Idriver == drivers.end())
-    {
-        cerr << "ERROR: Failed to create a VAAPI device. Error code: "
-             << AVerr2str(ret) << endl;
-        Shutdown();
-        return false;
-    }
+            if ((ret = av_hwdevice_ctx_create(&ost->hw_device_ctx,
+                                              AV_HWDEVICE_TYPE_VAAPI,
+                                              m_device.c_str(), opt, 0)) < 0)
+                cerr << "ERROR: Failed to open VAPPI driver '" << *Idriver << "'\n";
+            else
+                break;
+        }
+        if (Idriver == drivers.end())
+        {
+            cerr << "ERROR: Failed to create a VAAPI device. Error code: "
+                 << AVerr2str(ret) << endl;
+            Shutdown();
+            return false;
+        }
 
-    if (m_verbose > 0)
-        cerr << "Using VAAPI driver '" << *Idriver << "'\n";
+        if (m_verbose > 0)
+            cerr << "Using VAAPI driver '" << *Idriver << "'\n";
+    }
 
     /* set hw_frames_ctx for encoder's AVCodecContext */
     if (!(hw_frames_ref = av_hwframe_ctx_alloc(ost->hw_device_ctx)))
@@ -1138,7 +1150,6 @@ bool OutputTS::open_qsv(const AVCodec* codec,
 {
     int    ret;
 
-    AVCodecContext* ctx = ost->enc;
     AVDictionary* opt = nullptr;
     AVBufferRef* hw_frames_ref;
     AVHWFramesContext* frames_ctx = nullptr;
@@ -1147,48 +1158,51 @@ bool OutputTS::open_qsv(const AVCodec* codec,
 
     if (!m_preset.empty())
     {
-        av_opt_set(ctx->priv_data, "preset", m_preset.c_str(), 0);
+        av_opt_set(ost->enc->priv_data, "preset", m_preset.c_str(), 0);
         if (m_verbose > 0)
             cerr << "Using preset " << m_preset << " for "
                  << m_video_codec_name << endl;
     }
 
-    av_opt_set(ctx->priv_data, "scenario", "livestreaming", 0);
+    av_opt_set(ost->enc->priv_data, "scenario", "livestreaming", 0);
 #if 0
-    av_opt_set_int(ctx->priv_data, "extbrc", 1, 0);
-    av_opt_set_int(ctx->priv_data, "adaptive_i", 1, 0);
+    av_opt_set_int(ost->enc->priv_data, "extbrc", 1, 0);
+    av_opt_set_int(ost->enc->priv_data, "adaptive_i", 1, 0);
 
-//    av_opt_set_int(ctx->priv_data, "bf", 0, 0);
+//    av_opt_set_int(ost->enc->priv_data, "bf", 0, 0);
 #endif
 
-    ctx->global_quality = m_quality;
+    ost->enc->global_quality = m_quality;
 
     if (m_look_ahead >= 0)
     {
         if (m_video_codec_name == "hevc_qsv")
-            av_opt_set_int(ctx->priv_data, "look_ahead", 1, 0);
-        av_opt_set_int(ctx->priv_data, "look_ahead_depth", m_look_ahead, 0);
+            av_opt_set_int(ost->enc->priv_data, "look_ahead", 1, 0);
+        av_opt_set_int(ost->enc->priv_data, "look_ahead_depth", m_look_ahead, 0);
     }
-    av_opt_set_int(ctx->priv_data, "extra_hw_frames", m_look_ahead, 0);
+    av_opt_set_int(ost->enc->priv_data, "extra_hw_frames", m_look_ahead, 0);
 
-    av_opt_set(ctx->priv_data, "skip_frame", "insert_dummy", 0);
+    av_opt_set(ost->enc->priv_data, "skip_frame", "insert_dummy", 0);
 
-    // Make sure env doesn't prevent QSV init.
-    static string envstr = "LIBVA_DRIVER_NAME";
-    char* env = envstr.data();
-    unsetenv(env);
-
-    av_dict_set(&opt, "child_device", m_device.c_str(), 0);
-    if ((ret = av_hwdevice_ctx_create(&ost->hw_device_ctx,
-                                      AV_HWDEVICE_TYPE_QSV,
-                                      m_device.c_str(), opt, 0)) != 0)
+    if (ost->hw_device_ctx == nullptr)
     {
-        cerr << "ERROR: Failed to open QSV on " << m_device << "\n";
-        return false;
-    }
+        // Make sure env doesn't prevent QSV init.
+        static string envstr = "LIBVA_DRIVER_NAME";
+        char* env = envstr.data();
+        unsetenv(env);
 
-    if (m_verbose > 0)
-        cerr << "Using QSV\n";
+        av_dict_set(&opt, "child_device", m_device.c_str(), 0);
+        if ((ret = av_hwdevice_ctx_create(&ost->hw_device_ctx,
+                                          AV_HWDEVICE_TYPE_QSV,
+                                          m_device.c_str(), opt, 0)) != 0)
+        {
+            cerr << "ERROR: Failed to open QSV on " << m_device << "\n";
+            return false;
+        }
+
+        if (m_verbose > 0)
+            cerr << "Using QSV\n";
+    }
 
     /* set hw_frames_ctx for encoder's AVCodecContext */
     if (!(hw_frames_ref = av_hwframe_ctx_alloc(ost->hw_device_ctx)))
@@ -1211,8 +1225,8 @@ bool OutputTS::open_qsv(const AVCodec* codec,
         Shutdown();
         return false;
     }
-    ctx->hw_frames_ctx = av_buffer_ref(hw_frames_ref);
-    if (!ctx->hw_frames_ctx)
+    ost->enc->hw_frames_ctx = av_buffer_ref(hw_frames_ref);
+    if (!ost->enc->hw_frames_ctx)
     {
         ret = AVERROR(ENOMEM);
         cerr << "ERROR: Failed to allocate hw frame buffer. "
@@ -1222,8 +1236,9 @@ bool OutputTS::open_qsv(const AVCodec* codec,
         return false;
     }
     av_buffer_unref(&hw_frames_ref);
+    ost->hw_device = true;
 
-    if ((ret = avcodec_open2(ctx, codec, &opt)) < 0)
+    if ((ret = avcodec_open2(ost->enc, codec, &opt)) < 0)
     {
         cerr << "ERROR: Cannot open QSV video encoder codec. Error code: "
              << AVerr2str(ret) << endl;
@@ -1242,7 +1257,7 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     }
 
     /* copy the stream parameters to the muxer */
-    ret = avcodec_parameters_from_context(ost->st->codecpar, ctx);
+    ret = avcodec_parameters_from_context(ost->st->codecpar, ost->enc);
     if (ret < 0)
     {
         cerr << "ERROR: Could not copy the stream parameters." << endl;
