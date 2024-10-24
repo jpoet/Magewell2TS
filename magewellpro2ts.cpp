@@ -878,7 +878,7 @@ void* audio_capture(void* param1, int param2)
 
             if (notify_status & MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE)
             {
-                if (g_verbose > 0)
+                if (g_verbose > 0 && frame_cnt > 0)
                     cerr << "WARNING: Audio signal CHANGED after "
                          << frame_cnt << " frames!\n";
                 this_thread::sleep_for(chrono::milliseconds(g_frame_ms));
@@ -1056,6 +1056,8 @@ bool video_capture_loop(HCHANNEL  hChannel,
     double  frame_duration = 0;
     DWORD   dwMinStride = 0;
     DWORD   dwImageSize = 0;
+    bool    locked = false;
+    DWORD   state = 0;
 
     uint8_t* pbImage = nullptr;
     int buffer_cnt = 2;
@@ -1087,7 +1089,10 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
         if (videoSignalStatus.state == MWCAP_VIDEO_SIGNAL_UNSUPPORTED)
         {
-            cerr << "WARNING: Input signal status: Unsupported\n";
+            if (state != videoSignalStatus.state && g_verbose > 0)
+                cerr << "WARNING: Input video signal status: Unsupported\n";
+            locked = false;
+            state = videoSignalStatus.state;
             this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 10));
             continue;
         }
@@ -1095,22 +1100,28 @@ bool video_capture_loop(HCHANNEL  hChannel,
         switch (videoSignalStatus.state)
         {
             case MWCAP_VIDEO_SIGNAL_NONE:
-              if (g_verbose > 0)
-                  cerr << "WARNING: Input signal status: NONE\n";
+              if (state != videoSignalStatus.state && g_verbose > 0)
+                  cerr << "WARNING: Input video signal status: NONE\n";
+              locked = false;
+              state = videoSignalStatus.state;
               this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 5));
               continue;
             case MWCAP_VIDEO_SIGNAL_LOCKING:
-              if (g_verbose > 0)
-                  cerr << "WARNING: Input signal status: Locking\n";
+              if (state != videoSignalStatus.state && g_verbose > 0)
+                  cerr << "WARNING: Input video signal status: Locking\n";
+              locked = false;
+              state = videoSignalStatus.state;
               this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 5));
               continue;
             case MWCAP_VIDEO_SIGNAL_LOCKED:
-              if (g_verbose > 0)
-                  cerr << "INFO: Input signal status: Locked\n";
+              if (!locked && g_verbose > 0)
+                  cerr << "INFO: Input video signal status: Locked\n";
+              locked = true;
               break;
             default:
               if (g_verbose > 0)
-                  cerr << "WARNING: Video signal not locked.\n";
+                  cerr << "WARNING: Video signal status: lost locked.\n";
+              locked = false;
               this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 5));
               continue;
         }
@@ -1235,7 +1246,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
             if (notify_video & MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE)
             {
-                if (g_verbose > 0)
+                if (g_verbose > 0 && frame_cnt > 0)
                     cerr << "WARNING: Video signal CHANGED after "
                          << frame_cnt << " frames.\n";
                 this_thread::sleep_for(chrono::milliseconds(5));
