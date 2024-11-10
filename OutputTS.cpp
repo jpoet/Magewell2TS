@@ -229,6 +229,11 @@ bool OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
           ost->enc->gop_size      = 12; /* emit one intra frame every twelve frames at most */
 #endif
 
+          /*
+            For av1_qsv, pix_fmt options are:
+                AV_PIX_FMT_NV12, AV_PIX_FMT_P010, AV_PIX_FMT_QSV
+          */
+
           if (m_encoderType == EncoderType::QSV)
               ost->enc->pix_fmt = AV_PIX_FMT_QSV;
           else if (m_encoderType == EncoderType::VAAPI)
@@ -1156,34 +1161,36 @@ bool OutputTS::open_qsv(const AVCodec* codec,
 
     av_dict_copy(&opt, opt_arg, 0);
 
-    if (!m_preset.empty())
-    {
-        av_opt_set(ost->enc->priv_data, "preset", m_preset.c_str(), 0);
-        if (m_verbose > 0)
-            cerr << "Using preset " << m_preset << " for "
-                 << m_video_codec_name << endl;
-    }
+    ost->enc->global_quality = m_quality;
 
-    av_opt_set(ost->enc->priv_data, "scenario", "livestreaming", 0);
+    if (m_video_codec_name != "av1_qsv")
+    {
+        if (!m_preset.empty())
+        {
+            av_opt_set(ost->enc->priv_data, "preset", m_preset.c_str(), 0);
+            if (m_verbose > 0)
+                cerr << "Using preset " << m_preset << " for "
+                     << m_video_codec_name << endl;
+        }
+
+        av_opt_set(ost->enc->priv_data, "scenario", "livestreaming", 0);
 #if 0
-    av_opt_set_int(ost->enc->priv_data, "extbrc", 1, 0);
-    av_opt_set_int(ost->enc->priv_data, "adaptive_i", 1, 0);
+        av_opt_set_int(ost->enc->priv_data, "extbrc", 1, 0);
+        av_opt_set_int(ost->enc->priv_data, "adaptive_i", 1, 0);
 
 //    av_opt_set_int(ost->enc->priv_data, "bf", 0, 0);
 #endif
 
-    ost->enc->global_quality = m_quality;
+        if (m_look_ahead >= 0)
+        {
+            if (m_video_codec_name == "hevc_qsv")
+                av_opt_set_int(ost->enc->priv_data, "look_ahead", 1, 0);
+            av_opt_set_int(ost->enc->priv_data, "look_ahead_depth", m_look_ahead, 0);
+        }
+        av_opt_set_int(ost->enc->priv_data, "extra_hw_frames", m_look_ahead, 0);
 
-    if (m_look_ahead >= 0)
-    {
-        if (m_video_codec_name == "hevc_qsv")
-            av_opt_set_int(ost->enc->priv_data, "look_ahead", 1, 0);
-        av_opt_set_int(ost->enc->priv_data, "look_ahead_depth", m_look_ahead, 0);
+        av_opt_set(ost->enc->priv_data, "skip_frame", "insert_dummy", 0);
     }
-    av_opt_set_int(ost->enc->priv_data, "extra_hw_frames", m_look_ahead, 0);
-
-    av_opt_set(ost->enc->priv_data, "skip_frame", "insert_dummy", 0);
-
     if (ost->hw_device_ctx == nullptr)
     {
         // Make sure env doesn't prevent QSV init.
