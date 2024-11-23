@@ -1025,13 +1025,21 @@ void image_buffer_available(uint8_t* pbImage)
 {
     unique_lock<mutex> lock(g_image_buffer_mutex);
 
-    if (g_buffer_cnt > 2)
+    if (g_avail_image_buffers.size() > 2)
     {
         if (g_verbose > 3)
             cerr << "Releasing excess video buffer.\n";
         MWUnpinVideoBuffer(g_channel, (LPBYTE)(pbImage));
         delete[] pbImage;
-        --g_buffer_cnt;
+        if (--g_buffer_cnt < 5 && g_verbose > 2)
+            cerr << "INFO: Video encoder is "
+                 << g_buffer_cnt << " frames behind.\n";
+
+        imageque_t::iterator Iimage = find(g_image_buffers.begin(),
+                                           g_image_buffers.end(), pbImage);
+        if (Iimage != g_image_buffers.end())
+            g_image_buffers.erase(Iimage);
+
         return;
     }
 
