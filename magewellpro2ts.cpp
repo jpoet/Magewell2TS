@@ -725,7 +725,7 @@ void* audio_capture(void)
     uint8_t* capture_buf     = nullptr;
     int      frame_idx       = 0;
     int      buf_idx         = 0;
-    const int audio_buf_sz   = 384;
+    const int audio_buf_sz   = 512;
     int      frame_size      = 0;
     int      capture_buf_size = 0;
 
