@@ -49,6 +49,7 @@
 #include <thread>
 #include <charconv>
 #include <string_view>
+#include <set>
 
 #include <mutex>
 #include <condition_variable>
@@ -975,8 +976,9 @@ void* audio_capture(void)
     return nullptr;
 }
 
+using imageset_t = set<uint8_t*>;
 using imageque_t = deque<uint8_t*>;
-imageque_t         g_image_buffers;
+imageset_t         g_image_buffers;
 imageque_t         g_avail_image_buffers;
 mutex              g_image_buffer_mutex;
 condition_variable g_image_returned;
@@ -994,7 +996,7 @@ bool add_image_buffer(HCHANNEL hChannel, DWORD dwImageSize)
 
     MWPinVideoBuffer(hChannel, (MWCAP_PTR)pbImage, dwImageSize);
 
-    g_image_buffers.push_back(pbImage);
+    g_image_buffers.insert(pbImage);
     g_avail_image_buffers.push_back(pbImage);
     ++g_buffer_cnt;
     return true;
@@ -1003,7 +1005,7 @@ bool add_image_buffer(HCHANNEL hChannel, DWORD dwImageSize)
 void free_image_buffers(HCHANNEL hChannel)
 {
     unique_lock<mutex> lock(g_image_buffer_mutex);
-    imageque_t::iterator Iimage;
+    imageset_t::iterator Iimage;
 
     g_out2ts->ClearImageQueue();
 
@@ -1035,10 +1037,7 @@ void image_buffer_available(uint8_t* pbImage)
             cerr << "INFO: Video encoder is "
                  << g_buffer_cnt << " frames behind.\n";
 
-        imageque_t::iterator Iimage = find(g_image_buffers.begin(),
-                                           g_image_buffers.end(), pbImage);
-        if (Iimage != g_image_buffers.end())
-            g_image_buffers.erase(Iimage);
+        g_image_buffers.erase(pbImage);
 
         return;
     }
