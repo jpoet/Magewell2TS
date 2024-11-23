@@ -43,6 +43,7 @@
 #include <cstdlib>
 #include <fcntl.h>
 #include <chrono>
+#include <csignal>
 
 extern "C" {
 #include <libavutil/avassert.h>
@@ -867,7 +868,11 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
                 cerr << "WARNING: S/PDIF audio out of sync, resetting.\n";
             m_slow_audio_cnt = 0;
 
+#if 0
             m_audioIO.RescanSPDIF();
+#else
+            std::raise(SIGHUP);
+#endif
             return false;
         }
     }
@@ -1442,13 +1447,6 @@ bool OutputTS::AddVideoFrame(uint8_t* pImage, uint32_t imageSize,
     const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
 
     m_imagequeue.push_back(imagepkt_t{timestamp, pImage});
-    int sz = m_imagequeue.size();
-    if ((!m_audioIO.Ready() && sz > 3) or sz > 40)
-    {
-        pImage = m_imagequeue.front().image;
-        m_image_buffer_available(pImage);
-    }
-
     m_image_ready.notify_one();
 
     return true;

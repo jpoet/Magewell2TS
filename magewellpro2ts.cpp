@@ -70,11 +70,13 @@
 
 using namespace std;
 
+HCHANNEL          g_channel = nullptr;;
 OutputTS*         g_out2ts = nullptr;
 int               g_verbose   = 1;
 std::atomic<bool> g_running(true);
 std::atomic<bool> g_reset(false);
 int  g_frame_ms = 17;
+int  g_buffer_cnt = 0;
 
 void Shutdown(void)
 {
@@ -703,7 +705,7 @@ bool WriteEDID(HCHANNEL hChannel, const string & edid_file)
 }
 
 
-void* audio_capture(void* param1, int param2)
+void* audio_capture(void)
 {
     bool      lpcm = false;
     int       bytes_per_sample = 0;
@@ -719,8 +721,6 @@ void* audio_capture(void* param1, int param2)
     MWCAP_AUDIO_SIGNAL_STATUS audio_signal_status;
     int err_cnt = 0;
     int frame_cnt = 0;
-
-    HCHANNEL* channel_handle = reinterpret_cast<HCHANNEL* >(param1);
 
     uint8_t* capture_buf     = nullptr;
     int      frame_idx       = 0;
@@ -741,14 +741,14 @@ void* audio_capture(void* param1, int param2)
         goto audio_capture_stoped;
     }
 
-    MWGetAudioInputSourceArray(channel_handle, nullptr, &input_count);
+    MWGetAudioInputSourceArray(g_channel, nullptr, &input_count);
     if (input_count == 0)
     {
         cerr << "ERROR: can't find audio input\n";
         goto audio_capture_stoped;
     }
 
-    if (MW_SUCCEEDED != MWStartAudioCapture(channel_handle))
+    if (MW_SUCCEEDED != MWStartAudioCapture(g_channel))
     {
         cerr << "ERROR: start audio capture fail!\n";
         goto audio_capture_stoped;
@@ -757,7 +757,7 @@ void* audio_capture(void* param1, int param2)
     if (g_verbose > 1)
         cerr << "Audio capture starting\n";
 
-    notify_audio  = MWRegisterNotify(channel_handle, notify_event,
+    notify_audio  = MWRegisterNotify(g_channel, notify_event,
                                      (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
                                      (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE |
                                      (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET |
@@ -772,7 +772,7 @@ void* audio_capture(void* param1, int param2)
 
     while (g_running.load() == true)
     {
-        if (MW_SUCCEEDED != MWGetAudioSignalStatus(channel_handle,
+        if (MW_SUCCEEDED != MWGetAudioSignalStatus(g_channel,
                                                    &audio_signal_status))
         {
             if (err_cnt++ % 50 == 0 && g_verbose > 0)
@@ -871,7 +871,7 @@ void* audio_capture(void* param1, int param2)
                 continue;
             }
 
-            if (MW_SUCCEEDED != MWGetNotifyStatus(channel_handle,
+            if (MW_SUCCEEDED != MWGetNotifyStatus(g_channel,
                                                   notify_audio,
                                                   &notify_status))
                 continue;
@@ -902,7 +902,7 @@ void* audio_capture(void* param1, int param2)
             if (!(notify_status & MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED))
                 continue;
 
-            if (MW_ENODATA == MWCaptureAudioFrame(channel_handle, &macf))
+            if (MW_ENODATA == MWCaptureAudioFrame(g_channel, &macf))
             {
                 this_thread::sleep_for(chrono::milliseconds(g_frame_ms));
                 continue;
@@ -960,11 +960,11 @@ void* audio_capture(void* param1, int param2)
 
     if(notify_audio)
     {
-        MWUnregisterNotify(channel_handle, notify_audio);
+        MWUnregisterNotify(g_channel, notify_audio);
         notify_audio = 0;
     }
 
-    MWStopAudioCapture(channel_handle);
+    MWStopAudioCapture(g_channel);
 
     if(notify_event!= 0)
     {
@@ -996,6 +996,7 @@ bool add_image_buffer(HCHANNEL hChannel, DWORD dwImageSize)
 
     g_image_buffers.push_back(pbImage);
     g_avail_image_buffers.push_back(pbImage);
+    ++g_buffer_cnt;
     return true;
 }
 
@@ -1023,6 +1024,17 @@ void free_image_buffers(HCHANNEL hChannel)
 void image_buffer_available(uint8_t* pbImage)
 {
     unique_lock<mutex> lock(g_image_buffer_mutex);
+
+    if (g_buffer_cnt > 2)
+    {
+        if (g_verbose > 3)
+            cerr << "Releasing excess video buffer.\n";
+        MWUnpinVideoBuffer(g_channel, (LPBYTE)(pbImage));
+        delete[] pbImage;
+        --g_buffer_cnt;
+        return;
+    }
+
     g_avail_image_buffers.push_back(pbImage);
     g_image_returned.notify_one();
 }
@@ -1037,8 +1049,7 @@ void set_notify(HNOTIFY&  notify,
     notify = MWRegisterNotify(hChannel, hNotifyEvent, flags);
 }
 
-bool video_capture_loop(HCHANNEL  hChannel,
-                        HNOTIFY   notify_video,
+bool video_capture_loop(HNOTIFY   notify_video,
                         MWCAP_PTR hNotifyEvent,
                         MWCAP_PTR hCaptureEvent)
 {
@@ -1060,10 +1071,13 @@ bool video_capture_loop(HCHANNEL  hChannel,
     DWORD   state = 0;
 
     uint8_t* pbImage = nullptr;
-    int buffer_cnt = 2;
     int frame_idx = -1;
     int frame_cnt = 0;
     int frame_wrap_idx = 4;
+
+#if 1
+    g_channel = g_channel;
+#endif
 
     if (g_out2ts->encoderType() == OutputTS::QSV ||
         g_out2ts->encoderType() == OutputTS::VAAPI)
@@ -1085,7 +1099,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
         MWCAP_VIDEO_FRAME_INFO videoFrameInfo;
         MWCAP_VIDEO_SIGNAL_STATUS videoSignalStatus;
 
-        MWGetVideoSignalStatus(hChannel, &videoSignalStatus);
+        MWGetVideoSignalStatus(g_channel, &videoSignalStatus);
 
         if (videoSignalStatus.state == MWCAP_VIDEO_SIGNAL_UNSUPPORTED)
         {
@@ -1180,16 +1194,16 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 cerr << "========\n";
             }
 
-            free_image_buffers(hChannel);
-            if (!add_image_buffer(hChannel, dwImageSize))
+            free_image_buffers(g_channel);
+            if (!add_image_buffer(g_channel, dwImageSize))
                 return false;
-            if (!add_image_buffer(hChannel, dwImageSize))
+            if (!add_image_buffer(g_channel, dwImageSize))
                 return false;
 
             g_out2ts->setVideoParams(width, height, interlaced,
                                   time_base, frame_duration, frame_rate);
 
-            if (MWGetVideoBufferInfo(hChannel, &videoBufferInfo) != MW_SUCCEEDED)
+            if (MWGetVideoBufferInfo(g_channel, &videoBufferInfo) != MW_SUCCEEDED)
             {
                 continue;
             }
@@ -1216,7 +1230,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             }
         }
 
-        set_notify(notify_video, hChannel, hNotifyEvent, notify_mode);
+        set_notify(notify_video, g_channel, hNotifyEvent, notify_mode);
         if (notify_video == 0)
         {
             if (g_verbose > 0)
@@ -1236,7 +1250,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             }
 
             ULONGLONG ullStatusBits = 0;
-            if (MW_SUCCEEDED != MWGetNotifyStatus(hChannel, notify_video,
+            if (MW_SUCCEEDED != MWGetNotifyStatus(g_channel, notify_video,
                                                   &ullStatusBits))
             {
                 if (g_verbose > 0)
@@ -1253,7 +1267,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
                 break;
             }
 
-            MWGetVideoSignalStatus(hChannel, &videoSignalStatus);
+            MWGetVideoSignalStatus(g_channel, &videoSignalStatus);
             if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
             {
                 if (g_verbose > 0)
@@ -1265,7 +1279,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             if (0 == (ullStatusBits & notify_mode))
                 continue;
 
-            if (MW_SUCCEEDED != MWGetVideoBufferInfo(hChannel,
+            if (MW_SUCCEEDED != MWGetVideoBufferInfo(g_channel,
                                                      &videoBufferInfo))
             {
                 if (g_verbose > 0)
@@ -1302,7 +1316,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
 #endif
                 }
             }
-            if (MWGetVideoFrameInfo(hChannel, frame_idx,
+            if (MWGetVideoFrameInfo(g_channel, frame_idx,
                                     &videoFrameInfo) != MW_SUCCEEDED)
             {
                 if (g_verbose > 0)
@@ -1314,11 +1328,11 @@ bool video_capture_loop(HCHANNEL  hChannel,
             if (g_avail_image_buffers.empty())
             {
                 g_image_buffer_mutex.unlock();
-                add_image_buffer(hChannel, dwImageSize);
+                add_image_buffer(g_channel, dwImageSize);
                 g_image_buffer_mutex.lock();
-                if (g_verbose > 0)
+                if (g_verbose > 2)
                     cerr << "WARNING: video encoder is "
-                         << ++buffer_cnt << " frames behind.\n";
+                         << g_buffer_cnt << " frames behind.\n";
             }
 
             pbImage = g_avail_image_buffers.front();
@@ -1326,7 +1340,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             g_image_buffer_mutex.unlock();
 
             MW_RESULT ret = MWCaptureVideoFrameToVirtualAddress
-                            (hChannel,
+                            (g_channel,
                              frame_idx,
                              reinterpret_cast<MWCAP_PTR>(pbImage),
                              dwImageSize,
@@ -1353,7 +1367,7 @@ bool video_capture_loop(HCHANNEL  hChannel,
             }
 
             MWCAP_VIDEO_CAPTURE_STATUS captureStatus;
-            MWGetVideoCaptureStatus(hChannel, &captureStatus);
+            MWGetVideoCaptureStatus(g_channel, &captureStatus);
 
             timestamp = interlaced
                         ? videoFrameInfo.allFieldBufferedTimes[1]
@@ -1365,11 +1379,11 @@ bool video_capture_loop(HCHANNEL  hChannel,
 
     cerr << "\nVideo Capture finished.\n" << endl;
     Shutdown();
-    free_image_buffers(hChannel);
+    free_image_buffers(g_channel);
     return true;
 }
 
-bool video_capture(HCHANNEL hChannel)
+bool video_capture(void)
 {
     HNOTIFY   notify_video  = 0;
     MWCAP_PTR hNotifyEvent  = 0;
@@ -1391,20 +1405,19 @@ bool video_capture(HCHANNEL hChannel)
         return false;
     }
 
-    if (MW_SUCCEEDED != MWStartVideoCapture(hChannel, hCaptureEvent))
+    if (MW_SUCCEEDED != MWStartVideoCapture(g_channel, hCaptureEvent))
     {
         if (g_verbose > 0)
             cerr << "ERROR: Start Video Capture error!\n";
         return false;
     }
 
-    video_capture_loop(hChannel, notify_video,
-                       hNotifyEvent, hCaptureEvent);
+    video_capture_loop(notify_video, hNotifyEvent, hCaptureEvent);
     Shutdown();
 
-    MWUnregisterNotify(hChannel, notify_video);
+    MWUnregisterNotify(g_channel, notify_video);
     notify_video=0;
-    MWStopVideoCapture(hChannel);
+    MWStopVideoCapture(g_channel);
     if (g_verbose > 2)
         cerr << "Capture finished.\n";
 
@@ -1423,12 +1436,12 @@ bool video_capture(HCHANNEL hChannel)
     return true;
 }
 
-bool capture(HCHANNEL channel_handle, bool no_audio)
+bool capture(bool no_audio)
 {
 
     MWCAP_CHANNEL_INFO channel_info;
     MWRefreshDevice();
-    if (MW_SUCCEEDED != MWGetChannelInfo(channel_handle, &channel_info)) {
+    if (MW_SUCCEEDED != MWGetChannelInfo(g_channel, &channel_info)) {
         if (g_verbose > 0)
             cerr << "ERROR: Can't get channel info!\n";
         return false;
@@ -1453,11 +1466,10 @@ bool capture(HCHANNEL channel_handle, bool no_audio)
 
     if (!no_audio)
     {
-        audio_thr = thread(audio_capture, channel_handle,
-                                g_verbose);
+        audio_thr = thread(audio_capture);
     }
 
-    video_capture(channel_handle);
+    video_capture();
 
     if (!no_audio)
     {
@@ -1885,21 +1897,21 @@ int main(int argc, char* argv[])
     if (devIndex < 1)
         return 0;
 
-    HCHANNEL channel_handle = open_channel(devIndex - 1, boardId);
-    if (channel_handle == nullptr)
+    g_channel = open_channel(devIndex - 1, boardId);
+    if (g_channel == nullptr)
         return -1;
 
     if (get_volume)
-        display_volume(channel_handle);
+        display_volume(g_channel);
     if (set_volume >= 0)
-        save_volume(channel_handle, set_volume);
+        save_volume(g_channel, set_volume);
 
     if (!edid_file.empty())
     {
         if (read_edid)
-            ReadEDID(channel_handle, edid_file);
+            ReadEDID(g_channel, edid_file);
         else if (write_edid)
-            WriteEDID(channel_handle, edid_file);
+            WriteEDID(g_channel, edid_file);
     }
 
     if (do_capture)
@@ -1908,14 +1920,14 @@ int main(int argc, char* argv[])
                                 look_ahead, no_audio,
                                 device, image_buffer_available);
 
-        ret = capture(channel_handle, no_audio);
+        ret = capture(no_audio);
         delete g_out2ts;
     }
 
-    if (channel_handle)
+    if (g_channel)
     {
-        MWCloseChannel(channel_handle);
-        channel_handle = nullptr;
+        MWCloseChannel(g_channel);
+        g_channel = nullptr;
     }
 
     MWCaptureExitInstance();
