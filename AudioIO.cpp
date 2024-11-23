@@ -196,6 +196,18 @@ int AudioBuffer::Add(uint8_t* Pframe, int len, int64_t timestamp)
     {
         ++m_loop_cnt;
         m_write_wrapped = true;
+
+        if (m_read < m_write)
+        {
+            if (m_verbose > 1 && m_read != m_begin)
+            {
+                cerr << "INFO: [" << m_id
+                     << "] Overwrote buffer begin, moving read "
+                     << "(len = " << len << ")\n";
+                PrintPointers("      Add", true);
+            }
+            m_read = m_write;
+        }
     }
     else if (Pframe < m_prev_frame)
     {
@@ -205,17 +217,6 @@ int AudioBuffer::Add(uint8_t* Pframe, int len, int64_t timestamp)
              << endl;
     }
     m_prev_frame = m_write;
-
-    if (m_write_wrapped && m_read < m_write)
-    {
-        if (m_verbose > 1 && m_read != m_begin)
-        {
-            cerr << "INFO: [" << m_id
-                 << "] Overwrote buffer begin, moving read\n";
-            PrintPointers("      Add", true);
-        }
-        m_read = m_write;
-    }
 
     return 0;
 }
