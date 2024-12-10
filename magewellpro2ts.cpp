@@ -710,6 +710,7 @@ void* audio_capture(void)
 {
     bool      lpcm = false;
     int       bytes_per_sample = 0;
+    int       even_bytes_per_sample = 0;
     unsigned int sample_rate  = 0;
     WORD      valid_channels = 0;
     MWCAP_PTR notify_event = 0;
@@ -785,7 +786,7 @@ void* audio_capture(void)
 
         if (!audio_signal_status.wChannelValid)
         {
-            if (err_cnt++ % 50 == 0 && g_verbose > 0)
+            if (++err_cnt % 50 == 0 && g_verbose > 0)
                 cerr << "WARNING (cnt: " << err_cnt
                      << ") can't get audio, signal is invalid\n";
 
@@ -793,17 +794,43 @@ void* audio_capture(void)
             continue;
         }
 
+        even_bytes_per_sample = audio_signal_status.cBitsPerSample / 8;
+        if (even_bytes_per_sample > 2)
+            even_bytes_per_sample = 4;
+
         if (g_reset.load() == true ||
             lpcm != audio_signal_status.bLPCM ||
             sample_rate != audio_signal_status.dwSampleRate ||
-            bytes_per_sample != audio_signal_status.cBitsPerSample / 8 ||
+            bytes_per_sample != even_bytes_per_sample ||
             valid_channels != audio_signal_status.wChannelValid)
         {
+            if (g_verbose > 0 && frame_cnt > 0)
+            {
+                cerr << "WARNING: Audio signal CHANGED after "
+                     << frame_cnt << " frames!\n";
+                if (lpcm != audio_signal_status.bLPCM)
+                    cerr << "PCM changed " << lpcm
+                         << " -> "
+                         << static_cast<bool>(audio_signal_status.bLPCM)
+                         << endl;
+                if (sample_rate != audio_signal_status.dwSampleRate)
+                    cerr << "sample rate changed " << sample_rate
+                         << " -> " << audio_signal_status.dwSampleRate
+                         << endl;
+                if (bytes_per_sample != even_bytes_per_sample)
+                    cerr << "bytes per sample changed "
+                         << bytes_per_sample << " -> "
+                         << even_bytes_per_sample
+                         << endl;
+                if (valid_channels != audio_signal_status.wChannelValid)
+                    cerr << "Valid channels changed "
+                         << valid_channels << " -> "
+                         << audio_signal_status.wChannelValid << endl;
+            }
+
             lpcm = audio_signal_status.bLPCM;
             sample_rate = audio_signal_status.dwSampleRate;
-            bytes_per_sample = audio_signal_status.cBitsPerSample / 8;
-            if (bytes_per_sample > 2)
-                bytes_per_sample = 4;
+            bytes_per_sample = even_bytes_per_sample;
             valid_channels = audio_signal_status.wChannelValid;
 
             cur_channels = 0;
@@ -852,11 +879,11 @@ void* audio_capture(void)
             }
 
             g_out2ts->setAudioParams(capture_buf, capture_buf_size,
-                                   cur_channels, lpcm,
-                                   bytes_per_sample,
-                                   sample_rate,
-                                   MWCAP_AUDIO_SAMPLES_PER_FRAME,
-                                   frame_size, audio_timestamps);
+                                     cur_channels, lpcm,
+                                     bytes_per_sample,
+                                     sample_rate,
+                                     MWCAP_AUDIO_SAMPLES_PER_FRAME,
+                                     frame_size, audio_timestamps);
 
             g_reset.store(false);
         }
@@ -879,10 +906,7 @@ void* audio_capture(void)
 
             if (notify_status & MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE)
             {
-                if (g_verbose > 0 && frame_cnt > 0)
-                    cerr << "WARNING: Audio signal CHANGED after "
-                         << frame_cnt << " frames!\n";
-                this_thread::sleep_for(chrono::milliseconds(g_frame_ms));
+                this_thread::sleep_for(chrono::milliseconds(g_frame_ms * 3));
                 break;
             }
 
@@ -1152,6 +1176,10 @@ bool video_capture_loop(HNOTIFY   notify_video,
             frame_duration != videoSignalStatus.dwFrameDuration ||
             interlaced != static_cast<bool>(videoSignalStatus.bInterlaced))
         {
+            if (g_verbose > 0 && frame_cnt > 0)
+                cerr << "WARNING: Video signal CHANGED after "
+                     << frame_cnt << " frames.\n";
+
             width  = videoSignalStatus.cx;
             height = videoSignalStatus.cy;
             interlaced = static_cast<bool>(videoSignalStatus.bInterlaced);
@@ -1267,9 +1295,6 @@ bool video_capture_loop(HNOTIFY   notify_video,
 
             if (notify_video & MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE)
             {
-                if (g_verbose > 0 && frame_cnt > 0)
-                    cerr << "WARNING: Video signal CHANGED after "
-                         << frame_cnt << " frames.\n";
                 this_thread::sleep_for(chrono::milliseconds(5));
                 break;
             }
@@ -1318,7 +1343,7 @@ bool video_capture_loop(HNOTIFY   notify_video,
                              << (int)videoBufferInfo.iNewestBufferedFullFrame
                              << endl;
                     }
-#if 0
+#if 1
                     frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
 #endif
                 }

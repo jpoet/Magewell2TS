@@ -27,8 +27,8 @@ class AudioBuffer
                 AudioIO* parent, int verbose, int id);
     AudioBuffer(const AudioBuffer & rhs) { *this = rhs; }
     ~AudioBuffer(void);
-    void CleanupThread(void);
-    void RescanSPDIF(void);
+    void Clear(void);
+    bool RescanSPDIF(void);
     void OwnBuffer(void);
     void setEoF(void) { m_EoF.store(true); }
     bool isEoF(void) const { return m_EoF.load() == true; }
@@ -45,12 +45,13 @@ class AudioBuffer
     AVPacket* ReadSPDIF(void);
 
     int64_t Seek(int64_t offset, int whence);
-    void SetMark(void);
-    void ReturnToMark(void);
+    void set_mark(void);
+    void return_to_mark(void);
 
     int  Id(void) const { return m_id; }
     bool Empty(void) const { return m_read == m_write; }
     int  Size(void) const;
+    int  Tell(void) const { return m_frame_cnt; }
 
     std::string CodecName(void) const { return m_codec_name; }
     AVChannelLayout ChannelLayout(void) const { return m_channel_layout; }
@@ -60,10 +61,11 @@ class AudioBuffer
     int  FrameSize(void) const { return m_frame_size; }
     int  BlockSize(void) const { return m_block_size; }
 
+    bool DetectCodec(void);
+
   private:
     bool open_spdif_context(void);
     bool open_spdif(void);
-    void detect_codec(void);
     int64_t get_timestamp(uint8_t* P) const;
 
     std::atomic<bool> m_EoF  {false};
@@ -80,10 +82,7 @@ class AudioBuffer
     int      m_frame_cnt   {0};
     bool     m_own_buffer  {false};
 
-    struct {
-        uint8_t* read_pos {0};
-        int   loop_cnt {0};
-    }                m_mark;
+    int              m_mark;
 
     AVFormatContext* m_spdif_format_context {nullptr};
     AVIOContext*     m_spdif_avio_context   {nullptr};
@@ -101,9 +100,6 @@ class AudioBuffer
     int              m_block_size           {-1};
 
     AudioIO*         m_parent               {nullptr};
-    std::thread      m_detect_thread;
-    std::mutex       m_detect_mutex;
-    std::condition_variable m_detect_cond;
 
     std::mutex       m_write_mutex;
 
@@ -127,21 +123,20 @@ class AudioIO
                    int bytes_per_sample, int sample_rate,
                    int samples_per_frame, int frame_size,
                    int64_t* timestamps);
-    bool WaitForReady(void);
-
-    bool      Ready(void);
-    void      RescanSPDIF(void);
+    bool      RescanSPDIF(void);
     int       Add(uint8_t* Pframe, int len, int64_t timestamp);
     int64_t   Seek(int64_t offset, int whence);
     int       Read(uint8_t* dest, int32_t len);
     AVPacket* ReadSPDIF(void);
 
     int     BufId(void) const;
+    int     LastBufId(void) const { return m_buf_id - 1; }
     int     Buffers(void) const { return m_buffer_q.size(); }
     int     Size(void) const;
     bool    Empty(void) const;
     bool    BlockReady(void) const;
     int64_t TimeStamp(void) const { return m_timestamp; }
+
     std::string CodecName(void) const { return m_codec_name; }
     AVChannelLayout ChannelLayout(void) const { return m_channel_layout; }
     int     SampleRate(void) const { return m_sample_rate; }
@@ -155,6 +150,7 @@ class AudioIO
     using buffer_que_t = std::deque<AudioBuffer>;
 
     buffer_que_t     m_buffer_q;
+
     std::string      m_codec_name;
     AVChannelLayout  m_channel_layout;
     int              m_sample_rate      {-1};
@@ -164,9 +160,6 @@ class AudioIO
     int64_t          m_timestamp        {0LL};
 
     mutable std::mutex m_buffer_mutex;
-    std::mutex       m_codec_mutex;
-    std::condition_variable m_codec_cond;
-    bool             m_codec_ready      {false};
     bool             m_codec_initialized {false};
 
     int              m_buf_id           {0};

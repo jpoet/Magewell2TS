@@ -151,7 +151,7 @@ class OutputTS
 
     std::atomic<bool>       m_running      {true};
     bool                    m_init_needed  {true};
-    bool                    m_video_ready  {true};
+    bool                    m_audio_ready  {false};
     std::mutex              m_ready_mutex;
     std::condition_variable m_ready_cond;
 };

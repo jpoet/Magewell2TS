@@ -43,7 +43,6 @@
 #include <cstdlib>
 #include <fcntl.h>
 #include <chrono>
-#include <csignal>
 
 extern "C" {
 #include <libavutil/avassert.h>
@@ -127,6 +126,7 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
         Shutdown();
     }
 
+    m_audio_ready = m_no_audio;
     m_image_ready_thread = std::thread(&OutputTS::Write, this);
 }
 
@@ -314,9 +314,6 @@ bool OutputTS::open_audio(void)
     if (m_no_audio)
         return true;
 
-    if (!m_audioIO.WaitForReady())
-        return false;
-
     close_stream(&m_audio_stream);
 
     const AVCodec* audio_codec = nullptr;
@@ -487,12 +484,14 @@ bool OutputTS::open_container(void)
     int ret;
     AVDictionary* opt = NULL;
 
-    if (!m_no_audio)
-        m_audioIO.WaitForReady();
-
     close_container();
     if (m_running.load() == false)
         return false;
+
+#if 1
+    if (m_verbose > 1)
+        cerr << "\n================== open_container begin ==================\n";
+#endif
 
     /* allocate the output media context */
     avformat_alloc_output_context2(&m_output_format_context,
@@ -536,6 +535,10 @@ bool OutputTS::open_container(void)
         return false;
     }
 
+#if 1
+    if (m_verbose > 1)
+        cerr << "\n================== open_container end ==================\n";
+#endif
     return true;
 }
 
@@ -554,7 +557,7 @@ bool OutputTS::setAudioParams(uint8_t* capture_buf, size_t capture_buf_size,
 
     if (m_verbose > 0)
         cerr << "setAudioParams " << (is_lpcm ? "LPCM" : "Bitstream") << endl;
-    m_init_needed = true;
+
     return true;
 }
 
@@ -865,14 +868,12 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
         if (++m_slow_audio_cnt > 10)
         {
             if (m_verbose > 0)
-                cerr << "WARNING: S/PDIF audio out of sync, resetting.\n";
+                cerr << "WARNING: S/PDIF audio out of sync, resetting." << endl;
             m_slow_audio_cnt = 0;
 
-#if 0
-            m_audioIO.RescanSPDIF();
-#else
-            std::raise(SIGHUP);
-#endif
+            if (!m_audioIO.RescanSPDIF())
+                Shutdown();
+
             return false;
         }
     }
@@ -1382,6 +1383,13 @@ void OutputTS::Write(void)
     {
         m_image_ready.wait_for(lock,
                                std::chrono::milliseconds(m_input_frame_wait_ms));
+
+        if (!m_audio_ready)
+        {
+            if (m_audioIO.CodecChanged())
+                continue;
+            m_audio_ready = true;
+        }
 
         if (m_init_needed)
         {
