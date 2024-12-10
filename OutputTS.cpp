@@ -32,6 +32,7 @@
  * Output a Transport Stream
  */
 
+#include <csignal>
 #include <unistd.h>
 #include <iostream>
 #include <iomanip>
@@ -862,8 +863,9 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
     if (pkt->pts - ost->prev_audio_pts > ost->frame->nb_samples * 3)
     {
         /* This a bit of hack, but seems to solve the problem.
-           Jumping around in some applications can cause the S/PDIF
-           to get out of sync for some reason.
+           Jumping around in some applications can cause the S/PDIF to
+           get out of sync. For example, This can happen if the
+           audio_capture::audio_buf_sz is too small.
         */
         if (++m_slow_audio_cnt > 10)
         {

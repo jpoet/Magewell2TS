@@ -108,6 +108,8 @@ void AudioBuffer::Clear(void)
     const std::unique_lock<std::mutex> lock(m_write_mutex);
     m_read = m_write;
     m_write_wrapped = false;
+    if (m_verbose > 1)
+        cerr << "[" << m_id << "] audio buffer cleared.\n";
 }
 
 bool AudioBuffer::RescanSPDIF(void)
@@ -311,7 +313,7 @@ AVPacket* AudioBuffer::ReadSPDIF(void)
 {
     if (Size() < m_frame_size)
     {
-        if (m_verbose > 2)
+        if (m_verbose > 1)
             cerr << "[" << m_id << "] ReadSPDIF: Only "
                  << Size() << " bytes available. "
                  << m_frame_size << " desired.\n";
@@ -380,7 +382,7 @@ int64_t AudioBuffer::Seek(int64_t offset, int whence)
           cerr << "[" << m_id << "] whence = " << whence << endl;
           break;
     }
-    if (m_verbose > 3)
+    if (m_verbose > 2)
         cerr << "[" << m_id << "] Seeking from " << whence_str
              << " to " << offset << endl;
 
