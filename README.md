@@ -17,19 +17,7 @@ The Magewell driver provides V4L2 and ALSA interfaces to the card. This applicat
 ----
 ## Caveats
 
-The Magewell PRO capture cards capture raw audio and video. The video (at least) needs compressed and it is up to the Linux PC to do that. The only practical way of accomplishing this is with GPU assist. Intel QSV & VAAPI and nVidia nvenc are supported.
-
-----
-## Versions
-* release/v1
-
-        - Supports hevc_nvenc and h264_nvenc for video codec.
-        - Does not handle audio or video changes at all, which can usually be worked around by using the '-n' (no audio) option.
-
-* release/v2
-
-        - Adds support for hevc_qsv and h264_qsv for video codec.
-        - Does a decent job at handling audio and video changes midstream.
+The Magewell PRO capture cards capture raw audio and video. The video (at least) needs compressed and it is up to the Linux PC to do that. The only practical way of accomplishing this is with GPU assist. Intel QSV and nVidia nvenc are supported.
 
 ***
 ## Magewell driver
@@ -52,7 +40,7 @@ sudo grub2-mkconfig -o /boot/grub2/grub.cfg
 ```
 
 
-### Testing the Magewell driver
+### Testing the Magewell driver using ALSA and V4L
 
 Find ALSA audio input:
 ```bash
@@ -118,7 +106,7 @@ sudo dnf install akmod-nvidia xorg-x11-drv-nvidia-cuda xorg-x11-drv-nvidia-cuda-
 ```
 
 ### FFmpeg
-FFmpeg is also required. If you want eac3 to work, then a minimum of version 6.1 shoudl be used.
+FFmpeg is also required. If you want bitstream eac3 to work, then a minimum of version 6.1 shoudl be used.
 ```
 sudo dnf install ffmpeg-devel
 ```
@@ -147,7 +135,7 @@ The application provides help via --help or -h:
 ```bash
 magewellpro2ts -h
 magewellpro2ts --list
-magewellpro2ts -i 1 -m -n | mpv -
+magewellpro2ts -i 1 -m -c hevc_qsv -d renderD129 | mpv -
 ```
 
 ----
@@ -159,12 +147,7 @@ INPUT=1
 DEVICE=roku1
 TUNER=/usr/local/bin/roku-control.py --device %DEVICE%
 
-#DEVICE=onn1
-#TUNER=/usr/local/bin/adb-control.py --device %DEVICE%
-
-CODEC=hevc_qsv -q 25
-#CODEC=h264_nvenc -q 20
-
+CODEC=hevc_qsv -q 22
 
 [RECORDER]
 # The recorder command to execute.  %URL% is optional, and
@@ -187,7 +170,7 @@ desc="%DEVICE%-%INPUT%"
 # channel. A %URL% parameter will be substituted with the "URL" as
 # defined in the [TUNER/channels] configuration file
 
-command="%TUNER% --waitafter 1 --sourceid %SOURCEID% --channum %CHANNUM% --recordid %RECORDID%"
+command="%TUNER% --sourceid %SOURCEID% --channum %CHANNUM% --recordid %RECORDID%"
 # newepisodecommand="%TUNER% --touch %CHANNUM% &"
 #ondatastart="%TUNER% --device %DEVICE% --wait 2 --keys down"
 
@@ -201,7 +184,7 @@ Then configure a MythTV External Recorder capture card with an appropriate comma
 
 ----
 ## EDID
-If you want to allow AC3 and/or EAC3 then a different EDID needs written to the Magewell card. This data does not survive a reboot, though, so you may want to setup systemd to load the EDID. This can be done in the same service file used to start mythbackend, for example:
+If you want to allow bitstream AC3 and/or EAC3 then a different EDID needs written to the Magewell card. This data does not survive a reboot, though, so you may want to setup systemd to load the EDID. This can be done in the same service file used to start mythbackend, for example:
 
 Create a service file (/etc/systemd/system/mythbackend.service):
 ```
