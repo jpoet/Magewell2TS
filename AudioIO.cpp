@@ -560,7 +560,7 @@ bool AudioBuffer::open_spdif(void)
 
         if ((ret = av_probe_input_buffer(m_spdif_avio_context,
                                          &fmt, "", nullptr, 0,
-                                         m_block_size * 20)) != 0)
+                                         m_block_size * 100)) != 0)
         {
             if (!m_codec_name.empty())
             {
