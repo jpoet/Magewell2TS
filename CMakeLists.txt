@@ -21,12 +21,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 add_compile_options(-Wall -Wreturn-type)
 
 # set the project name
-project(magewellpro2ts VERSION 0.1)
+project(magewellpro2ts VERSION 2.2)
 
 configure_file(version.h.in version.h)
 
 # add the executable
-add_executable(magewellpro2ts magewellpro2ts.cpp AudioIO.cpp OutputTS.cpp)
+add_executable(magewellpro2ts magewellpro2ts.cpp Magewell.cpp AudioIO.cpp OutputTS.cpp)
 
 # set_target_properties(magewellpro2ts PROPERTIES
 #   LINK_SEARCH_START_STATIC ON

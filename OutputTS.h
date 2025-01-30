@@ -25,6 +25,7 @@ class OutputTS
              MagCallback image_buffer_avail);
     ~OutputTS(void);
 
+    bool operator!(void) const { return !m_running.load(); }
     void Shutdown(void);
 
     EncoderType encoderType(void) const { return m_encoderType; }
@@ -58,6 +59,9 @@ class OutputTS
 
         AVFrame* frame             {nullptr};
         AVFrame* tmp_frame         {nullptr};
+        size_t   size              {0};
+        size_t   half_size         {0};
+        size_t   quarter_size      {0};
         int64_t  prev_pts          {-1};
         int64_t  prev_audio_pts    {-1};
         int64_t  prev_dts          {-1};
@@ -104,12 +108,10 @@ class OutputTS
                     AVDictionary* opt_arg);
     bool open_qsv(const AVCodec* codec, OutputStream* ost,
                   AVDictionary* opt_arg);
-    bool nv_encode(AVFormatContext* oc,
-                   OutputStream* ost, uint8_t* pImage,
-                   int64_t timestamp);
-    bool qsv_vaapi_encode(AVFormatContext* oc,
-                      OutputStream* ost, uint8_t*  pImage,
-                      int64_t timestamp);
+    bool nv_encode(AVFormatContext* oc, OutputStream* ost,
+                   uint8_t* pImage, int64_t timestamp);
+    bool qsv_vaapi_encode(AVFormatContext* oc, OutputStream* ost,
+                          uint8_t*  pImage, int64_t timestamp);
 
     EncoderType     m_encoderType  { UNKNOWN };
 
@@ -124,7 +126,7 @@ class OutputTS
 
     std::string      m_filename               {"pipe:1"};
 
-    bool             m_no_audio               {false};
+    bool             m_has_audio              {false};
     int              m_slow_audio_cnt         {0};
 
     std::string      m_video_codec_name;
@@ -143,7 +145,8 @@ class OutputTS
 
     std::mutex              m_container_mutex;
 
-    MagCallback             m_image_buffer_available;
+    MagCallback             f_image_buffer_available;
+
     std::thread             m_image_ready_thread;
     std::mutex              m_imagepkt_mutex;
     std::mutex              m_imagequeue_mutex;

@@ -328,6 +328,12 @@ AVPacket* AudioBuffer::ReadSPDIF(void)
         return nullptr;
     }
 
+    if (m_spdif_format_context == nullptr)
+    {
+        cerr << "WARNING: [" << m_id << "] S/PDIF context is invalid.\n";
+        return nullptr;
+    }
+
     double ret =  av_read_frame(m_spdif_format_context, pkt);
 #if 0
     cerr << "ReadSPDIF [" << pkt->stream_index << "] pts: " << pkt->pts
@@ -850,6 +856,7 @@ bool AudioIO::CodecChanged(void)
 
     string codec = m_codec_name;
     int    bytes_per_sample = m_bytes_per_sample;
+    int    sample_rate = m_sample_rate;
 
     buffer_que_t::iterator Ibuf = m_buffer_q.begin();
     if ((*Ibuf).CodecName().empty())
@@ -874,7 +881,9 @@ bool AudioIO::CodecChanged(void)
         m_codec_initialized = true;
     }
 
-    if (codec == m_codec_name && bytes_per_sample == m_bytes_per_sample)
+    if (codec == m_codec_name &&
+        bytes_per_sample == m_bytes_per_sample &&
+        sample_rate == m_sample_rate)
         return false;
 
     return true;

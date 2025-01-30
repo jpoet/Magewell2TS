@@ -106,13 +106,13 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
                    MagCallback image_buffer_avail)
     : m_audioIO(verbose_level)
     , m_verbose(verbose_level)
-    , m_no_audio(no_audio)
+    , m_has_audio(!no_audio)
     , m_video_codec_name(video_codec_name)
     , m_device("/dev/dri/" + device)
     , m_preset(preset)
     , m_quality(quality)
     , m_look_ahead(look_ahead)
-    , m_image_buffer_available(image_buffer_avail)
+    , f_image_buffer_available(image_buffer_avail)
 {
     if (m_video_codec_name.find("qsv") != string::npos)
         m_encoderType = EncoderType::QSV;
@@ -127,7 +127,7 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
         Shutdown();
     }
 
-    m_audio_ready = m_no_audio;
+    m_audio_ready = !m_has_audio;
     m_image_ready_thread = std::thread(&OutputTS::Write, this);
 }
 
@@ -235,6 +235,9 @@ bool OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
             For av1_qsv, pix_fmt options are:
                 AV_PIX_FMT_NV12, AV_PIX_FMT_P010, AV_PIX_FMT_QSV
           */
+          ost->size = m_input_width * m_input_height;
+          ost->half_size = ost->size / 2;
+          ost->quarter_size = ost->size / 4;
 
           if (m_encoderType == EncoderType::QSV)
               ost->enc->pix_fmt = AV_PIX_FMT_QSV;
@@ -258,11 +261,11 @@ bool OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
 
           if (m_verbose > 1)
           {
-              cerr << "Output stream< Video: " << ost->enc->width
+              cerr << "Output stream Video: " << ost->enc->width
                    << "x" << ost->enc->height
+                   << (m_interlaced ? 'i' : 'p')
                    << " time_base: " << ost->st->time_base.num
                    << "/" << ost->st->time_base.den
-                   << (m_interlaced ? 'i' : 'p')
                    << "\n";
           }
           break;
@@ -312,7 +315,7 @@ AVFrame* OutputTS::alloc_audio_frame(enum AVSampleFormat sample_fmt,
 
 bool OutputTS::open_audio(void)
 {
-    if (m_no_audio)
+    if (!m_has_audio)
         return true;
 
     close_stream(&m_audio_stream);
@@ -325,8 +328,7 @@ bool OutputTS::open_audio(void)
     {
         cerr << "ERROR: Could not find audio encoder for '"
              << m_audioIO.CodecName() << "'\n";
-        Shutdown();
-        return false;
+        return true;
     }
 
     if (!add_stream(&m_audio_stream, m_output_format_context, &audio_codec))
@@ -579,9 +581,7 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     if (m_verbose > 0)
     {
         cerr << "Video: " << width << "x" << height
-             << " fps: " << fps
-             << (m_interlaced ? 'i' : 'p')
-             << "\n";
+             << (m_interlaced ? 'i' : 'p') << fps << "\n";
 
         if (m_verbose > 2)
             cerr << "Video Params set\n";
@@ -860,6 +860,7 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
                             m_input_time_base,
                             ost->st->time_base);
 
+#if 0
     if (pkt->pts - ost->prev_audio_pts > ost->frame->nb_samples * 3)
     {
         /* This a bit of hack, but seems to solve the problem.
@@ -881,6 +882,7 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
     }
     else
         m_slow_audio_cnt = 0;
+#endif
 
     ost->prev_audio_pts = pkt->pts;
 
@@ -1227,8 +1229,9 @@ bool OutputTS::open_qsv(const AVCodec* codec,
         return false;
     }
     frames_ctx = reinterpret_cast<AVHWFramesContext* >(hw_frames_ref->data);
-    frames_ctx->format    = AV_PIX_FMT_QSV;
+
     frames_ctx->sw_format = AV_PIX_FMT_NV12;
+    frames_ctx->format    = AV_PIX_FMT_QSV;
     frames_ctx->width     = m_input_width;
     frames_ctx->height    = m_input_height;
     frames_ctx->initial_pool_size = 20;
@@ -1301,12 +1304,10 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
 #endif
 
     // YUV 4:2:0
-    size_t size = ctx->width * ctx->height;
-    memcpy(ost->frame->data[0], pImage, size);
-    memcpy(ost->frame->data[1],
-           pImage + size, size / 4);
-    memcpy(ost->frame->data[2], pImage + size * 5 / 4, size  / 4);
-    m_image_buffer_available(pImage);
+    memcpy(ost->frame->data[0], pImage, ost->size);
+    memcpy(ost->frame->data[1], pImage + ost->size, ost->quarter_size);
+    memcpy(ost->frame->data[2], pImage + ost->size * 5 / 4, ost->quarter_size);
+    f_image_buffer_available(pImage);
 
     ost->frame->pts = av_rescale_q_rnd(timestamp, m_input_time_base,
                                        ctx->time_base,
@@ -1318,7 +1319,7 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
 }
 
 bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
-                                OutputStream* ost, uint8_t*  pImage,
+                                OutputStream* ost, uint8_t* pImage,
                                 int64_t timestamp)
 {
     AVCodecContext* enc_ctx = ost->enc;
@@ -1328,10 +1329,9 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
     int64_t pts = av_rescale_q(timestamp, m_input_time_base,
                                enc_ctx->time_base);
 
-    size_t size = enc_ctx->width * enc_ctx->height;
-    memcpy(ost->frame->data[0], pImage, size);
-    memcpy(ost->frame->data[1], pImage + size, size / 2);
-    m_image_buffer_available(pImage);
+    memcpy(ost->frame->data[0], pImage, ost->size);
+    memcpy(ost->frame->data[1], pImage + ost->size, ost->half_size);
+    f_image_buffer_available(pImage);
 
     if (!(hw_frame = av_frame_alloc()))
     {
@@ -1384,7 +1384,7 @@ void OutputTS::Write(void)
     while (m_running.load() == true)
     {
         m_image_ready.wait_for(lock,
-                               std::chrono::milliseconds(m_input_frame_wait_ms));
+                      std::chrono::milliseconds(m_input_frame_wait_ms));
 
         if (!m_audio_ready)
         {
@@ -1405,7 +1405,7 @@ void OutputTS::Write(void)
 
         while (m_running.load() == true)
         {
-            if (!m_no_audio)
+            if (m_has_audio)
             {
 #if 0
                 cerr << "Write: video " << m_video_stream.next_pts << "\n"
@@ -1413,9 +1413,11 @@ void OutputTS::Write(void)
                      << "] " << m_audio_stream.next_pts << endl;
 #endif
                 while (m_video_stream.next_pts > m_audio_stream.next_pts)
+                {
                     if (!write_audio_frame(m_output_format_context,
                                            &m_audio_stream))
                         break;
+                }
             }
 
             {
@@ -1457,7 +1459,7 @@ bool OutputTS::AddVideoFrame(uint8_t* pImage, uint32_t imageSize,
     const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
 
     m_imagequeue.push_back(imagepkt_t{timestamp, pImage});
-    m_image_ready.notify_one();
 
-    return true;
+    m_image_ready.notify_one();
+    return m_running.load();
 }
