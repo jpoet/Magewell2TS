@@ -1403,7 +1403,7 @@ void OutputTS::Write(void)
             m_init_needed = false;
         }
 
-        while (m_running.load() == true)
+        while (!m_init_needed && m_running.load() == true)
         {
             if (m_has_audio)
             {

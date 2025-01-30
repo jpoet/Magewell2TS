@@ -10,11 +10,14 @@
 
 #include <MWFOURCC.h>
 #include <LibMWCapture/MWCapture.h>
+#include "LibMWCapture/MWEcoCapture.h"
 
 #include "OutputTS.h"
 
 class Magewell
 {
+    static const int k_max_eco_buffer_count = 4;
+
     using imageset_t = std::set<uint8_t*>;
     using imageque_t = std::deque<uint8_t*>;
 
@@ -57,6 +60,10 @@ class Magewell
     bool capture_video(void);
     bool capture_pro_video(void);
 
+    bool open_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN & eco_params,
+                        MWCAP_VIDEO_ECO_CAPTURE_FRAME (& eco_frames)[k_max_eco_buffer_count]);
+    void close_eco_video(MWCAP_VIDEO_ECO_CAPTURE_FRAME (& eco_frames)[k_max_eco_buffer_count]);
+
     bool capture_audio(void);
 
   private:
@@ -72,6 +79,7 @@ class Magewell
     std::mutex           m_image_buffer_mutex;
     std::condition_variable m_image_returned;
 
+    bool m_isEco            {false};
     int  m_frame_ms         {17};
     int  m_frame_ms2        {34};
     int  m_image_buffer_cnt {0};
