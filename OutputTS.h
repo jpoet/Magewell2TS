@@ -20,13 +20,15 @@ extern "C" {
 class OutputTS
 {
   public:
-    using MagCallback = std::function<void (uint8_t*)>;
+    using MagCallback = std::function<void (uint8_t*, void*)>;
+    using StopCallback = std::function<void (void)>;
 
     enum EncoderType { UNKNOWN, NV, VAAPI, QSV };
 
     OutputTS(int verbose, const std::string & video_codec_name,
              const std::string & preset, int quality, int look_ahead,
              bool no_audio, const std::string & device,
+             StopCallback f_stop,
              MagCallback image_buffer_avail);
     ~OutputTS(void);
 
@@ -40,7 +42,6 @@ class OutputTS
     void setColorSpace(AVColorSpace c) { m_color_space = c; }
     void setColorTRC(AVColorTransferCharacteristic c) { m_color_trc = c; }
     void setColorPrimaries(AVColorPrimaries c) { m_color_primaries = c; }
-    void setHDR(bool val) { m_isHDR = val; }
     bool isHDR(void) const { return m_isHDR; }
 
     void setLight(AVMasteringDisplayMetadata * display_meta,
@@ -54,11 +55,11 @@ class OutputTS
                         int64_t* timestamps);
     bool setVideoParams(int width, int height, bool interlaced,
                         AVRational time_base, double frame_duration,
-                        AVRational frame_rate);
+                        AVRational frame_rate, bool is_hdr);
     bool addAudio(uint8_t* buf, size_t len, int64_t timestamp);
     void ClearImageQueue(void);
     void Write(void);
-    bool AddVideoFrame(uint8_t*  pImage,
+    bool AddVideoFrame(uint8_t*  pImage, void* pEco,
                        uint32_t imageSize, int64_t timestamp);
 
   private:
@@ -92,6 +93,7 @@ class OutputTS
     using imagepkt_t = struct {
         int64_t  timestamp;
         uint8_t* image;
+        void*    pEco;
     };
     using imageque_t = std::deque<imagepkt_t>;
     imageque_t m_imagequeue;
@@ -127,9 +129,9 @@ class OutputTS
     bool open_qsv(const AVCodec* codec, OutputStream* ost,
                   AVDictionary* opt_arg);
     bool nv_encode(AVFormatContext* oc, OutputStream* ost,
-                   uint8_t* pImage, int64_t timestamp);
+                   uint8_t* pImage, void* pEco, int64_t timestamp);
     bool qsv_vaapi_encode(AVFormatContext* oc, OutputStream* ost,
-                          uint8_t*  pImage, int64_t timestamp);
+                          uint8_t*  pImage, void* pEco, int64_t timestamp);
 
     EncoderType     m_encoderType  { UNKNOWN };
 
@@ -162,6 +164,7 @@ class OutputTS
     bool             m_interlaced             {false};
 
     // HDR
+    bool                          m_HDRpending        {false};
     bool                          m_isHDR             {false};
     AVColorSpace                  m_color_space       {AVCOL_SPC_NB};
     AVColorTransferCharacteristic m_color_trc         {AVCOL_TRC_NB};
@@ -171,6 +174,7 @@ class OutputTS
 
     std::mutex              m_container_mutex;
 
+    StopCallback            f_stop;
     MagCallback             f_image_buffer_available;
 
     std::thread             m_image_ready_thread;

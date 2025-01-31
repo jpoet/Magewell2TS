@@ -16,10 +16,13 @@
 
 class Magewell
 {
-    static const int k_max_eco_buffer_count = 4;
+#if 0
+    static const int k_max_eco_buffer_count = 10;
+#endif
 
     using imageset_t = std::set<uint8_t*>;
     using imageque_t = std::deque<uint8_t*>;
+    using ecoque_t   = std::set<MWCAP_VIDEO_ECO_CAPTURE_FRAME *>;
 
   public:
     Magewell(void);
@@ -52,8 +55,9 @@ class Magewell
     bool update_HDRframe(void);
     bool update_HDRinfo(void);
 
-    void image_buffer_available(uint8_t* pbImage);
-    bool add_image_buffer(DWORD dwImageSize);
+    void image_buffer_available(uint8_t* pbImage, void* pEco);
+    bool add_pro_image_buffer(void);
+    bool add_eco_image_buffer(void);
     void free_image_buffers(void);
 
     void set_notify(HNOTIFY&  notify,
@@ -64,9 +68,8 @@ class Magewell
     bool capture_video(void);
     bool capture_pro_video(void);
 
-    bool open_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN & eco_params,
-                        MWCAP_VIDEO_ECO_CAPTURE_FRAME (& eco_frames)[k_max_eco_buffer_count]);
-    void close_eco_video(MWCAP_VIDEO_ECO_CAPTURE_FRAME (& eco_frames)[k_max_eco_buffer_count]);
+    bool open_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN & eco_params);
+    void close_eco_video(void);
 
     bool capture_audio(void);
 
@@ -83,15 +86,20 @@ class Magewell
     HDMI_INFOFRAME_PACKET m_infoPacket_prev {0};
     HDMI_HDR_INFOFRAME_PAYLOAD& m_HDRinfo_prev {m_infoPacket_prev.hdrInfoFramePayload};
 
-    imageset_t           m_image_buffers;
-    imageque_t           m_avail_image_buffers;
-    std::mutex           m_image_buffer_mutex;
+    size_t       m_image_buffer_total     {0};
+    size_t       m_image_buffer_avail     {0};
+    size_t       m_image_buffers_desired  {6};
+    size_t       m_image_buffers_inflight {0};
+    imageset_t   m_image_buffers;
+    imageque_t   m_avail_image_buffers;
+    ecoque_t     m_eco_buffers;
+    std::mutex   m_image_buffer_mutex;
     std::condition_variable m_image_returned;
 
-    bool m_isEco            {false};
-    int  m_frame_ms         {17};
-    int  m_frame_ms2        {34};
-    int  m_image_buffer_cnt {0};
+    int m_image_size         {0};
+    int m_min_stride         {0};
+    int m_frame_ms           {17};
+    int m_frame_ms2          {34};
 
     std::thread       m_audio_thread;
 
@@ -100,6 +108,8 @@ class Magewell
 
     std::function<bool (void)>  f_open_video;
 
+    bool m_isEco   {false};
+    bool m_isHDR   {false};
     bool m_fatal   {false};
     int  m_verbose {1};
 };

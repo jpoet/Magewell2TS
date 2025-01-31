@@ -103,6 +103,7 @@ static void log_packet(string where, const AVFormatContext* fmt_ctx,
 OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
                    const string & preset, int quality, int look_ahead,
                    bool no_audio, const string & device,
+                   StopCallback stop,
                    MagCallback image_buffer_avail)
     : m_audioIO(verbose_level)
     , m_verbose(verbose_level)
@@ -112,6 +113,7 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     , m_preset(preset)
     , m_quality(quality)
     , m_look_ahead(look_ahead)
+    , f_stop(stop)
     , f_image_buffer_available(image_buffer_avail)
 {
     if (m_video_codec_name.find("qsv") != string::npos)
@@ -138,6 +140,7 @@ void OutputTS::Shutdown(void)
 {
     m_audioIO.Shutdown();
     m_running.store(false);
+    f_stop();
 }
 
 void OutputTS::setLight(AVMasteringDisplayMetadata * display_meta,
@@ -466,6 +469,7 @@ bool OutputTS::open_audio(void)
 bool OutputTS::open_video(void)
 {
     close_stream(&m_video_stream);
+    m_isHDR = m_HDRpending;
 
     AVDictionary* opt = NULL;
     const AVCodec* video_codec =
@@ -601,7 +605,7 @@ bool OutputTS::setAudioParams(uint8_t* capture_buf, size_t capture_buf_size,
 
 bool OutputTS::setVideoParams(int width, int height, bool interlaced,
                               AVRational time_base, double frame_duration,
-                              AVRational frame_rate)
+                              AVRational frame_rate, bool is_hdr)
 {
     m_input_width = width;
     m_input_height = height;
@@ -610,6 +614,7 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     m_input_frame_duration = frame_duration;
     m_input_frame_wait_ms = frame_duration / 10000 / 2;
     m_input_frame_rate = frame_rate;
+    m_HDRpending = is_hdr;
 
     double fps = static_cast<double>(frame_rate.num) / frame_rate.den;
 
@@ -1337,7 +1342,7 @@ bool OutputTS::open_qsv(const AVCodec* codec,
 
 bool OutputTS::nv_encode(AVFormatContext* oc,
                          OutputStream* ost,
-                         uint8_t* pImage,
+                         uint8_t* pImage, void* pEco,
                          int64_t  timestamp)
 {
     AVCodecContext* ctx = ost->enc;
@@ -1356,7 +1361,7 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
     memcpy(ost->frame->data[0], pImage, ost->size);
     memcpy(ost->frame->data[1], pImage + ost->size, ost->quarter_size);
     memcpy(ost->frame->data[2], pImage + ost->size * 5 / 4, ost->quarter_size);
-    f_image_buffer_available(pImage);
+    f_image_buffer_available(pImage, pEco);
 
     /* Technically, this should be mutex protected.
        They data pointed to by m_display_primaries can change in another thread.
@@ -1382,7 +1387,8 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
 }
 
 bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
-                                OutputStream* ost, uint8_t* pImage,
+                                OutputStream* ost,
+                                uint8_t* pImage, void* pEco,
                                 int64_t timestamp)
 {
     AVCodecContext* enc_ctx = ost->enc;
@@ -1394,7 +1400,7 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
 
     memcpy(ost->frame->data[0], pImage, ost->size);
     memcpy(ost->frame->data[1], pImage + ost->size, ost->half_size);
-    f_image_buffer_available(pImage);
+    f_image_buffer_available(pImage, pEco);
 
     /* Technically, this should be mutex protected.
        They data pointed to by m_display_primaries can change in another thread.
@@ -1456,6 +1462,7 @@ void OutputTS::Write(void)
     std::unique_lock<std::mutex> lock(m_imagepkt_mutex);
 
     uint8_t* pImage;
+    void*    pEco;
     uint64_t timestamp;
 
     while (m_running.load() == true)
@@ -1503,17 +1510,18 @@ void OutputTS::Write(void)
                     break;
 
                 pImage    = m_imagequeue.front().image;
+                pEco      = m_imagequeue.front().pEco;
                 timestamp = m_imagequeue.front().timestamp;
                 m_imagequeue.pop_front();
             }
 
             if (m_encoderType == EncoderType::NV)
                 nv_encode(m_output_format_context, &m_video_stream,
-                          pImage, timestamp);
+                          pImage, pEco, timestamp);
             else if (m_encoderType == EncoderType::QSV ||
                      m_encoderType == EncoderType::VAAPI)
                 qsv_vaapi_encode(m_output_format_context, &m_video_stream,
-                                 pImage, timestamp);
+                                 pImage, pEco, timestamp);
             else
             {
                 cerr << "ERROR: Unknown encoderType.\n";
@@ -1527,15 +1535,19 @@ void OutputTS::Write(void)
 void OutputTS::ClearImageQueue(void)
 {
     const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
+    imageque_t::iterator Iq;
+    for (Iq = m_imagequeue.begin(); Iq != m_imagequeue.end(); ++Iq)
+        f_image_buffer_available((*Iq).image, (*Iq).pEco);
     m_imagequeue.clear();
 }
 
-bool OutputTS::AddVideoFrame(uint8_t* pImage, uint32_t imageSize,
-                          int64_t timestamp)
+bool OutputTS::AddVideoFrame(uint8_t* pImage, void* pEco,
+                             uint32_t imageSize,
+                             int64_t timestamp)
 {
     const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
 
-    m_imagequeue.push_back(imagepkt_t{timestamp, pImage});
+    m_imagequeue.push_back(imagepkt_t{timestamp, pImage, pEco});
 
     m_image_ready.notify_one();
     return m_running.load();
