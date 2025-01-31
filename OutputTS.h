@@ -12,6 +12,11 @@
 
 #include "AudioIO.h"
 
+// FFmpeg structure for HDR
+extern "C" {
+#include <libavutil/mastering_display_metadata.h>
+}
+
 class OutputTS
 {
   public:
@@ -27,6 +32,19 @@ class OutputTS
 
     bool operator!(void) const { return !m_running.load(); }
     void Shutdown(void);
+
+    AVColorSpace getColorSpace(void) const { return m_color_space; }
+    AVColorTransferCharacteristic getColorTRC(void) const { return m_color_trc; }
+    AVColorPrimaries getColorPrimaries(void) const { return m_color_primaries; }
+
+    void setColorSpace(AVColorSpace c) { m_color_space = c; }
+    void setColorTRC(AVColorTransferCharacteristic c) { m_color_trc = c; }
+    void setColorPrimaries(AVColorPrimaries c) { m_color_primaries = c; }
+    void setHDR(bool val) { m_isHDR = val; }
+    bool isHDR(void) const { return m_isHDR; }
+
+    void setLight(AVMasteringDisplayMetadata * display_meta,
+                  AVContentLightMetadata * light_meta);
 
     EncoderType encoderType(void) const { return m_encoderType; }
     bool setAudioParams(uint8_t* capture_buf, size_t capture_buf_size,
@@ -142,6 +160,14 @@ class OutputTS
     AVRational       m_input_time_base        {1, 10000000};
 
     bool             m_interlaced             {false};
+
+    // HDR
+    bool                          m_isHDR             {false};
+    AVColorSpace                  m_color_space       {AVCOL_SPC_NB};
+    AVColorTransferCharacteristic m_color_trc         {AVCOL_TRC_NB};
+    AVColorPrimaries              m_color_primaries   {AVCOL_PRI_NB};
+    AVMasteringDisplayMetadata*   m_display_primaries {nullptr};
+    AVContentLightMetadata*       m_content_light     {nullptr};
 
     std::mutex              m_container_mutex;
 

@@ -1092,6 +1092,231 @@ bool Magewell::capture_audio(void)
     return true;
 }
 
+bool Magewell::update_HDRinfo(void)
+{
+    unsigned int uiValidFlag = 0;
+    if (MW_SUCCEEDED != MWGetHDMIInfoFrameValidFlag(m_channel, &uiValidFlag))
+    {
+        cerr << "Not a HDMI info frame\n";
+        return false;
+    }
+
+    if (0 == uiValidFlag)
+    {
+        cerr << "No HDMI InfoFrame!\n";
+        return false;
+    }
+
+    if (0 == (uiValidFlag & MWCAP_HDMI_INFOFRAME_MASK_HDR))
+    {
+        cerr << "Not a HDR info frame.\n";
+        return false;
+    }
+
+    if (MW_SUCCEEDED != MWGetHDMIInfoFramePacket(m_channel,
+                                                 MWCAP_HDMI_INFOFRAME_ID_HDR,
+                                                 &m_infoPacket))
+    {
+        cerr << "WARNING: HDMI HDR infoframe not available.\n";
+        return false;
+    }
+
+    if (static_cast<int>(m_HDRinfo.byEOTF) != 2 &&
+        static_cast<int>(m_HDRinfo.byEOTF) != 3)
+        return false;
+
+    if (memcmp(&m_HDRinfo, &m_HDRinfo_prev,
+               sizeof(HDMI_HDR_INFOFRAME_PAYLOAD)) == 0)
+    {
+        cerr << "HDR info has not changed.\n";
+        return true;
+    }
+
+    memcpy(&m_HDRinfo_prev, &m_HDRinfo,
+           sizeof(HDMI_HDR_INFOFRAME_PAYLOAD));
+
+    if (m_verbose > 0)
+        cerr << "HDR changed.\n";
+
+    AVMasteringDisplayMetadata* meta = av_mastering_display_metadata_alloc();
+
+#if 1
+    const int chroma_den = 1;
+    const int luma_den   = 1 /* 50000 */ /* 30000 */;  // ??????
+#else
+    const int chroma_den = 50000;
+    const int luma_den   = 30000;
+#endif
+
+
+    // Primaries
+    meta->has_primaries = 1;
+
+    // CIE 1931 xy chromaticity coords of color primaries (r, g, b order)
+    // RED x
+    meta->display_primaries[0][0].num =
+        static_cast<int32_t>
+        (static_cast<uint16_t>(m_HDRinfo.display_primaries_lsb_x0) |
+         (static_cast<uint16_t>(m_HDRinfo.display_primaries_msb_x0) << 8));
+    meta->display_primaries[0][0].den = chroma_den;
+
+    // RED y
+    meta->display_primaries[0][1].num =
+        static_cast<int32_t>
+        (static_cast<uint16_t>(m_HDRinfo.display_primaries_lsb_y0) |
+         (static_cast<uint16_t>(m_HDRinfo.display_primaries_msb_y0) << 8));
+    meta->display_primaries[0][1].den = chroma_den;
+
+    // GREEN x
+    meta->display_primaries[1][0].num =
+        static_cast<int32_t>
+        (static_cast<uint16_t>(m_HDRinfo.display_primaries_lsb_x1) |
+         (static_cast<uint16_t>(m_HDRinfo.display_primaries_msb_x1) << 8));
+    meta->display_primaries[1][0].den = chroma_den;
+
+    // GREEN y
+    meta->display_primaries[1][1].num =
+        static_cast<int32_t>
+        (static_cast<uint16_t>(m_HDRinfo.display_primaries_lsb_y1) |
+         (static_cast<uint16_t>(m_HDRinfo.display_primaries_msb_y1) << 8));
+    meta->display_primaries[1][1].den = chroma_den;
+
+    // BLUE x
+    meta->display_primaries[2][0].num =
+        static_cast<int32_t>
+        (static_cast<uint16_t>(m_HDRinfo.display_primaries_lsb_x2) |
+         (static_cast<uint16_t>(m_HDRinfo.display_primaries_msb_x2) << 8));
+    meta->display_primaries[2][0].den = chroma_den;
+
+    // BLUE y
+    meta->display_primaries[2][1].num =
+        static_cast<int32_t>
+        (static_cast<uint16_t>(m_HDRinfo.display_primaries_lsb_y2) |
+         (static_cast<uint16_t>(m_HDRinfo.display_primaries_msb_y2) << 8));
+    meta->display_primaries[2][1].den = chroma_den;
+
+    // CIE 1931 xy chromaticity coords of white point.
+    meta->white_point[0].num  =
+        static_cast<int32_t>
+        (static_cast<uint16_t>(m_HDRinfo.white_point_lsb_x) |
+         (static_cast<uint16_t>(m_HDRinfo.white_point_msb_x) << 8));
+    meta->white_point[0].den  = chroma_den;
+
+    meta->white_point[1].num  =
+        static_cast<int32_t>
+        (static_cast<uint16_t>(m_HDRinfo.white_point_lsb_y) |
+         (static_cast<uint16_t>(m_HDRinfo.white_point_msb_y) << 8));
+    meta->white_point[1].den  = chroma_den;
+
+    // Luminance
+    meta->has_luminance = 1;
+
+    // Max luminance of mastering display (cd/m^2).
+    meta->max_luminance.num  =
+        static_cast<int32_t>
+        (static_cast<uint16_t>(m_HDRinfo.max_display_mastering_lsb_luminance) |
+         (static_cast<uint16_t>(m_HDRinfo.max_display_mastering_msb_luminance) << 8));
+    meta->max_luminance.den  = luma_den;
+
+    // Min luminance of mastering display (cd/m^2).
+    meta->min_luminance.num  =
+        static_cast<int32_t>
+        (static_cast<uint16_t>(m_HDRinfo.min_display_mastering_lsb_luminance) |
+         (static_cast<uint16_t>(m_HDRinfo.min_display_mastering_msb_luminance) << 8));
+    meta->min_luminance.den  = luma_den;
+
+    /* Light level */
+    AVContentLightMetadata* light = av_content_light_metadata_alloc(NULL);
+
+    // Max content light level (cd/m^2).
+    light->MaxCLL  =
+        static_cast<int32_t>
+        (static_cast<uint16_t>(m_HDRinfo.maximum_content_light_level_lsb) |
+         (static_cast<uint16_t>(m_HDRinfo.maximum_content_light_level_msb) << 8));
+
+    //Max average light level per frame (cd/m^2).
+    light->MaxFALL  =
+        static_cast<int32_t>
+        (static_cast<uint16_t>(m_HDRinfo.maximum_frame_average_light_level_lsb) |
+         (static_cast<uint16_t>(m_HDRinfo.maximum_frame_average_light_level_msb) << 8));
+
+    m_out2ts->setLight(meta, light);
+
+    return true;
+}
+
+bool Magewell::update_HDRcolorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status)
+{
+    bool result = false;
+
+    if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV601)
+    {
+        if (m_verbose > 0)
+            cerr << "Color format: YUV601\n";
+        if (m_out2ts->getColorSpace() != AVCOL_SPC_BT470BG ||
+            m_out2ts->getColorPrimaries() != AVCOL_PRI_BT470BG ||
+            m_out2ts->getColorTRC() != AVCOL_TRC_SMPTE170M)
+        {
+            m_out2ts->setColorSpace(AVCOL_SPC_BT470BG);
+            m_out2ts->setColorPrimaries(AVCOL_PRI_BT470BG);
+            m_out2ts->setColorTRC(AVCOL_TRC_SMPTE170M);
+            result = true;
+        }
+    }
+    else if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV709)
+    {
+        if (m_verbose > 0)
+            cerr << "Color format: YUV709\n";
+        if (m_out2ts->getColorSpace() != AVCOL_SPC_BT709 ||
+            m_out2ts->getColorPrimaries() != AVCOL_PRI_BT709 ||
+            m_out2ts->getColorTRC() != AVCOL_TRC_BT709)
+        {
+            m_out2ts->setColorSpace(AVCOL_SPC_BT709);
+            m_out2ts->setColorPrimaries(AVCOL_PRI_BT709);
+            m_out2ts->setColorTRC(AVCOL_TRC_BT709);
+            result = true;
+        }
+    }
+    else /* if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV2020)*/
+    {
+        if (m_verbose > 0)
+            cerr << "Color format: YUV2020\n";
+        if (m_out2ts->getColorSpace() != AVCOL_SPC_BT2020_NCL ||
+            m_out2ts->getColorPrimaries() != AVCOL_PRI_BT2020)
+        {
+            m_out2ts->setColorSpace(AVCOL_SPC_BT2020_NCL);
+            m_out2ts->setColorPrimaries(AVCOL_PRI_BT2020);
+            result = true;
+        }
+        switch (static_cast<int>(m_HDRinfo.byEOTF))
+        {
+            case 2: // HDR10
+              if (m_out2ts->getColorTRC() != AVCOL_TRC_SMPTE2084)
+              {
+                  m_out2ts->setColorTRC(AVCOL_TRC_SMPTE2084);
+                  result = true;
+              }
+              break;
+            case 3: // HLG
+              if (m_out2ts->getColorTRC() != AVCOL_TRC_ARIB_STD_B67)
+              {
+                  m_out2ts->setColorTRC(AVCOL_TRC_ARIB_STD_B67);
+                  result = true;
+              }
+              break;
+            default:
+              if (m_out2ts->getColorTRC() != AVCOL_TRC_BT2020_10)
+              {
+                  m_out2ts->setColorTRC(AVCOL_TRC_BT2020_10);
+                  result = true;
+              }
+              break;
+        }
+    }
+
+    return result;
+}
+
 void Magewell::image_buffer_available(uint8_t* pbImage)
 {
     unique_lock<mutex> lock(m_image_buffer_mutex);
@@ -1255,6 +1480,7 @@ bool Magewell::capture_video(void)
 
     int64_t  timestamp;
     bool     interlaced = false;
+    bool     color_changed = false;
     DWORD    dwMinStride = 0;
     DWORD    dwImageSize = 0;
     bool     locked = false;
@@ -1271,22 +1497,12 @@ bool Magewell::capture_video(void)
 #if 0
     DWORD event_mask = MWCAP_NOTIFY_VIDEO_SAMPLING_PHASE_CHANGE |
                        MWCAP_NOTIFY_VIDEO_SMPTE_TIME_CODE |
-                       MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE;
+                       MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE |
+                       MWCAP_NOTIFY_HDMI_INFOFRAME_HDR;
 #endif
 
     if (m_verbose > 0)
         cerr << "Video capture starting.\n";
-
-    if (m_out2ts->encoderType() == OutputTS::QSV ||
-        m_out2ts->encoderType() == OutputTS::VAAPI)
-        eco_params.dwFOURCC = MWFOURCC_NV12;
-    else if (m_out2ts->encoderType() == OutputTS::NV)
-        eco_params.dwFOURCC = MWFOURCC_I420;
-    else
-    {
-        cerr << "ERROR: Failed to determine best magewell pixel format.\n";
-        Stop();
-    }
 
     if (m_isEco)
     {
@@ -1370,11 +1586,41 @@ bool Magewell::capture_video(void)
               continue;
         }
 
+        if (update_HDRinfo())
+        {
+            color_changed = update_HDRcolorspace(videoSignalStatus);
+            if (static_cast<int>(m_HDRinfo.byEOTF) == 3 ||
+                static_cast<int>(m_HDRinfo.byEOTF) == 2)
+            {
+                eco_params.dwFOURCC = MWFOURCC_P010;
+            }
+            m_out2ts->setHDR(true);
+        }
+        else /* if (m_out2ts->isHDR()) */
+        {
+            color_changed = update_HDRcolorspace(videoSignalStatus);
+
+            if (m_out2ts->encoderType() == OutputTS::QSV ||
+                m_out2ts->encoderType() == OutputTS::VAAPI)
+                eco_params.dwFOURCC = MWFOURCC_NV12;
+            else if (m_out2ts->encoderType() == OutputTS::NV)
+                eco_params.dwFOURCC = MWFOURCC_I420;
+            else
+            {
+                cerr << "ERROR: Failed to determine best magewell pixel format.\n";
+                Stop();
+            }
+
+            m_out2ts->setHDR(false);
+        }
+
         if (eco_params.cx != videoSignalStatus.cx ||
             eco_params.cy != videoSignalStatus.cy ||
             eco_params.llFrameDuration != videoSignalStatus.dwFrameDuration ||
-            interlaced != static_cast<bool>(videoSignalStatus.bInterlaced))
+            interlaced != static_cast<bool>(videoSignalStatus.bInterlaced) ||
+            color_changed)
         {
+            color_changed = false;
             free_image_buffers();
 
             if (m_verbose > 0 /* && frame_cnt > 0 */)

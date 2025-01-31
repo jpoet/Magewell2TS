@@ -129,12 +129,25 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
 
     m_audio_ready = !m_has_audio;
     m_image_ready_thread = std::thread(&OutputTS::Write, this);
+
+    m_display_primaries  = av_mastering_display_metadata_alloc();
+    m_content_light  = av_content_light_metadata_alloc(NULL);
 }
 
 void OutputTS::Shutdown(void)
 {
     m_audioIO.Shutdown();
     m_running.store(false);
+}
+
+void OutputTS::setLight(AVMasteringDisplayMetadata * display_meta,
+                        AVContentLightMetadata * light_meta)
+{
+    if (display_meta && light_meta)
+    {
+        *m_display_primaries = *display_meta;
+        *m_content_light = *light_meta;
+    }
 }
 
 /* Add an output stream. */
@@ -235,7 +248,29 @@ bool OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
             For av1_qsv, pix_fmt options are:
                 AV_PIX_FMT_NV12, AV_PIX_FMT_P010, AV_PIX_FMT_QSV
           */
+
+          if (m_isHDR)
+          {
+              if (m_verbose > 0)
+                  cerr << "Open video stream with HDR.\n";
+#if 1
+              // Full color range
+              ost->enc->color_range     = AVCOL_RANGE_JPEG;
+#else
+              // Limited color range
+              ost->enc->color_range     = AVCOL_RANGE_MPEG;
+#endif
+          }
+          else
+              ost->enc->color_range     = AVCOL_RANGE_UNSPECIFIED;
+
+          ost->enc->color_primaries = m_color_primaries;
+          ost->enc->color_trc       = m_color_trc;
+          ost->enc->colorspace      = m_color_space;
+
           ost->size = m_input_width * m_input_height;
+          if (m_isHDR)
+              ost->size *= 2;
           ost->half_size = ost->size / 2;
           ost->quarter_size = ost->size / 4;
 
@@ -605,6 +640,9 @@ OutputTS::~OutputTS(void)
 
     close_stream(&m_audio_stream);
     close_container();
+
+    av_freep(&m_display_primaries);
+    av_freep(&m_content_light);
 }
 
 bool OutputTS::addAudio(uint8_t* buf, size_t len, int64_t timestamp)
@@ -1105,7 +1143,10 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     }
     frames_ctx = reinterpret_cast<AVHWFramesContext* >(hw_frames_ref->data);
     frames_ctx->format    = AV_PIX_FMT_VAAPI;
-    frames_ctx->sw_format = AV_PIX_FMT_NV12;
+    if (m_isHDR)
+        frames_ctx->sw_format = AV_PIX_FMT_P010;
+    else
+        frames_ctx->sw_format = AV_PIX_FMT_NV12;
     frames_ctx->width     = m_input_width;
     frames_ctx->height    = m_input_height;
     frames_ctx->initial_pool_size = 20;
@@ -1230,7 +1271,15 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     }
     frames_ctx = reinterpret_cast<AVHWFramesContext* >(hw_frames_ref->data);
 
-    frames_ctx->sw_format = AV_PIX_FMT_NV12;
+    if (m_isHDR)
+    {
+        if (m_verbose > 1)
+            cerr << "Open QSV stream with HDR.\n";
+        frames_ctx->sw_format = AV_PIX_FMT_P010;
+    }
+    else
+        frames_ctx->sw_format = AV_PIX_FMT_NV12;
+
     frames_ctx->format    = AV_PIX_FMT_QSV;
     frames_ctx->width     = m_input_width;
     frames_ctx->height    = m_input_height;
@@ -1309,6 +1358,20 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
     memcpy(ost->frame->data[2], pImage + ost->size * 5 / 4, ost->quarter_size);
     f_image_buffer_available(pImage);
 
+    /* Technically, this should be mutex protected.
+       They data pointed to by m_display_primaries can change in another thread.
+       That should be exceptionally rare, though.
+    */
+    if (m_isHDR)
+    {
+        AVMasteringDisplayMetadata* primaries =
+            av_mastering_display_metadata_create_side_data(ost->frame);
+        *primaries = *m_display_primaries;
+        AVContentLightMetadata* light =
+            av_content_light_metadata_create_side_data(ost->frame);
+        *light = *m_content_light;
+    }
+
     ost->frame->pts = av_rescale_q_rnd(timestamp, m_input_time_base,
                                        ctx->time_base,
                       static_cast<AVRounding>(AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX));
@@ -1332,6 +1395,20 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
     memcpy(ost->frame->data[0], pImage, ost->size);
     memcpy(ost->frame->data[1], pImage + ost->size, ost->half_size);
     f_image_buffer_available(pImage);
+
+    /* Technically, this should be mutex protected.
+       They data pointed to by m_display_primaries can change in another thread.
+       That should be exceptionally rare, though.
+    */
+    if (m_isHDR)
+    {
+        AVMasteringDisplayMetadata* primaries =
+            av_mastering_display_metadata_create_side_data(ost->frame);
+        *primaries = *m_display_primaries;
+        AVContentLightMetadata* light =
+            av_content_light_metadata_create_side_data(ost->frame);
+        *light = *m_content_light;
+    }
 
     if (!(hw_frame = av_frame_alloc()))
     {

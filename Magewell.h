@@ -48,6 +48,10 @@ class Magewell
   private:
     bool describe_input(HCHANNEL channel);
 
+    bool update_HDRcolorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status);
+    bool update_HDRframe(void);
+    bool update_HDRinfo(void);
+
     void image_buffer_available(uint8_t* pbImage);
     bool add_image_buffer(DWORD dwImageSize);
     void free_image_buffers(void);
@@ -73,6 +77,11 @@ class Magewell
     HCHANNEL             m_channel {nullptr};
     MWCAP_CHANNEL_INFO   m_channel_info  {0};
     int                  m_channel_idx   {0};
+
+    HDMI_INFOFRAME_PACKET m_infoPacket      {0};
+    HDMI_HDR_INFOFRAME_PAYLOAD& m_HDRinfo {m_infoPacket.hdrInfoFramePayload};
+    HDMI_INFOFRAME_PACKET m_infoPacket_prev {0};
+    HDMI_HDR_INFOFRAME_PAYLOAD& m_HDRinfo_prev {m_infoPacket_prev.hdrInfoFramePayload};
 
     imageset_t           m_image_buffers;
     imageque_t           m_avail_image_buffers;
