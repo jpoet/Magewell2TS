@@ -1140,15 +1140,6 @@ bool Magewell::update_HDRinfo(void)
 
     AVMasteringDisplayMetadata* meta = av_mastering_display_metadata_alloc();
 
-#if 1
-    const int chroma_den = 1;
-    const int luma_den   = 1 /* 50000 */ /* 30000 */;  // ??????
-#else
-    const int chroma_den = 50000;
-    const int luma_den   = 30000;
-#endif
-
-
     // Primaries
     meta->has_primaries = 1;
 
@@ -1158,55 +1149,55 @@ bool Magewell::update_HDRinfo(void)
         static_cast<int32_t>
         (static_cast<uint16_t>(m_HDRinfo.display_primaries_lsb_x0) |
          (static_cast<uint16_t>(m_HDRinfo.display_primaries_msb_x0) << 8));
-    meta->display_primaries[0][0].den = chroma_den;
+    meta->display_primaries[0][0].den = 1;
 
     // RED y
     meta->display_primaries[0][1].num =
         static_cast<int32_t>
         (static_cast<uint16_t>(m_HDRinfo.display_primaries_lsb_y0) |
          (static_cast<uint16_t>(m_HDRinfo.display_primaries_msb_y0) << 8));
-    meta->display_primaries[0][1].den = chroma_den;
+    meta->display_primaries[0][1].den = 1;
 
     // GREEN x
     meta->display_primaries[1][0].num =
         static_cast<int32_t>
         (static_cast<uint16_t>(m_HDRinfo.display_primaries_lsb_x1) |
          (static_cast<uint16_t>(m_HDRinfo.display_primaries_msb_x1) << 8));
-    meta->display_primaries[1][0].den = chroma_den;
+    meta->display_primaries[1][0].den = 1;
 
     // GREEN y
     meta->display_primaries[1][1].num =
         static_cast<int32_t>
         (static_cast<uint16_t>(m_HDRinfo.display_primaries_lsb_y1) |
          (static_cast<uint16_t>(m_HDRinfo.display_primaries_msb_y1) << 8));
-    meta->display_primaries[1][1].den = chroma_den;
+    meta->display_primaries[1][1].den = 1;
 
     // BLUE x
     meta->display_primaries[2][0].num =
         static_cast<int32_t>
         (static_cast<uint16_t>(m_HDRinfo.display_primaries_lsb_x2) |
          (static_cast<uint16_t>(m_HDRinfo.display_primaries_msb_x2) << 8));
-    meta->display_primaries[2][0].den = chroma_den;
+    meta->display_primaries[2][0].den = 1;
 
     // BLUE y
     meta->display_primaries[2][1].num =
         static_cast<int32_t>
         (static_cast<uint16_t>(m_HDRinfo.display_primaries_lsb_y2) |
          (static_cast<uint16_t>(m_HDRinfo.display_primaries_msb_y2) << 8));
-    meta->display_primaries[2][1].den = chroma_den;
+    meta->display_primaries[2][1].den = 1;
 
     // CIE 1931 xy chromaticity coords of white point.
     meta->white_point[0].num  =
         static_cast<int32_t>
         (static_cast<uint16_t>(m_HDRinfo.white_point_lsb_x) |
          (static_cast<uint16_t>(m_HDRinfo.white_point_msb_x) << 8));
-    meta->white_point[0].den  = chroma_den;
+    meta->white_point[0].den  = 1;
 
     meta->white_point[1].num  =
         static_cast<int32_t>
         (static_cast<uint16_t>(m_HDRinfo.white_point_lsb_y) |
          (static_cast<uint16_t>(m_HDRinfo.white_point_msb_y) << 8));
-    meta->white_point[1].den  = chroma_den;
+    meta->white_point[1].den  = 1;
 
     // Luminance
     meta->has_luminance = 1;
@@ -1216,14 +1207,15 @@ bool Magewell::update_HDRinfo(void)
         static_cast<int32_t>
         (static_cast<uint16_t>(m_HDRinfo.max_display_mastering_lsb_luminance) |
          (static_cast<uint16_t>(m_HDRinfo.max_display_mastering_msb_luminance) << 8));
-    meta->max_luminance.den  = luma_den;
+    meta->max_luminance.num *= 10000;
+    meta->max_luminance.den  = 1;
 
     // Min luminance of mastering display (cd/m^2).
     meta->min_luminance.num  =
         static_cast<int32_t>
         (static_cast<uint16_t>(m_HDRinfo.min_display_mastering_lsb_luminance) |
          (static_cast<uint16_t>(m_HDRinfo.min_display_mastering_msb_luminance) << 8));
-    meta->min_luminance.den  = luma_den;
+    meta->min_luminance.den  = 1;
 
     /* Light level */
     AVContentLightMetadata* light = av_content_light_metadata_alloc(NULL);
