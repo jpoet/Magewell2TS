@@ -28,7 +28,8 @@ class OutputTS
     OutputTS(int verbose, const std::string & video_codec_name,
              const std::string & preset, int quality, int look_ahead,
              bool no_audio, const std::string & device,
-             StopCallback f_stop,
+             AudioIO::AudioBufCallback grow_audio_buf,
+             StopCallback stop,
              MagCallback image_buffer_avail);
     ~OutputTS(void);
 
@@ -60,7 +61,7 @@ class OutputTS
     void ClearImageQueue(void);
     void Write(void);
     bool AddVideoFrame(uint8_t*  pImage, void* pEco,
-                       uint32_t imageSize, int64_t timestamp);
+                       int imageSize, int64_t timestamp);
 
   private:
     // a wrapper around a single output AVStream
@@ -78,9 +79,6 @@ class OutputTS
 
         AVFrame* frame             {nullptr};
         AVFrame* tmp_frame         {nullptr};
-        size_t   size              {0};
-        size_t   half_size         {0};
-        size_t   quarter_size      {0};
         int64_t  prev_pts          {-1};
         int64_t  prev_audio_pts    {-1};
         int64_t  prev_dts          {-1};
@@ -94,6 +92,7 @@ class OutputTS
         int64_t  timestamp;
         uint8_t* image;
         void*    pEco;
+        int      image_size;
     };
     using imageque_t = std::deque<imagepkt_t>;
     imageque_t m_imagequeue;
@@ -129,9 +128,11 @@ class OutputTS
     bool open_qsv(const AVCodec* codec, OutputStream* ost,
                   AVDictionary* opt_arg);
     bool nv_encode(AVFormatContext* oc, OutputStream* ost,
-                   uint8_t* pImage, void* pEco, int64_t timestamp);
+                   uint8_t* pImage, void* pEco,
+                   int image_size, int64_t timestamp);
     bool qsv_vaapi_encode(AVFormatContext* oc, OutputStream* ost,
-                          uint8_t*  pImage, void* pEco, int64_t timestamp);
+                          uint8_t*  pImage, void* pEco,
+                          int image_size, int64_t timestamp);
 
     EncoderType     m_encoderType  { UNKNOWN };
 
@@ -164,7 +165,6 @@ class OutputTS
     bool             m_interlaced             {false};
 
     // HDR
-    bool                          m_HDRpending        {false};
     bool                          m_isHDR             {false};
     AVColorSpace                  m_color_space       {AVCOL_SPC_NB};
     AVColorTransferCharacteristic m_color_trc         {AVCOL_TRC_NB};
@@ -172,15 +172,15 @@ class OutputTS
     AVMasteringDisplayMetadata*   m_display_primaries {nullptr};
     AVContentLightMetadata*       m_content_light     {nullptr};
 
-    std::mutex              m_container_mutex;
+    std::mutex              m_imagepkt_mutex;
 
     StopCallback            f_stop;
     MagCallback             f_image_buffer_available;
 
     std::thread             m_image_ready_thread;
-    std::mutex              m_imagepkt_mutex;
     std::mutex              m_imagequeue_mutex;
     std::condition_variable m_image_ready;
+    std::condition_variable m_image_queue_empty;
 
     std::atomic<bool>       m_running      {true};
     bool                    m_init_needed  {true};

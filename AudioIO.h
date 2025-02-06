@@ -13,6 +13,7 @@ extern "C" {
 #include <condition_variable>
 #include <thread>
 #include <atomic>
+#include <functional>
 
 class AudioIO;
 
@@ -114,7 +115,9 @@ class AudioIO
     friend AudioBuffer;
 
   public:
-    AudioIO(int verbose = 0);
+    using AudioBufCallback = std::function<void (void)>;
+
+    AudioIO(AudioBufCallback grow_audio_buf, int verbose = 0);
     ~AudioIO(void) { m_running.store(false); }
     void Shutdown(void);
 
@@ -163,8 +166,10 @@ class AudioIO
     bool             m_codec_initialized {false};
 
     int              m_buf_id           {0};
-    int              m_verbose          {1};
     std::atomic<bool> m_running         {true};
+
+    AudioBufCallback  f_grow_audio_buf;
+    int              m_verbose          {1};
 };
 
 #endif

@@ -103,9 +103,9 @@ static void log_packet(string where, const AVFormatContext* fmt_ctx,
 OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
                    const string & preset, int quality, int look_ahead,
                    bool no_audio, const string & device,
-                   StopCallback stop,
+                   AudioIO::AudioBufCallback grow_audio_buf, StopCallback stop,
                    MagCallback image_buffer_avail)
-    : m_audioIO(verbose_level)
+    : m_audioIO(grow_audio_buf, verbose_level)
     , m_verbose(verbose_level)
     , m_has_audio(!no_audio)
     , m_video_codec_name(video_codec_name)
@@ -270,12 +270,6 @@ bool OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
           ost->enc->color_primaries = m_color_primaries;
           ost->enc->color_trc       = m_color_trc;
           ost->enc->colorspace      = m_color_space;
-
-          ost->size = m_input_width * m_input_height;
-          if (m_isHDR)
-              ost->size *= 2;
-          ost->half_size = ost->size / 2;
-          ost->quarter_size = ost->size / 4;
 
           if (m_encoderType == EncoderType::QSV)
               ost->enc->pix_fmt = AV_PIX_FMT_QSV;
@@ -469,7 +463,6 @@ bool OutputTS::open_audio(void)
 bool OutputTS::open_video(void)
 {
     close_stream(&m_video_stream);
-    m_isHDR = m_HDRpending;
 
     AVDictionary* opt = NULL;
     const AVCodec* video_codec =
@@ -607,6 +600,12 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
                               AVRational time_base, double frame_duration,
                               AVRational frame_rate, bool is_hdr)
 {
+    unique_lock<mutex> lock(m_imagequeue_mutex);
+
+    m_image_queue_empty.wait(lock,
+                             [this]{return m_imagequeue.empty() ||
+                                     !m_running.load(); });
+
     m_input_width = width;
     m_input_height = height;
     m_interlaced = interlaced;
@@ -614,15 +613,15 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     m_input_frame_duration = frame_duration;
     m_input_frame_wait_ms = frame_duration / 10000 / 2;
     m_input_frame_rate = frame_rate;
-    m_HDRpending = is_hdr;
+    m_isHDR = is_hdr;
 
     double fps = static_cast<double>(frame_rate.num) / frame_rate.den;
 
     if (m_verbose > 0)
     {
         cerr << "Video: " << width << "x" << height
-             << (m_interlaced ? 'i' : 'p') << fps << "\n";
-
+             << (m_interlaced ? 'i' : 'p') << fps
+             << (m_isHDR ? " HDR" : "") << endl;
         if (m_verbose > 2)
             cerr << "Video Params set\n";
     }
@@ -1343,7 +1342,8 @@ bool OutputTS::open_qsv(const AVCodec* codec,
 bool OutputTS::nv_encode(AVFormatContext* oc,
                          OutputStream* ost,
                          uint8_t* pImage, void* pEco,
-                         int64_t  timestamp)
+                         int image_size,
+                         int64_t timestamp)
 {
     AVCodecContext* ctx = ost->enc;
 
@@ -1358,15 +1358,11 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
 #endif
 
     // YUV 4:2:0
-    memcpy(ost->frame->data[0], pImage, ost->size);
-    memcpy(ost->frame->data[1], pImage + ost->size, ost->quarter_size);
-    memcpy(ost->frame->data[2], pImage + ost->size * 5 / 4, ost->quarter_size);
+    memcpy(ost->frame->data[0], pImage, image_size);
+    memcpy(ost->frame->data[1], pImage + image_size, image_size / 4);
+    memcpy(ost->frame->data[2], pImage + image_size * 5 / 4, image_size / 4);
     f_image_buffer_available(pImage, pEco);
 
-    /* Technically, this should be mutex protected.
-       They data pointed to by m_display_primaries can change in another thread.
-       That should be exceptionally rare, though.
-    */
     if (m_isHDR)
     {
         AVMasteringDisplayMetadata* primaries =
@@ -1389,6 +1385,7 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
 bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
                                 OutputStream* ost,
                                 uint8_t* pImage, void* pEco,
+                                int image_size,
                                 int64_t timestamp)
 {
     AVCodecContext* enc_ctx = ost->enc;
@@ -1398,14 +1395,10 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
     int64_t pts = av_rescale_q(timestamp, m_input_time_base,
                                enc_ctx->time_base);
 
-    memcpy(ost->frame->data[0], pImage, ost->size);
-    memcpy(ost->frame->data[1], pImage + ost->size, ost->half_size);
+    memcpy(ost->frame->data[0], pImage, image_size);
+    memcpy(ost->frame->data[1], pImage + image_size, image_size / 2);
     f_image_buffer_available(pImage, pEco);
 
-    /* Technically, this should be mutex protected.
-       They data pointed to by m_display_primaries can change in another thread.
-       That should be exceptionally rare, though.
-    */
     if (m_isHDR)
     {
         AVMasteringDisplayMetadata* primaries =
@@ -1463,6 +1456,7 @@ void OutputTS::Write(void)
 
     uint8_t* pImage;
     void*    pEco;
+    int      image_size;
     uint64_t timestamp;
 
     while (m_running.load() == true)
@@ -1512,16 +1506,17 @@ void OutputTS::Write(void)
                 pImage    = m_imagequeue.front().image;
                 pEco      = m_imagequeue.front().pEco;
                 timestamp = m_imagequeue.front().timestamp;
+                image_size = m_imagequeue.front().image_size;
                 m_imagequeue.pop_front();
             }
 
             if (m_encoderType == EncoderType::NV)
                 nv_encode(m_output_format_context, &m_video_stream,
-                          pImage, pEco, timestamp);
+                          pImage, pEco, image_size, timestamp);
             else if (m_encoderType == EncoderType::QSV ||
                      m_encoderType == EncoderType::VAAPI)
                 qsv_vaapi_encode(m_output_format_context, &m_video_stream,
-                                 pImage, pEco, timestamp);
+                                 pImage, pEco, image_size, timestamp);
             else
             {
                 cerr << "ERROR: Unknown encoderType.\n";
@@ -1529,6 +1524,7 @@ void OutputTS::Write(void)
                 return;
             }
         }
+        m_image_queue_empty.notify_one();
     }
 }
 
@@ -1542,12 +1538,11 @@ void OutputTS::ClearImageQueue(void)
 }
 
 bool OutputTS::AddVideoFrame(uint8_t* pImage, void* pEco,
-                             uint32_t imageSize,
-                             int64_t timestamp)
+                             int imageSize, int64_t timestamp)
 {
     const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
 
-    m_imagequeue.push_back(imagepkt_t{timestamp, pImage, pEco});
+    m_imagequeue.push_back(imagepkt_t{timestamp, pImage, pEco, imageSize});
 
     m_image_ready.notify_one();
     return m_running.load();

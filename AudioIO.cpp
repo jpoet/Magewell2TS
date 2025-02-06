@@ -211,6 +211,7 @@ int AudioBuffer::Add(uint8_t* Pframe, int len, int64_t timestamp)
                  << "] Overwrote buffer begin, moving read\n";
             PrintPointers("      Add", true);
         }
+        m_parent->f_grow_audio_buf();
         m_read = m_write;
     }
 
@@ -677,8 +678,9 @@ int AudioBuffer::Size(void) const
 /************************************************
  * AudioIO
  ************************************************/
-AudioIO::AudioIO(int verbose)
-    : m_verbose(verbose)
+AudioIO::AudioIO(AudioBufCallback grow_audio_buf, int verbose)
+    : f_grow_audio_buf(grow_audio_buf)
+    , m_verbose(verbose)
 {
 }
 

@@ -747,6 +747,12 @@ int EcoEventWait(mw_event_t event, int timeout/*ms*/)
     return 0;
 }
 
+void Magewell::GrowAudioBuf(void)
+{
+    m_audio_buf_sz += 128;
+    m_reset.store(true);
+}
+
 bool Magewell::capture_audio(void)
 {
     int       idx;
@@ -770,6 +776,7 @@ bool Magewell::capture_audio(void)
     int      buf_idx         = 0;
     int      frame_size      = 0;
     int      capture_buf_size = 0;
+    int      audio_buf_sz    = 0;
 
     int64_t* audio_timestamps = nullptr;
 
@@ -841,6 +848,8 @@ bool Magewell::capture_audio(void)
 
     while (m_running.load() == true)
     {
+        audio_buf_sz = m_audio_buf_sz;
+
         if (MW_SUCCEEDED != MWGetAudioSignalStatus(m_channel,
                                                    &audio_signal_status))
         {
@@ -929,7 +938,7 @@ bool Magewell::capture_audio(void)
             frame_size = MWCAP_AUDIO_SAMPLES_PER_FRAME
                          * cur_channels * bytes_per_sample;
 
-            capture_buf_size = m_audio_buf_sz * frame_size;
+            capture_buf_size = audio_buf_sz * frame_size;
 
             capture_buf = new uint8_t[capture_buf_size];
             if (nullptr == capture_buf)
@@ -938,7 +947,7 @@ bool Magewell::capture_audio(void)
                 break;
             }
 
-            audio_timestamps = new int64_t[m_audio_buf_sz];
+            audio_timestamps = new int64_t[audio_buf_sz];
             if (nullptr == audio_timestamps)
             {
                 cerr << "ERROR: audio timestamp buf alloc failed\n";
@@ -1057,7 +1066,7 @@ bool Magewell::capture_audio(void)
             if (m_out2ts->addAudio(&capture_buf[frame_idx], frame_size,
                                  macf.llTimestamp))
             {
-                if (++buf_idx == m_audio_buf_sz)
+                if (++buf_idx == audio_buf_sz)
                     buf_idx = 0;
                 frame_idx = frame_size * buf_idx;
             }
@@ -1377,7 +1386,6 @@ void Magewell::free_image_buffers(void)
         unique_lock<mutex> lock(m_image_buffer_mutex);
         m_image_buffers_desired = 0;
     }
-    m_out2ts->ClearImageQueue();
 
     unique_lock<mutex> lock(m_image_buffer_mutex);
 
@@ -1539,6 +1547,7 @@ bool Magewell::capture_video(void)
 
     int64_t  timestamp;
     bool     interlaced = false;
+    bool     params_changed = false;
     bool     color_changed = false;
     bool     locked = false;
     DWORD    state = 0;
@@ -1548,6 +1557,7 @@ bool Magewell::capture_video(void)
     int      frame_cnt      = 0;
     int      frame_wrap_idx = 4;
 
+    int      bpp = 0;
     ULONGLONG ullStatusBits = 0;
     MW_RESULT ret;
     size_t    idx;
@@ -1672,30 +1682,71 @@ bool Magewell::capture_video(void)
             m_isHDR = false;
         }
 
-        if (eco_params.cx != videoSignalStatus.cx ||
-            eco_params.cy != videoSignalStatus.cy ||
-            eco_params.llFrameDuration != videoSignalStatus.dwFrameDuration ||
-            interlaced != static_cast<bool>(videoSignalStatus.bInterlaced) ||
-            color_changed)
+        if (eco_params.cx != videoSignalStatus.cx)
+        {
+            if (m_verbose > 0)
+                cerr << "Width changed: " << eco_params.cx
+                     << " -> " << videoSignalStatus.cx << "\n";
+            eco_params.cx = videoSignalStatus.cx;
+            params_changed = true;
+        }
+        if (eco_params.cy != videoSignalStatus.cy)
+        {
+            if (m_verbose > 0)
+                cerr << "Height changed: " << eco_params.cy
+                     << " -> " << videoSignalStatus.cy << "\n";
+            eco_params.cy = videoSignalStatus.cy;
+            params_changed = true;
+        }
+        m_min_stride = FOURCC_CalcMinStride(eco_params.dwFOURCC,
+                                            eco_params.cx, 4);
+        m_image_size = FOURCC_CalcImageSize(eco_params.dwFOURCC,
+                                            eco_params.cx,
+                                            eco_params.cy,
+                                            m_min_stride); /* * 3 / 2; */
+        if (m_num_pixels != m_min_stride * eco_params.cy)
+        {
+            if (m_verbose > 0)
+                cerr << "Num pixes changed: " << m_num_pixels
+                     << " -> " << m_min_stride * eco_params.cy << "\n";
+            m_num_pixels = m_min_stride * eco_params.cy;
+            params_changed = true;
+        }
+        if (eco_params.llFrameDuration != videoSignalStatus.dwFrameDuration)
+        {
+            if (m_verbose > 0)
+                cerr << "Duration changed: " << eco_params.llFrameDuration
+                     << " -> " << videoSignalStatus.dwFrameDuration << "\n";
+            eco_params.llFrameDuration = videoSignalStatus.dwFrameDuration;
+            params_changed = true;
+        }
+        if (interlaced != static_cast<bool>(videoSignalStatus.bInterlaced))
+        {
+            if (m_verbose > 0)
+                cerr << "Interlaced changed: " << (interlaced ? "Y" : "N")
+                     << " -> " << (videoSignalStatus.bInterlaced ? "Y" : "N")
+                     << "\n";
+            interlaced = static_cast<bool>(videoSignalStatus.bInterlaced);
+            params_changed = true;
+        }
+        if (bpp != FOURCC_GetBpp(eco_params.dwFOURCC))
+        {
+            if (m_verbose > 0)
+                cerr << "Bpp changed: " << bpp << " -> "
+                     << FOURCC_GetBpp(eco_params.dwFOURCC) << "\n";
+            bpp = FOURCC_GetBpp(eco_params.dwFOURCC);
+            params_changed = true;
+        }
+
+        if (params_changed || color_changed)
         {
             color_changed = false;
+            params_changed = false;
 
             if (m_verbose > 0 /* && frame_cnt > 0 */)
                 cerr << "WARNING: Video signal CHANGED after "
                      << frame_cnt << " frames.\n";
 
-            eco_params.cx = videoSignalStatus.cx;
-            eco_params.cy = videoSignalStatus.cy;
-            interlaced = static_cast<bool>(videoSignalStatus.bInterlaced);
-
-            m_min_stride = FOURCC_CalcMinStride(eco_params.dwFOURCC,
-                                                eco_params.cx, 4);
-            m_image_size = FOURCC_CalcImageSize(eco_params.dwFOURCC,
-                                                eco_params.cx,
-                                                eco_params.cy,
-                                                m_min_stride) * 3 / 2;
-
-            eco_params.llFrameDuration = videoSignalStatus.dwFrameDuration;
             m_frame_ms = eco_params.llFrameDuration / 10000;
             m_frame_ms2 = m_frame_ms * 2;
 
@@ -1794,6 +1845,15 @@ bool Magewell::capture_video(void)
                     }
                 }
             }
+
+            int audio_buf_sz = eco_params.llFrameDuration >> 8;
+            if (eco_params.cx > 1920)
+                audio_buf_sz = audio_buf_sz * 2;
+            if (m_audio_buf_sz < audio_buf_sz)
+            {
+                m_audio_buf_sz = audio_buf_sz;
+                m_reset.store(true);
+            }
         }
 #if 0
         else
@@ -1867,9 +1927,6 @@ bool Magewell::capture_video(void)
                 break;
             }
 #endif
-            if (!m_isEco && (ullStatusBits & event_mask) == 0)
-                continue;
-
             if (m_isEco)
             {
                 if (m_image_buffer_avail < 2)
@@ -1901,6 +1958,9 @@ bool Magewell::capture_video(void)
             }
             else
             {
+                if ((ullStatusBits & event_mask) == 0)
+                    continue;
+
                 m_image_buffer_mutex.lock();
                 if (m_avail_image_buffers.empty())
                 {
@@ -2009,7 +2069,7 @@ bool Magewell::capture_video(void)
             if (!m_out2ts->AddVideoFrame(pbImage,
                                  reinterpret_cast<MWCAP_VIDEO_ECO_CAPTURE_FRAME *>
                                          (eco_status.pvContext),
-                                         m_image_size, timestamp))
+                                         m_num_pixels, timestamp))
                 Stop();
         }
     }
@@ -2058,6 +2118,7 @@ bool Magewell::Capture(const string & video_codec, const string & preset,
 
     m_out2ts = new OutputTS(m_verbose, video_codec, preset, quality,
                             look_ahead, no_audio, gpu_device,
+                            [=](void) { this->GrowAudioBuf(); },
                             [=](void) { this->Stop(); },
                             [=](uint8_t* ib, void* eb) { this->image_buffer_available(ib, eb); });
 

@@ -39,6 +39,7 @@ class Magewell
     bool ReadEDID(const std::string & filepath);
     bool WriteEDID(const std::string & filepath);
 
+    void GrowAudioBuf(void);
     bool Capture(const std::string & video_codec, const std::string & preset,
                  int quality, int look_ahead, bool no_audio,
                  const std::string & gpu_device);
@@ -74,7 +75,7 @@ class Magewell
     bool capture_audio(void);
 
   private:
-    int m_audio_buf_sz   {2048};  // TODO: Needs to be made adaptive
+    int m_audio_buf_sz   {512};
 
     OutputTS*            m_out2ts  {nullptr};
     HCHANNEL             m_channel {nullptr};
@@ -96,6 +97,7 @@ class Magewell
     std::mutex   m_image_buffer_mutex;
     std::condition_variable m_image_returned;
 
+    int m_num_pixels         {0};
     int m_image_size         {0};
     int m_min_stride         {0};
     int m_frame_ms           {17};
