@@ -749,6 +749,8 @@ int EcoEventWait(mw_event_t event, int timeout/*ms*/)
 
 void Magewell::GrowAudioBuf(void)
 {
+    if (m_verbose > 0)
+        cerr << "WARNING: Growing audio buffer to " << m_audio_buf_sz << endl;
     m_audio_buf_sz += 128;
     m_reset.store(true);
 }
@@ -1117,10 +1119,7 @@ bool Magewell::update_HDRinfo(void)
     }
 
     if (0 == (uiValidFlag & MWCAP_HDMI_INFOFRAME_MASK_HDR))
-    {
-        cerr << "Not a HDR info frame.\n";
         return false;
-    }
 
     if (MW_SUCCEEDED != MWGetHDMIInfoFramePacket(m_channel,
                                                  MWCAP_HDMI_INFOFRAME_ID_HDR,
@@ -1252,7 +1251,7 @@ bool Magewell::update_HDRcolorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status)
 
     if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV601)
     {
-        if (m_verbose > 0)
+        if (m_verbose > 1)
             cerr << "Color format: YUV601\n";
         if (m_out2ts->getColorSpace() != AVCOL_SPC_BT470BG ||
             m_out2ts->getColorPrimaries() != AVCOL_PRI_BT470BG ||
@@ -1266,7 +1265,7 @@ bool Magewell::update_HDRcolorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status)
     }
     else if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV709)
     {
-        if (m_verbose > 0)
+        if (m_verbose > 1)
             cerr << "Color format: YUV709\n";
         if (m_out2ts->getColorSpace() != AVCOL_SPC_BT709 ||
             m_out2ts->getColorPrimaries() != AVCOL_PRI_BT709 ||
@@ -1280,7 +1279,7 @@ bool Magewell::update_HDRcolorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status)
     }
     else /* if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV2020)*/
     {
-        if (m_verbose > 0)
+        if (m_verbose > 1)
             cerr << "Color format: YUV2020\n";
         if (m_out2ts->getColorSpace() != AVCOL_SPC_BT2020_NCL ||
             m_out2ts->getColorPrimaries() != AVCOL_PRI_BT2020)
@@ -1628,7 +1627,7 @@ bool Magewell::capture_video(void)
         switch (videoSignalStatus.state)
         {
             case MWCAP_VIDEO_SIGNAL_LOCKED:
-              if (!locked && m_verbose > 0)
+              if (!locked && m_verbose > 1)
                   cerr << "INFO: Input video signal status: Locked\n";
               locked = true;
               break;
@@ -1684,7 +1683,7 @@ bool Magewell::capture_video(void)
 
         if (eco_params.cx != videoSignalStatus.cx)
         {
-            if (m_verbose > 0)
+            if (m_verbose > 1)
                 cerr << "Width changed: " << eco_params.cx
                      << " -> " << videoSignalStatus.cx << "\n";
             eco_params.cx = videoSignalStatus.cx;
@@ -1692,7 +1691,7 @@ bool Magewell::capture_video(void)
         }
         if (eco_params.cy != videoSignalStatus.cy)
         {
-            if (m_verbose > 0)
+            if (m_verbose > 1)
                 cerr << "Height changed: " << eco_params.cy
                      << " -> " << videoSignalStatus.cy << "\n";
             eco_params.cy = videoSignalStatus.cy;
@@ -1706,7 +1705,7 @@ bool Magewell::capture_video(void)
                                             m_min_stride); /* * 3 / 2; */
         if (m_num_pixels != m_min_stride * eco_params.cy)
         {
-            if (m_verbose > 0)
+            if (m_verbose > 1)
                 cerr << "Num pixes changed: " << m_num_pixels
                      << " -> " << m_min_stride * eco_params.cy << "\n";
             m_num_pixels = m_min_stride * eco_params.cy;
@@ -1714,7 +1713,7 @@ bool Magewell::capture_video(void)
         }
         if (eco_params.llFrameDuration != videoSignalStatus.dwFrameDuration)
         {
-            if (m_verbose > 0)
+            if (m_verbose > 1)
                 cerr << "Duration changed: " << eco_params.llFrameDuration
                      << " -> " << videoSignalStatus.dwFrameDuration << "\n";
             eco_params.llFrameDuration = videoSignalStatus.dwFrameDuration;
@@ -1722,7 +1721,7 @@ bool Magewell::capture_video(void)
         }
         if (interlaced != static_cast<bool>(videoSignalStatus.bInterlaced))
         {
-            if (m_verbose > 0)
+            if (m_verbose > 1)
                 cerr << "Interlaced changed: " << (interlaced ? "Y" : "N")
                      << " -> " << (videoSignalStatus.bInterlaced ? "Y" : "N")
                      << "\n";
@@ -1731,7 +1730,7 @@ bool Magewell::capture_video(void)
         }
         if (bpp != FOURCC_GetBpp(eco_params.dwFOURCC))
         {
-            if (m_verbose > 0)
+            if (m_verbose > 1)
                 cerr << "Bpp changed: " << bpp << " -> "
                      << FOURCC_GetBpp(eco_params.dwFOURCC) << "\n";
             bpp = FOURCC_GetBpp(eco_params.dwFOURCC);
@@ -1743,7 +1742,7 @@ bool Magewell::capture_video(void)
             color_changed = false;
             params_changed = false;
 
-            if (m_verbose > 0 /* && frame_cnt > 0 */)
+            if (m_verbose > 1 /* && frame_cnt > 0 */)
                 cerr << "WARNING: Video signal CHANGED after "
                      << frame_cnt << " frames.\n";
 

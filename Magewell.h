@@ -75,7 +75,7 @@ class Magewell
     bool capture_audio(void);
 
   private:
-    int m_audio_buf_sz   {512};
+    int m_audio_buf_sz   {1024};
 
     OutputTS*            m_out2ts  {nullptr};
     HCHANNEL             m_channel {nullptr};

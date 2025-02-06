@@ -590,7 +590,7 @@ bool OutputTS::setAudioParams(uint8_t* capture_buf, size_t capture_buf_size,
                              timestamps))
         return false;
 
-    if (m_verbose > 0)
+    if (m_verbose > 1)
         cerr << "setAudioParams " << (is_lpcm ? "LPCM" : "Bitstream") << endl;
 
     return true;
