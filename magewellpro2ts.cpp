@@ -1740,7 +1740,7 @@ void show_help(string_view app)
          << "--device (-d)      : vaapi/qsv device (e.g. renderD129) [renderD128]\n"
          << "--get-volume (-g)  : Display volume settings for each channel of input\n"
          << "--input (-i)       : input idx, *required*. Starts at 1\n"
-         << "--list-inputs (l)  : List capture card inputs\n"
+         << "--list (-l)        : List capture card inputs\n"
          << "--mux (-m)         : capture audio and video and mux into TS [false]\n"
          << "--no-audio (-n)    : Only capture video. [false]\n"
          << "--read-edid (-r)   : Read EDID info for input to file\n"
@@ -1830,7 +1830,7 @@ int main(int argc, char* argv[])
             show_help(app_name);
             return 0;
         }
-        else if (*iter == "-l" || *iter == "--list-inputs")
+        else if (*iter == "-l" || *iter == "--list")
         {
             list_inputs = true;
         }
