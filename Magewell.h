@@ -19,6 +19,7 @@ class Magewell
 #if 0
     static const int k_max_eco_buffer_count = 10;
 #endif
+    static const int k_min_video_buffers = 6;
 
     using imageset_t = std::set<uint8_t*>;
     using imageque_t = std::deque<uint8_t*>;
@@ -56,7 +57,8 @@ class Magewell
     bool update_HDRframe(void);
     bool update_HDRinfo(void);
 
-    void image_buffer_available(uint8_t* pbImage, void* pEco);
+    void pro_image_buffer_available(uint8_t* pbImage, void* pEco);
+    void eco_image_buffer_available(uint8_t* pbImage, void* pEco);
     bool add_pro_image_buffer(void);
     bool add_eco_image_buffer(void);
     void free_image_buffers(void);

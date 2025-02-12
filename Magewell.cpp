@@ -1317,62 +1317,66 @@ bool Magewell::update_HDRcolorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status)
     return result;
 }
 
-void Magewell::image_buffer_available(uint8_t* pbImage, void* buf)
+void Magewell::pro_image_buffer_available(uint8_t* pbImage, void* buf)
 {
     unique_lock<mutex> lock(m_image_buffer_mutex);
 
     --m_image_buffers_inflight;
 
-    if (m_isEco)
+    if (m_avail_image_buffers.size() > m_image_buffers_desired)
     {
-        MWCAP_VIDEO_ECO_CAPTURE_FRAME* pEco =
-            reinterpret_cast<MWCAP_VIDEO_ECO_CAPTURE_FRAME *>(buf);
+        if (m_verbose > 3)
+            cerr << "Releasing excess video buffer.\n";
+        MWUnpinVideoBuffer(m_channel, (LPBYTE)(pbImage));
+        delete[] pbImage;
+        if (--m_image_buffer_total <
+            (m_image_buffers_desired + 2) && m_verbose > 2)
+            cerr << "INFO: Video encoder is "
+                 << m_image_buffer_total << " frames behind.\n";
 
-        if (m_image_buffer_avail > m_image_buffers_desired)
-        {
-            if (--m_image_buffer_total <
-                (m_image_buffers_desired + 2) && m_verbose > 2)
-                cerr << "INFO: Video encoder is "
-                     << m_image_buffer_total << " frames behind.\n";
+        m_image_buffers.erase(pbImage);
+    }
+    else
+        m_avail_image_buffers.push_back(pbImage);
 
-            m_eco_buffers.erase(pEco);
-            delete[] reinterpret_cast<uint8_t *>(pEco->pvFrame);
-            delete pEco;
-        }
-        else
-        {
-            if (MW_SUCCEEDED != MWCaptureSetVideoEcoFrame(m_channel, pEco))
-            {
-                cerr << "ERROR: buffer_avail: Failed to Q the Eco frame. "
-                     << " desired " << m_image_buffers_desired
-                     << " avail " << m_image_buffer_avail << endl;
-                delete[] reinterpret_cast<uint8_t *>(pEco->pvFrame);
-                pEco->pvFrame = 0;
-                delete pEco;
-                pEco = nullptr;
-            }
-            else
-                ++m_image_buffer_avail;
-        }
+    if (m_image_buffers_desired == 0 && m_image_buffers_inflight == 0)
+        m_image_returned.notify_one();
+}
+
+void Magewell::eco_image_buffer_available(uint8_t* pbImage, void* buf)
+{
+    unique_lock<mutex> lock(m_image_buffer_mutex);
+
+    --m_image_buffers_inflight;
+
+    MWCAP_VIDEO_ECO_CAPTURE_FRAME* pEco =
+        reinterpret_cast<MWCAP_VIDEO_ECO_CAPTURE_FRAME *>(buf);
+
+    if (m_image_buffer_avail > m_image_buffers_desired)
+    {
+        if (--m_image_buffer_total <
+            (m_image_buffers_desired + 2) && m_verbose > 2)
+            cerr << "INFO: Video encoder is "
+                 << m_image_buffer_total << " frames behind.\n";
+
+        m_eco_buffers.erase(pEco);
+        delete[] reinterpret_cast<uint8_t *>(pEco->pvFrame);
+        delete pEco;
     }
     else
     {
-        if (m_avail_image_buffers.size() > m_image_buffers_desired)
+        if (MW_SUCCEEDED != MWCaptureSetVideoEcoFrame(m_channel, pEco))
         {
-            if (m_verbose > 3)
-                cerr << "Releasing excess video buffer.\n";
-            MWUnpinVideoBuffer(m_channel, (LPBYTE)(pbImage));
-            delete[] pbImage;
-            pbImage = nullptr;
-            if (--m_image_buffer_total <
-                (m_image_buffers_desired + 2) && m_verbose > 2)
-                cerr << "INFO: Video encoder is "
-                     << m_image_buffer_total << " frames behind.\n";
-
-            m_image_buffers.erase(pbImage);
+            cerr << "ERROR: buffer_avail: Failed to Q the Eco frame. "
+                 << " desired " << m_image_buffers_desired
+                 << " avail " << m_image_buffer_avail << endl;
+            delete[] reinterpret_cast<uint8_t *>(pEco->pvFrame);
+            pEco->pvFrame = 0;
+            delete pEco;
+            pEco = nullptr;
         }
         else
-            m_avail_image_buffers.push_back(pbImage);
+            ++m_image_buffer_avail;
     }
 
     if (m_image_buffers_desired == 0 && m_image_buffers_inflight == 0)
@@ -1418,7 +1422,7 @@ void Magewell::free_image_buffers(void)
 
     m_image_buffer_avail = 0;
     m_image_buffer_total = 0;
-    m_image_buffers_desired = 6;
+    m_image_buffers_desired = k_min_video_buffers;
 }
 
 bool Magewell::add_eco_image_buffer(void)
@@ -1820,7 +1824,7 @@ bool Magewell::capture_video(void)
                     Stop();
                 else
                 {
-                    m_image_buffers_desired = 6;
+                    m_image_buffers_desired = k_min_video_buffers;
                     for (idx = 0; idx < m_image_buffers_desired; ++idx)
                     {
                         if (!add_eco_image_buffer())
@@ -1834,7 +1838,7 @@ bool Magewell::capture_video(void)
             else
             {
                 free_image_buffers();
-                m_image_buffers_desired = 6;
+                m_image_buffers_desired = k_min_video_buffers;
                 for (idx = 0; idx < m_image_buffers_desired; ++idx)
                 {
                     if (!add_pro_image_buffer())
@@ -1982,7 +1986,7 @@ bool Magewell::capture_video(void)
                     if (m_verbose > 0)
                         cerr << "WARNING: Failed to get video buffer info (frame "
                              << frame_cnt << ")\n";
-                    image_buffer_available(pbImage, nullptr);
+                    pro_image_buffer_available(pbImage, nullptr);
                     continue;
                 }
 
@@ -1998,7 +2002,7 @@ bool Magewell::capture_video(void)
                             cerr << "WARNING: Already processed MW video buffer "
                                  << frame_idx << " -- Skipping (frame "
                                  << frame_cnt << ")\n";
-                        image_buffer_available(pbImage, nullptr);
+                        pro_image_buffer_available(pbImage, nullptr);
                         continue;
                     }
                     if (++frame_idx == frame_wrap_idx)
@@ -2021,7 +2025,7 @@ bool Magewell::capture_video(void)
                     if (m_verbose > 0)
                         cerr << "WARNING: Failed to get video frame info (frame "
                              << frame_cnt << ")\n";
-                    image_buffer_available(pbImage, nullptr);
+                    pro_image_buffer_available(pbImage, nullptr);
                     continue;
                 }
 
@@ -2042,7 +2046,7 @@ bool Magewell::capture_video(void)
                     if (m_verbose > 0)
                         cerr << "WARNING: wait capture event error or timeout "
                              << "(frame " << frame_cnt << ")\n";
-                    image_buffer_available(pbImage, nullptr);
+                    pro_image_buffer_available(pbImage, nullptr);
                     continue;
                 }
 
@@ -2059,9 +2063,18 @@ bool Magewell::capture_video(void)
             if (ret != MW_SUCCEEDED)
             {
                 cerr << "Failed\n";
-                image_buffer_available(pbImage,
-                                   reinterpret_cast<MWCAP_VIDEO_ECO_CAPTURE_FRAME *>
-                                       (eco_status.pvContext));
+                if (m_isEco)
+                {
+                    eco_image_buffer_available(pbImage,
+                           reinterpret_cast<MWCAP_VIDEO_ECO_CAPTURE_FRAME *>
+                                           (eco_status.pvContext));
+                }
+                else
+                {
+                    pro_image_buffer_available(pbImage,
+                           reinterpret_cast<MWCAP_VIDEO_ECO_CAPTURE_FRAME *>
+                                           (eco_status.pvContext));
+                }
                 continue;
             }
 
@@ -2115,11 +2128,24 @@ bool Magewell::Capture(const string & video_codec, const string & preset,
     if (m_verbose > 1)
         describe_input(m_channel);
 
-    m_out2ts = new OutputTS(m_verbose, video_codec, preset, quality,
-                            look_ahead, no_audio, gpu_device,
-                            [=](void) { this->GrowAudioBuf(); },
-                            [=](void) { this->Stop(); },
-                            [=](uint8_t* ib, void* eb) { this->image_buffer_available(ib, eb); });
+    if (m_isEco)
+    {
+        m_out2ts = new OutputTS(m_verbose, video_codec, preset, quality,
+                                look_ahead, no_audio, gpu_device,
+                                [=](void) { this->GrowAudioBuf(); },
+                                [=](void) { this->Stop(); },
+                                [=](uint8_t* ib, void* eb)
+                                { this->eco_image_buffer_available(ib, eb); });
+    }
+    else
+    {
+        m_out2ts = new OutputTS(m_verbose, video_codec, preset, quality,
+                                look_ahead, no_audio, gpu_device,
+                                [=](void) { this->GrowAudioBuf(); },
+                                [=](void) { this->Stop(); },
+                                [=](uint8_t* ib, void* eb)
+                                { this->pro_image_buffer_available(ib, eb); });
+    }
 
     if (!m_out2ts)
     {
