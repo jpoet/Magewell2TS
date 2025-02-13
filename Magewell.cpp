@@ -751,7 +751,7 @@ void Magewell::GrowAudioBuf(void)
 {
     if (m_verbose > 0)
         cerr << "WARNING: Growing audio buffer to " << m_audio_buf_sz << endl;
-    m_audio_buf_sz += 128;
+    m_audio_buf_sz += 512;
     m_reset.store(true);
 }
 
@@ -779,6 +779,7 @@ bool Magewell::capture_audio(void)
     int      frame_size      = 0;
     int      capture_buf_size = 0;
     int      audio_buf_sz    = 0;
+    bool     params_changed  = false;
 
     int64_t* audio_timestamps = nullptr;
 
@@ -876,12 +877,49 @@ bool Magewell::capture_audio(void)
         if (even_bytes_per_sample > 2)
             even_bytes_per_sample = 4;
 
-        if (m_reset.load() == true ||
-            lpcm != audio_signal_status.bLPCM ||
-            sample_rate != audio_signal_status.dwSampleRate ||
-            bytes_per_sample != even_bytes_per_sample ||
-            valid_channels != audio_signal_status.wChannelValid)
+        if (m_reset.load() == true)
         {
+            if (m_verbose > 0)
+                cerr << "Audio reset." << endl;
+            params_changed = true;
+        }
+        if (lpcm != audio_signal_status.bLPCM)
+        {
+            if (m_verbose > 0)
+            {
+                if (lpcm)
+                    cerr << "lpcm -> bitstream" << endl;
+                else
+                    cerr << "bitstream -> lpcm" << endl;
+            }
+            params_changed = true;
+        }
+        if (sample_rate != audio_signal_status.dwSampleRate)
+        {
+            if (m_verbose > 0)
+                cerr << "Audio sample rate " << sample_rate
+                     << " -> " << audio_signal_status.dwSampleRate << endl;
+            params_changed = true;
+        }
+        if (bytes_per_sample != even_bytes_per_sample)
+        {
+            if (m_verbose > 0)
+                cerr << "Audio bytes per sample " << bytes_per_sample
+                     << " -> " << even_bytes_per_sample << endl;
+            params_changed = true;
+        }
+        if (valid_channels != audio_signal_status.wChannelValid)
+        {
+            if (m_verbose > 0)
+                cerr << "Audio channels " << valid_channels
+                     << " -> " << audio_signal_status.wChannelValid << endl;
+            params_changed = true;
+        }
+
+        if (params_changed)
+        {
+            params_changed = false;
+
             if (m_verbose > 0 && frame_cnt > 0)
             {
                 cerr << "WARNING: Audio signal CHANGED after "
@@ -1036,6 +1074,7 @@ bool Magewell::capture_audio(void)
               to 2channel 16bit
               L1R1L5R5(2byte)
             */
+#if 1
             for (int j = 0; j < (cur_channels/2); ++j)
             {
                 for (int i = 0 ; i < MWCAP_AUDIO_SAMPLES_PER_FRAME; ++i)
@@ -1049,7 +1088,7 @@ bool Magewell::capture_audio(void)
                                  >> (32 - audio_signal_status.cBitsPerSample);
                     DWORD right = macf.adwSamples[read_pos2]
                                   >> (32 - audio_signal_status.cBitsPerSample);
-#if 0
+#if 1
                     if (capture_buf_size < frame_idx + write_pos + bytes_per_sample * 2)
                         cerr << "\n==========+++++++++>> BAD NEWS: overwrote end of audio capture_buf.\n"
                              << endl;
@@ -1059,6 +1098,22 @@ bool Magewell::capture_audio(void)
                            &right, bytes_per_sample);
                 }
             }
+#else
+            DWORD* capture_buf = macf.adwSamples;
+            uint8_t* audio_frame = &capture_buf[frame_idx];// + g_afcw_byte % g_audio_cache_size;
+            for (idx = 0 ; idx < MWCAP_AUDIO_SAMPLES_PER_FRAME; ++idx)
+            {
+                WORD temp = capture_buf[0] >> (32 - CAPTURE_BIT_PER_SAMPLE);
+                memcpy(audio_frame, &temp, bytes_per_sample);
+                audio_frame += bytes_per_sample;
+
+                temp = capture_buf[MWCAP_AUDIO_MAX_NUM_CHANNELS / 2] >> (32 - CAPTURE_BIT_PER_SAMPLE);
+                memcpy(audio_frame, &temp, bytes_per_sample);
+                audio_frame += bytes_per_sample;
+                capture_buf += MWCAP_AUDIO_MAX_NUM_CHANNELS;
+            }
+#endif
+
 
 #if 0
             cerr << " FRAME_IDX " << frame_idx
@@ -1735,7 +1790,7 @@ bool Magewell::capture_video(void)
         if (bpp != FOURCC_GetBpp(eco_params.dwFOURCC))
         {
             if (m_verbose > 1)
-                cerr << "Bpp changed: " << bpp << " -> "
+                cerr << "Video Bpp changed: " << bpp << " -> "
                      << FOURCC_GetBpp(eco_params.dwFOURCC) << "\n";
             bpp = FOURCC_GetBpp(eco_params.dwFOURCC);
             params_changed = true;
