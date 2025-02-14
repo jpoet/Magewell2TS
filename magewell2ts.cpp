@@ -47,10 +47,12 @@
 
 #include <vector>
 
-using namespace std;
-
 #include "Magewell.h"
+#include "lock_ios.h"
 #include "version.h"
+
+using namespace std;
+using namespace s6_lock_ios;
 
 Magewell g_mw;
 
@@ -156,6 +158,8 @@ int main(int argc, char* argv[])
     int         quality     = 25;
     int         look_ahead  = -1;
     bool        no_audio    = false;
+
+    std::cerr << mutex_init_own;
 
     vector<string_view> args(argv + 1, argv + argc);
 

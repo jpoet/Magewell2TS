@@ -2,8 +2,6 @@
 #include <iomanip>
 #include <cstring>
 
-using namespace std;
-
 #include <MWFOURCC.h>
 #include <LibMWCapture/MWCapture.h>
 #include "LibMWCapture/MWEcoCapture.h"
@@ -12,6 +10,10 @@ using namespace std;
 #include <unistd.h>
 
 #include "Magewell.h"
+#include "lock_ios.h"
+
+using namespace std;
+using namespace s6_lock_ios;
 
 static string GetVideoSignal(int state)
 {
@@ -258,7 +260,7 @@ Magewell::Magewell(void)
 {
     if (!MWCaptureInitInstance())
     {
-        cerr << "ERROR: Failed to inialize MWCapture.\n";
+        cerr << lock_ios() << "ERROR: Failed to inialize MWCapture.\n";
         m_fatal = true;
     }
 }
@@ -277,6 +279,10 @@ bool Magewell::describe_input(HCHANNEL hChannel)
     MWCAP_VIDEO_SIGNAL_STATUS vStatus;
     MWCAP_INPUT_SPECIFIC_STATUS status;
     xr = MWGetInputSpecificStatus(hChannel, &status);
+
+    // Mutex lock cerr until the routine terminates
+    ios_lock lock;
+    cerr << lock_ios(lock);
 
     if (xr != MW_SUCCEEDED ||
         MWGetVideoSignalStatus(hChannel, &vStatus) != MW_SUCCEEDED)
@@ -302,8 +308,7 @@ bool Magewell::describe_input(HCHANNEL hChannel)
              << ", Mode: "
              << static_cast<int>(status.hdmiStatus.bHDMIMode)
              << ", Bit Depth: "
-             << static_cast<int>(status.hdmiStatus.byBitDepth)
-             << "\n";
+             << static_cast<int>(status.hdmiStatus.byBitDepth);
     }
     else if (status.dwVideoInputType == MWCAP_VIDEO_INPUT_TYPE_SDI)
     {
@@ -313,8 +318,7 @@ bool Magewell::describe_input(HCHANNEL hChannel)
              << ", Bit depth: "
              << GetVideoBitDepth(status.sdiStatus.sdiBitDepth)
              << ", Sampling: "
-             << GetVideoSamplingStruct(status.sdiStatus.sdiSamplingStruct)
-             << "\n";
+             << GetVideoSamplingStruct(status.sdiStatus.sdiSamplingStruct);
     }
     else if (status.dwVideoInputType == MWCAP_VIDEO_INPUT_TYPE_VGA)
     {
@@ -335,15 +339,14 @@ bool Magewell::describe_input(HCHANNEL hChannel)
              << status.vgaComponentStatus.syncInfo.bVSPolarity
              << ", Interlaced: "
              << status.vgaComponentStatus.syncInfo.bInterlaced
-             << ", FrameDuration: " << dFrameDuration
-             << "\n";
+             << ", FrameDuration: " << dFrameDuration;
     }
     else if (status.dwVideoInputType == MWCAP_VIDEO_INPUT_TYPE_CVBS) {
         cerr << ", Standard: "
              << GetVideoSDStandard(status.cvbsYcStatus.standard)
-             << ", b50Hz: " << status.cvbsYcStatus.b50Hz
-             << "\n";
+             << ", b50Hz: " << status.cvbsYcStatus.b50Hz;
     }
+    cerr << " " << GetVideoColorName(vStatus.colorFormat) << "\n";
 
     double dFrameDuration = (vStatus.bInterlaced == TRUE)
                             ? (double)20000000
@@ -362,10 +365,7 @@ bool Magewell::describe_input(HCHANNEL hChannel)
          << "total (" << vStatus.cxTotal << "x"
          << vStatus.cyTotal << ") "
          << "aspect " << vStatus.nAspectX << ":"
-         << vStatus.nAspectY
-         << " " << GetVideoColorName(vStatus.colorFormat)
-         << "\n";
-
+         << vStatus.nAspectY << ",\n";
 
     // Audio Signal Status
     MWCAP_AUDIO_SIGNAL_STATUS aStatus;
@@ -386,8 +386,9 @@ bool Magewell::describe_input(HCHANNEL hChannel)
             if (aStatus.wChannelValid & (0x01 << i))
                 cerr << " " << (i * 2 + 1) << "&" << (i * 2 + 2);
         }
-        cerr << ", LPCM: " << (aStatus.bLPCM ? "Yes" : "No")
-             << ", BPSample: " << static_cast<int>(aStatus.cBitsPerSample)
+        cerr << ", " << (aStatus.bLPCM ? "lPCM" : "Bitstream")
+             << ", "
+             << "BPSample: " << static_cast<int>(aStatus.cBitsPerSample)
              << ", Sample Rate: "
              << aStatus.dwSampleRate
              << "\n";
@@ -406,7 +407,7 @@ void Magewell::ListInputs(void)
     int num_channels = MWGetChannelCount();
     int idx;
 
-    cerr << num_channels << " channels.\n";
+    cerr << lock_ios() << num_channels << " channels.\n";
     for (idx = 0; idx < num_channels; ++idx)
     {
         char path[128] = { 0 };
@@ -481,6 +482,10 @@ bool Magewell::OpenChannel(int devIndex, double boardId)
 {
     int channel_cnt =  MWGetChannelCount();
 
+    // Mutex lock cerr until the routine terminates
+    ios_lock lock;
+    cerr << lock_ios(lock);
+
     if (channel_cnt == 0)
     {
         cerr << "ERROR: Failed to detect any input channels.";
@@ -553,6 +558,9 @@ void Magewell::DisplayVolume(void)
     _MWCAP_AUDIO_NODE node = MWCAP_AUDIO_EMBEDDED_CAPTURE;
     MWGetAudioVolume(m_channel, node, &volume);
 
+    ios_lock lock;
+    cerr << lock_ios(lock);
+
     cerr << "VolumeMin: " << volume.sVolumeMin << "\n"
          << "VolumeMax: " << volume.sVolumeMax << "\n"
          << "VolumeStep: " << volume.sVolumeStep << "\n";
@@ -581,7 +589,8 @@ bool Magewell::SetVolume(int volume_level)
     MWSetAudioVolume(m_channel, node, &volume);
 
     if (m_verbose > 0)
-        cerr << "Volume set to " << volume_level << " for all channels.\n";
+        cerr << lock_ios()
+             << "Volume set to " << volume_level << " for all channels.\n";
 
     return true;
 }
@@ -590,6 +599,9 @@ bool Magewell::ReadEDID(const string & filepath)
 {
     DWORD dwVideoSource = 0;
     DWORD dwAudioSource = 0;
+
+    ios_lock lock;
+    cerr << lock_ios(lock);
 
     if (MW_SUCCEEDED != MWGetVideoInputSource(m_channel, &dwVideoSource))
     {
@@ -653,6 +665,9 @@ bool Magewell::WriteEDID(const string & filepath)
 {
     DWORD dwVideoSource = 0;
     DWORD dwAudioSource = 0;
+
+    ios_lock lock;
+    cerr << lock_ios(lock);
 
     if (MW_SUCCEEDED != MWGetVideoInputSource(m_channel, &dwVideoSource))
     {
@@ -789,13 +804,13 @@ bool Magewell::capture_audio(void)
     MWGetAudioInputSourceArray(m_channel, nullptr, &input_count);
     if (input_count == 0)
     {
-        cerr << "ERROR: can't find audio input\n";
+        cerr << lock_ios() << "ERROR: can't find audio input\n";
         goto audio_capture_stoped;
     }
 
     if (MW_SUCCEEDED != MWStartAudioCapture(m_channel))
     {
-        cerr << "ERROR: start audio capture fail!\n";
+        cerr << lock_ios() << "ERROR: start audio capture fail!\n";
         goto audio_capture_stoped;
     }
 
@@ -807,7 +822,7 @@ bool Magewell::capture_audio(void)
             eco_event = eventfd(0, EFD_NONBLOCK);
             if (notify_event < 0)
             {
-                cerr << "ERROR: Failed to create eco event.\n";
+                cerr << lock_ios() << "ERROR: Failed to create eco event.\n";
                 Stop();
                 return false;
             }
@@ -823,7 +838,7 @@ bool Magewell::capture_audio(void)
             notify_event = MWCreateEvent();
             if (notify_event == 0)
             {
-                cerr << "ERROR: create notify_event fail\n";
+                cerr << lock_ios() << "ERROR: create notify_event fail\n";
                 Stop();
                 return false;
             }
@@ -836,7 +851,8 @@ bool Magewell::capture_audio(void)
         if (notify_audio > 0)
             break;
 
-        cerr << "WARNING: Register Notify audio failed, will try again.\n";
+        cerr << lock_ios()
+             << "WARNING: Register Notify audio failed, will try again.\n";
         this_thread::sleep_for(chrono::milliseconds(1));
     }
 
@@ -847,7 +863,8 @@ bool Magewell::capture_audio(void)
     }
 
     if (m_verbose > 1)
-        cerr << "Audio capture starting\n";
+        cerr << lock_ios()
+             << "Audio capture starting\n";
 
     while (m_running.load() == true)
     {
@@ -857,7 +874,7 @@ bool Magewell::capture_audio(void)
                                                    &audio_signal_status))
         {
             if (err_cnt++ % 50 == 0 && m_verbose > 0)
-                cerr << "WARNING (cnt: " << err_cnt
+                cerr << lock_ios() << "WARNING (cnt: " << err_cnt
                      << ") can't get audio signal status\n";
             this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
             continue;
@@ -866,7 +883,7 @@ bool Magewell::capture_audio(void)
         if (!audio_signal_status.wChannelValid)
         {
             if (++err_cnt % 50 == 0 && m_verbose > 0)
-                cerr << "WARNING (cnt: " << err_cnt
+                cerr << lock_ios() << "WARNING (cnt: " << err_cnt
                      << ") can't get audio, signal is invalid\n";
 
             this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
@@ -877,77 +894,63 @@ bool Magewell::capture_audio(void)
         if (even_bytes_per_sample > 2)
             even_bytes_per_sample = 4;
 
-        if (m_reset.load() == true)
         {
-            if (m_verbose > 0)
-                cerr << "Audio reset." << endl;
-            params_changed = true;
-        }
-        if (lpcm != audio_signal_status.bLPCM)
-        {
-            if (m_verbose > 0)
+            // Mutex lock cerr
+            ios_lock lock;
+            cerr << lock_ios(lock);
+
+            if (m_reset.load() == true)
             {
-                if (lpcm)
-                    cerr << "lpcm -> bitstream" << endl;
-                else
-                    cerr << "bitstream -> lpcm" << endl;
+                if (m_verbose > 0)
+                    cerr << "Audio reset." << endl;
+                params_changed = true;
             }
-            params_changed = true;
-        }
-        if (sample_rate != audio_signal_status.dwSampleRate)
-        {
-            if (m_verbose > 0)
-                cerr << "Audio sample rate " << sample_rate
-                     << " -> " << audio_signal_status.dwSampleRate << endl;
-            params_changed = true;
-        }
-        if (bytes_per_sample != even_bytes_per_sample)
-        {
-            if (m_verbose > 0)
-                cerr << "Audio bytes per sample " << bytes_per_sample
-                     << " -> " << even_bytes_per_sample << endl;
-            params_changed = true;
-        }
-        if (valid_channels != audio_signal_status.wChannelValid)
-        {
-            if (m_verbose > 0)
-                cerr << "Audio channels " << valid_channels
-                     << " -> " << audio_signal_status.wChannelValid << endl;
-            params_changed = true;
+            if (lpcm != audio_signal_status.bLPCM)
+            {
+                if (m_verbose > 0)
+                {
+                    if (lpcm)
+                        cerr << "lPCM -> Bitstream" << endl;
+                    else
+                        cerr << "Bitstream -> lPCM" << endl;
+                }
+                lpcm = audio_signal_status.bLPCM;
+                params_changed = true;
+            }
+            if (sample_rate != audio_signal_status.dwSampleRate)
+            {
+                if (m_verbose > 0)
+                    cerr << "Audio sample rate " << sample_rate
+                         << " -> " << audio_signal_status.dwSampleRate << endl;
+                sample_rate = audio_signal_status.dwSampleRate;
+                params_changed = true;
+            }
+            if (bytes_per_sample != even_bytes_per_sample)
+            {
+                if (m_verbose > 0)
+                    cerr << "Audio bytes per sample " << bytes_per_sample
+                         << " -> " << even_bytes_per_sample << endl;
+                bytes_per_sample = even_bytes_per_sample;
+                params_changed = true;
+            }
+            if (valid_channels != audio_signal_status.wChannelValid)
+            {
+                if (m_verbose > 0)
+                    cerr << "Audio channels " << valid_channels
+                         << " -> " << audio_signal_status.wChannelValid << endl;
+                valid_channels = audio_signal_status.wChannelValid;
+                params_changed = true;
+            }
         }
 
         if (params_changed)
         {
             params_changed = false;
 
-            if (m_verbose > 0 && frame_cnt > 0)
-            {
-                cerr << "WARNING: Audio signal CHANGED after "
-                     << frame_cnt << " frames\n";
-                if (lpcm != audio_signal_status.bLPCM)
-                    cerr << "PCM changed " << lpcm
-                         << " -> "
-                         << static_cast<bool>(audio_signal_status.bLPCM)
-                         << endl;
-                if (sample_rate != audio_signal_status.dwSampleRate)
-                    cerr << "sample rate changed " << sample_rate
-                         << " -> " << audio_signal_status.dwSampleRate
-                         << endl;
-                if (bytes_per_sample != even_bytes_per_sample)
-                    cerr << "bytes per sample changed "
-                         << bytes_per_sample << " -> "
-                         << even_bytes_per_sample
-                         << endl;
-                if (valid_channels != audio_signal_status.wChannelValid)
-                    cerr << "Valid channels changed "
-                         << valid_channels << " -> "
-                         << audio_signal_status.wChannelValid << endl;
-            }
-
-            lpcm = audio_signal_status.bLPCM;
-            sample_rate = audio_signal_status.dwSampleRate;
-            bytes_per_sample = even_bytes_per_sample;
-            valid_channels = audio_signal_status.wChannelValid;
+            if (m_verbose > 1 /* && frame_cnt > 0 */)
+                cerr << lock_ios()
+                     << "WARNING: Audio signal CHANGED after "
+                     << frame_cnt << " frames.\n";
 
             cur_channels = 0;
             for (int idx = 0; idx < (MWCAP_AUDIO_MAX_NUM_CHANNELS / 2); ++idx)
@@ -959,7 +962,7 @@ bool Magewell::capture_audio(void)
             if (0 == cur_channels)
             {
                 if (err_cnt++ % 25 == 0 && m_verbose > 0)
-                    cerr << "WARNING [" << err_cnt
+                    cerr << lock_ios() << "WARNING [" << err_cnt
                          << "] Invalid audio channel count: "
                          << cur_channels << endl;
 
@@ -983,14 +986,15 @@ bool Magewell::capture_audio(void)
             capture_buf = new uint8_t[capture_buf_size];
             if (nullptr == capture_buf)
             {
-                cerr << "ERROR: audio capture_buf alloc failed\n";
+                cerr << lock_ios() << "ERROR: audio capture_buf alloc failed\n";
                 break;
             }
 
             audio_timestamps = new int64_t[audio_buf_sz];
             if (nullptr == audio_timestamps)
             {
-                cerr << "ERROR: audio timestamp buf alloc failed\n";
+                cerr << lock_ios()
+                     << "ERROR: audio timestamp buf alloc failed\n";
                 break;
             }
 
@@ -1016,7 +1020,8 @@ bool Magewell::capture_audio(void)
                 if (EcoEventWait(eco_event, 1000) <= 0)
                 {
                     if (m_verbose > 1)
-                        cerr << "Audio wait notify error or timeout\n";
+                        cerr << lock_ios()
+                             << "Audio wait notify error or timeout\n";
                     continue;
                 }
             }
@@ -1025,7 +1030,8 @@ bool Magewell::capture_audio(void)
                 if (MWWaitEvent(notify_event, 1000) <= 0)
                 {
                     if (m_verbose > 1)
-                        cerr << "Audio wait notify error or timeout\n";
+                        cerr << lock_ios()
+                             << "Audio wait notify error or timeout\n";
                     continue;
                 }
             }
@@ -1046,7 +1052,8 @@ bool Magewell::capture_audio(void)
             if (notify_status & MWCAP_NOTIFY_AUDIO_INPUT_RESET)
             {
                 if (m_verbose > 0)
-                    cerr << "WARNING: Audio input RESET!\n";
+                    cerr << lock_ios()
+                         << "WARNING: Audio input RESET!\n";
                 this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
                 break;
             }
@@ -1054,7 +1061,8 @@ bool Magewell::capture_audio(void)
             if (notify_status & MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO)
             {
                 if (m_verbose > 0)
-                    cerr << "WARNING: HDMI Audio info changed!\n";
+                    cerr << lock_ios()
+                         << "WARNING: HDMI Audio info changed!\n";
                 break;
             }
 
@@ -1090,7 +1098,8 @@ bool Magewell::capture_audio(void)
                                   >> (32 - audio_signal_status.cBitsPerSample);
 #if 1
                     if (capture_buf_size < frame_idx + write_pos + bytes_per_sample * 2)
-                        cerr << "\n==========+++++++++>> BAD NEWS: overwrote end of audio capture_buf.\n"
+                        cerr << lock_ios()
+                             << "\n==========+++++++++>> BAD NEWS: overwrote end of audio capture_buf.\n"
                              << endl;
 #endif
                     memcpy(&capture_buf[frame_idx + write_pos], &left, bytes_per_sample);
@@ -1099,29 +1108,31 @@ bool Magewell::capture_audio(void)
                 }
             }
 #else
-            DWORD* capture_buf = macf.adwSamples;
+            DWORD* sample_buf = macf.adwSamples;
             uint8_t* audio_frame = &capture_buf[frame_idx];// + g_afcw_byte % g_audio_cache_size;
             for (idx = 0 ; idx < MWCAP_AUDIO_SAMPLES_PER_FRAME; ++idx)
             {
-                WORD temp = capture_buf[0] >> (32 - CAPTURE_BIT_PER_SAMPLE);
+                WORD temp = sample_buf[0]
+                            >> (32 - audio_signal_status.cBitsPerSample);
                 memcpy(audio_frame, &temp, bytes_per_sample);
                 audio_frame += bytes_per_sample;
 
-                temp = capture_buf[MWCAP_AUDIO_MAX_NUM_CHANNELS / 2] >> (32 - CAPTURE_BIT_PER_SAMPLE);
+                temp = sample_buf[MWCAP_AUDIO_MAX_NUM_CHANNELS / 2]
+                       >> (32 - audio_signal_status.cBitsPerSample);
                 memcpy(audio_frame, &temp, bytes_per_sample);
                 audio_frame += bytes_per_sample;
-                capture_buf += MWCAP_AUDIO_MAX_NUM_CHANNELS;
+                sample_buf += MWCAP_AUDIO_MAX_NUM_CHANNELS;
             }
 #endif
 
 
 #if 0
-            cerr << " FRAME_IDX " << frame_idx
+            cerr << lock_ios() << " FRAME_IDX " << frame_idx
                  << " @ " << (uint64_t)(&capture_buf[frame_idx]) << endl;
 #endif
             audio_timestamps[buf_idx] = macf.llTimestamp;
             if (m_out2ts->addAudio(&capture_buf[frame_idx], frame_size,
-                                 macf.llTimestamp))
+                                   macf.llTimestamp))
             {
                 if (++buf_idx == audio_buf_sz)
                     buf_idx = 0;
@@ -1131,7 +1142,8 @@ bool Magewell::capture_audio(void)
     }
 
   audio_capture_stoped:
-    cerr << "\nAudio Capture finished.\n" << endl;
+    cerr << lock_ios()
+         << "\nAudio Capture finished.\n" << endl;
 
     Stop();
 
@@ -1163,13 +1175,13 @@ bool Magewell::update_HDRinfo(void)
     unsigned int uiValidFlag = 0;
     if (MW_SUCCEEDED != MWGetHDMIInfoFrameValidFlag(m_channel, &uiValidFlag))
     {
-        cerr << "Not a HDMI info frame\n";
+        cerr << lock_ios() << "Not a HDMI info frame\n";
         return false;
     }
 
     if (0 == uiValidFlag)
     {
-        cerr << "No HDMI InfoFrame!\n";
+        cerr << lock_ios() << "No HDMI InfoFrame!\n";
         return false;
     }
 
@@ -1180,7 +1192,7 @@ bool Magewell::update_HDRinfo(void)
                                                  MWCAP_HDMI_INFOFRAME_ID_HDR,
                                                  &m_infoPacket))
     {
-        cerr << "WARNING: HDMI HDR infoframe not available.\n";
+        cerr << lock_ios() << "WARNING: HDMI HDR infoframe not available.\n";
         return false;
     }
 
@@ -1191,7 +1203,7 @@ bool Magewell::update_HDRinfo(void)
     if (memcmp(&m_HDRinfo, &m_HDRinfo_prev,
                sizeof(HDMI_HDR_INFOFRAME_PAYLOAD)) == 0)
     {
-        cerr << "HDR info has not changed.\n";
+        cerr << lock_ios() << "HDR info has not changed.\n";
         return true;
     }
 
@@ -1199,7 +1211,7 @@ bool Magewell::update_HDRinfo(void)
            sizeof(HDMI_HDR_INFOFRAME_PAYLOAD));
 
     if (m_verbose > 0)
-        cerr << "HDR changed.\n";
+        cerr << lock_ios() << "HDR changed.\n";
 
     AVMasteringDisplayMetadata* meta = av_mastering_display_metadata_alloc();
 
@@ -1307,7 +1319,7 @@ bool Magewell::update_HDRcolorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status)
     if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV601)
     {
         if (m_verbose > 1)
-            cerr << "Color format: YUV601\n";
+            cerr << lock_ios() << "Color format: YUV601\n";
         if (m_out2ts->getColorSpace() != AVCOL_SPC_BT470BG ||
             m_out2ts->getColorPrimaries() != AVCOL_PRI_BT470BG ||
             m_out2ts->getColorTRC() != AVCOL_TRC_SMPTE170M)
@@ -1321,7 +1333,7 @@ bool Magewell::update_HDRcolorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status)
     else if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV709)
     {
         if (m_verbose > 1)
-            cerr << "Color format: YUV709\n";
+            cerr << lock_ios() << "Color format: YUV709\n";
         if (m_out2ts->getColorSpace() != AVCOL_SPC_BT709 ||
             m_out2ts->getColorPrimaries() != AVCOL_PRI_BT709 ||
             m_out2ts->getColorTRC() != AVCOL_TRC_BT709)
@@ -1335,7 +1347,7 @@ bool Magewell::update_HDRcolorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status)
     else /* if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV2020)*/
     {
         if (m_verbose > 1)
-            cerr << "Color format: YUV2020\n";
+            cerr << lock_ios() << "Color format: YUV2020\n";
         if (m_out2ts->getColorSpace() != AVCOL_SPC_BT2020_NCL ||
             m_out2ts->getColorPrimaries() != AVCOL_PRI_BT2020)
         {
@@ -1381,12 +1393,12 @@ void Magewell::pro_image_buffer_available(uint8_t* pbImage, void* buf)
     if (m_avail_image_buffers.size() > m_image_buffers_desired)
     {
         if (m_verbose > 3)
-            cerr << "Releasing excess video buffer.\n";
+            cerr << lock_ios() << "Releasing excess video buffer.\n";
         MWUnpinVideoBuffer(m_channel, (LPBYTE)(pbImage));
         delete[] pbImage;
         if (--m_image_buffer_total <
             (m_image_buffers_desired + 2) && m_verbose > 2)
-            cerr << "INFO: Video encoder is "
+            cerr << lock_ios() << "INFO: Video encoder is "
                  << m_image_buffer_total << " frames behind.\n";
 
         m_image_buffers.erase(pbImage);
@@ -1411,7 +1423,7 @@ void Magewell::eco_image_buffer_available(uint8_t* pbImage, void* buf)
     {
         if (--m_image_buffer_total <
             (m_image_buffers_desired + 2) && m_verbose > 2)
-            cerr << "INFO: Video encoder is "
+            cerr << lock_ios() << "INFO: Video encoder is "
                  << m_image_buffer_total << " frames behind.\n";
 
         m_eco_buffers.erase(pEco);
@@ -1422,7 +1434,8 @@ void Magewell::eco_image_buffer_available(uint8_t* pbImage, void* buf)
     {
         if (MW_SUCCEEDED != MWCaptureSetVideoEcoFrame(m_channel, pEco))
         {
-            cerr << "ERROR: buffer_avail: Failed to Q the Eco frame. "
+            cerr << lock_ios()
+                 << "ERROR: buffer_avail: Failed to Q the Eco frame. "
                  << " desired " << m_image_buffers_desired
                  << " avail " << m_image_buffer_avail << endl;
             delete[] reinterpret_cast<uint8_t *>(pEco->pvFrame);
@@ -1494,7 +1507,7 @@ bool Magewell::add_eco_image_buffer(void)
     pBuf->bBottomUp = false;
     if (reinterpret_cast<uint8_t *>(pBuf->pvFrame) == nullptr)
     {
-        cerr << "Eco video frame alloc failed.\n";
+        cerr << lock_ios() << "Eco video frame alloc failed.\n";
         return false;
     }
     pBuf->pvContext = reinterpret_cast<MWCAP_PTR>(pBuf);
@@ -1502,7 +1515,7 @@ bool Magewell::add_eco_image_buffer(void)
 
     if ((xr = MWCaptureSetVideoEcoFrame(m_channel, pBuf)) != MW_SUCCEEDED)
     {
-        cerr << "MWCaptureSetVideoEcoFrame failed!\n";
+        cerr << lock_ios() << "MWCaptureSetVideoEcoFrame failed!\n";
         return false;
     }
 
@@ -1511,7 +1524,8 @@ bool Magewell::add_eco_image_buffer(void)
     ++m_image_buffer_avail;
 
     if (m_verbose > 2)
-        cerr << "Added Eco frame (" << m_image_buffer_avail << "/"
+        cerr << lock_ios()
+             << "Added Eco frame (" << m_image_buffer_avail << "/"
              << m_image_buffer_total << ") flight " << m_image_buffers_inflight
              << endl;
 
@@ -1525,7 +1539,7 @@ bool Magewell::add_pro_image_buffer(void)
     uint8_t* pbImage =  new uint8_t[m_image_size];
     if (pbImage == nullptr)
     {
-        cerr << "ERROR: image buffer alloc fail!\n";
+        cerr << lock_ios() << "ERROR: image buffer alloc fail!\n";
         return false;
     }
 
@@ -1552,9 +1566,11 @@ bool Magewell::open_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN & eco_params)
         if (m_verbose > 0)
         {
             if (ret == MW_INVALID_PARAMS)
-                cerr << "ERROR: Start Eco Video Capture error: invalid params\n";
+                cerr << lock_ios()
+                     << "ERROR: Start Eco Video Capture error: invalid params\n";
             else
-                cerr << "ERROR: Start Eco Video Capture error: unknown\n";
+                cerr << lock_ios()
+                     << "ERROR: Start Eco Video Capture error: unknown\n";
         }
 
         this_thread::sleep_for(chrono::milliseconds(100));
@@ -1563,7 +1579,8 @@ bool Magewell::open_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN & eco_params)
         return false;
 
     if (m_verbose > 1)
-        cerr << "Eco Video capture started.\n";
+        cerr << lock_ios()
+             << "Eco Video capture started.\n";
 
     return true;
 }
@@ -1628,14 +1645,15 @@ bool Magewell::capture_video(void)
 #endif
 
     if (m_verbose > 0)
-        cerr << "Video capture starting.\n";
+        cerr << lock_ios() << "Video capture starting.\n";
 
     if (m_isEco)
     {
         eco_event = eventfd(0, EFD_NONBLOCK);
         if (eco_event < 0)
         {
-            cerr << "Unable to create event fd for eco capture.\n";
+            cerr << lock_ios()
+                 << "Unable to create event fd for eco capture.\n";
             Stop();
         }
     }
@@ -1645,7 +1663,7 @@ bool Magewell::capture_video(void)
         if (capture_event == 0)
         {
             if (m_verbose > 0)
-                cerr << "ERROR: Create timer event error\n";
+                cerr << lock_ios() << "ERROR: Create timer event error\n";
             Stop();
 
         }
@@ -1654,14 +1672,14 @@ bool Magewell::capture_video(void)
         if (notify_event == 0)
         {
             if (m_verbose > 0)
-                cerr << "ERROR: Create notify event error\n";
+                cerr << lock_ios() << "ERROR: Create notify event error\n";
             Stop();
         }
 
         if (MW_SUCCEEDED != MWStartVideoCapture(m_channel, capture_event))
         {
             if (m_verbose > 0)
-                cerr << "ERROR: Start Pro Video Capture error!\n";
+                cerr << lock_ios() << "ERROR: Start Pro Video Capture error!\n";
             Stop();
         }
     }
@@ -1676,7 +1694,8 @@ bool Magewell::capture_video(void)
         if (videoSignalStatus.state == MWCAP_VIDEO_SIGNAL_UNSUPPORTED)
         {
             if (state != videoSignalStatus.state && m_verbose > 0)
-                cerr << "WARNING: Input video signal status: Unsupported\n";
+                cerr << lock_ios()
+                     << "WARNING: Input video signal status: Unsupported\n";
             locked = false;
             state = videoSignalStatus.state;
             this_thread::sleep_for(chrono::milliseconds(m_frame_ms * 10));
@@ -1687,26 +1706,30 @@ bool Magewell::capture_video(void)
         {
             case MWCAP_VIDEO_SIGNAL_LOCKED:
               if (!locked && m_verbose > 1)
-                  cerr << "INFO: Input video signal status: Locked\n";
+                  cerr << lock_ios()
+                       << "INFO: Input video signal status: Locked\n";
               locked = true;
               break;
             case MWCAP_VIDEO_SIGNAL_NONE:
               if (state != videoSignalStatus.state && m_verbose > 0)
-                  cerr << "WARNING: Input video signal status: NONE\n";
+                  cerr << lock_ios()
+                       << "WARNING: Input video signal status: NONE\n";
               locked = false;
               state = videoSignalStatus.state;
               this_thread::sleep_for(chrono::milliseconds(m_frame_ms * 5));
               continue;
             case MWCAP_VIDEO_SIGNAL_LOCKING:
               if (state != videoSignalStatus.state && m_verbose > 0)
-                  cerr << "WARNING: Input video signal status: Locking\n";
+                  cerr << lock_ios()
+                       << "WARNING: Input video signal status: Locking\n";
               locked = false;
               state = videoSignalStatus.state;
               this_thread::sleep_for(chrono::milliseconds(m_frame_ms * 5));
               continue;
             default:
               if (m_verbose > 0)
-                  cerr << "WARNING: Video signal status: lost locked.\n";
+                  cerr << lock_ios()
+                       << "WARNING: Video signal status: lost locked.\n";
               locked = false;
               this_thread::sleep_for(chrono::milliseconds(m_frame_ms * 5));
               continue;
@@ -1733,7 +1756,8 @@ bool Magewell::capture_video(void)
                 eco_params.dwFOURCC = MWFOURCC_I420;
             else
             {
-                cerr << "ERROR: Failed to determine best magewell pixel format.\n";
+                cerr << lock_ios()
+                     << "ERROR: Failed to determine best magewell pixel format.\n";
                 Stop();
             }
 
@@ -1743,7 +1767,7 @@ bool Magewell::capture_video(void)
         if (eco_params.cx != videoSignalStatus.cx)
         {
             if (m_verbose > 1)
-                cerr << "Width changed: " << eco_params.cx
+                cerr << lock_ios() << "Width: " << eco_params.cx
                      << " -> " << videoSignalStatus.cx << "\n";
             eco_params.cx = videoSignalStatus.cx;
             params_changed = true;
@@ -1751,7 +1775,7 @@ bool Magewell::capture_video(void)
         if (eco_params.cy != videoSignalStatus.cy)
         {
             if (m_verbose > 1)
-                cerr << "Height changed: " << eco_params.cy
+                cerr << lock_ios() << "Height: " << eco_params.cy
                      << " -> " << videoSignalStatus.cy << "\n";
             eco_params.cy = videoSignalStatus.cy;
             params_changed = true;
@@ -1765,7 +1789,7 @@ bool Magewell::capture_video(void)
         if (m_num_pixels != m_min_stride * eco_params.cy)
         {
             if (m_verbose > 1)
-                cerr << "Num pixes changed: " << m_num_pixels
+                cerr << lock_ios() << "Num pixels: " << m_num_pixels
                      << " -> " << m_min_stride * eco_params.cy << "\n";
             m_num_pixels = m_min_stride * eco_params.cy;
             params_changed = true;
@@ -1773,7 +1797,7 @@ bool Magewell::capture_video(void)
         if (eco_params.llFrameDuration != videoSignalStatus.dwFrameDuration)
         {
             if (m_verbose > 1)
-                cerr << "Duration changed: " << eco_params.llFrameDuration
+                cerr << lock_ios() << "Duration: " << eco_params.llFrameDuration
                      << " -> " << videoSignalStatus.dwFrameDuration << "\n";
             eco_params.llFrameDuration = videoSignalStatus.dwFrameDuration;
             params_changed = true;
@@ -1781,7 +1805,7 @@ bool Magewell::capture_video(void)
         if (interlaced != static_cast<bool>(videoSignalStatus.bInterlaced))
         {
             if (m_verbose > 1)
-                cerr << "Interlaced changed: " << (interlaced ? "Y" : "N")
+                cerr << lock_ios() << "Interlaced: " << (interlaced ? "Y" : "N")
                      << " -> " << (videoSignalStatus.bInterlaced ? "Y" : "N")
                      << "\n";
             interlaced = static_cast<bool>(videoSignalStatus.bInterlaced);
@@ -1790,7 +1814,7 @@ bool Magewell::capture_video(void)
         if (bpp != FOURCC_GetBpp(eco_params.dwFOURCC))
         {
             if (m_verbose > 1)
-                cerr << "Video Bpp changed: " << bpp << " -> "
+                cerr << lock_ios() << "Video Bpp: " << bpp << " -> "
                      << FOURCC_GetBpp(eco_params.dwFOURCC) << "\n";
             bpp = FOURCC_GetBpp(eco_params.dwFOURCC);
             params_changed = true;
@@ -1802,7 +1826,7 @@ bool Magewell::capture_video(void)
             params_changed = false;
 
             if (m_verbose > 1 /* && frame_cnt > 0 */)
-                cerr << "WARNING: Video signal CHANGED after "
+                cerr << lock_ios() << "WARNING: Video signal CHANGED after "
                      << frame_cnt << " frames.\n";
 
             m_frame_ms = eco_params.llFrameDuration / 10000;
@@ -1825,6 +1849,10 @@ bool Magewell::capture_video(void)
             // 100ns / frame duration
             if (m_verbose > 1)
             {
+                // Mutex lock cerr
+                ios_lock lock;
+                cerr << lock_ios(lock);
+
                 cerr << "========\n";
                 double fps = (interlaced) ?
                              (double)20000000LL / eco_params.llFrameDuration :
@@ -1916,7 +1944,7 @@ bool Magewell::capture_video(void)
 #if 0
         else
         {
-            cerr << " No changed to input\n";
+            cerr << lock_ios() << " No changed to input\n";
         }
 #endif
 
@@ -1928,7 +1956,8 @@ bool Magewell::capture_video(void)
             video_notify = MWRegisterNotify(m_channel, notify_event, event_mask);
         if (!video_notify)
         {
-            cerr << "ERROR: Video: Failed to register notify event." << endl;
+            cerr << lock_ios()
+                 << "ERROR: Video: Failed to register notify event." << endl;
             Stop();
         }
 
@@ -1941,7 +1970,8 @@ bool Magewell::capture_video(void)
                 if (EcoEventWait(eco_event, 1000) <= 0)
                 {
                     if (m_verbose > 1)
-                        cerr << "Video wait notify error or timeout (frame "
+                        cerr << lock_ios()
+                             << "Video wait notify error or timeout (frame "
                              << frame_cnt << ")\n";
                     continue;
                 }
@@ -1951,7 +1981,8 @@ bool Magewell::capture_video(void)
                 if (MWWaitEvent(notify_event, m_frame_ms2) <= 0)
                 {
                     if (m_verbose > 1)
-                        cerr << "Video wait notify error or timeout (frame "
+                        cerr << lock_ios()
+                             << "Video wait notify error or timeout (frame "
                              << frame_cnt << ")\n";
                     continue;
                 }
@@ -1961,7 +1992,8 @@ bool Magewell::capture_video(void)
                                                   &ullStatusBits))
             {
                 if (m_verbose > 0)
-                    cerr << "WARNING: Failed to get Notify status (frame "
+                    cerr << lock_ios()
+                         << "WARNING: Failed to get Notify status (frame "
                          << frame_cnt << ")\n";
                 continue;
             }
@@ -1969,7 +2001,8 @@ bool Magewell::capture_video(void)
             if (ullStatusBits & MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE)
             {
                 if (m_verbose > 1)
-                    cerr << "MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE\n";
+                    cerr << lock_ios()
+                         << "MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE\n";
                 this_thread::sleep_for(chrono::milliseconds(5));
                 break;
             }
@@ -1979,7 +2012,8 @@ bool Magewell::capture_video(void)
             if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
             {
                 if (m_verbose > 0)
-                    cerr << "WARNING: Video signal lost lock. (frame "
+                    cerr << lock_ios()
+                         << "WARNING: Video signal lost lock. (frame "
                          << frame_cnt << ")\n";
                 this_thread::sleep_for(chrono::milliseconds(5));
                 break;
@@ -1991,7 +2025,8 @@ bool Magewell::capture_video(void)
                 {
                     add_eco_image_buffer();
                     if (m_verbose > 2)
-                        cerr << "WARNING: video encoder is "
+                        cerr << lock_ios()
+                             << "WARNING: video encoder is "
                              << m_image_buffer_total << " frames behind (frame "
                              << frame_cnt << ")\n";
                 }
@@ -2003,7 +2038,8 @@ bool Magewell::capture_video(void)
                     eco_status.pvFrame == reinterpret_cast<MWCAP_PTR>(nullptr))
                 {
                     if (m_verbose > 4)
-                        cerr << "WARNING: Failed to get Eco video frame.\n";
+                        cerr << lock_ios()
+                             << "WARNING: Failed to get Eco video frame.\n";
 //                    add_eco_image_buffer();
                     this_thread::sleep_for(chrono::milliseconds(1));
                     continue;
@@ -2026,7 +2062,8 @@ bool Magewell::capture_video(void)
                     add_pro_image_buffer();
                     m_image_buffer_mutex.lock();
                     if (m_verbose > 2)
-                        cerr << "WARNING: video encoder is "
+                        cerr << lock_ios()
+                             << "WARNING: video encoder is "
                              << m_image_buffer_total << " frames behind (frame "
                              << frame_cnt << ")\n";
                 }
@@ -2039,7 +2076,8 @@ bool Magewell::capture_video(void)
                                                          &videoBufferInfo))
                 {
                     if (m_verbose > 0)
-                        cerr << "WARNING: Failed to get video buffer info (frame "
+                        cerr << lock_ios()
+                             << "WARNING: Failed to get video buffer info (frame "
                              << frame_cnt << ")\n";
                     pro_image_buffer_available(pbImage, nullptr);
                     continue;
@@ -2054,7 +2092,8 @@ bool Magewell::capture_video(void)
                     if (frame_idx == videoBufferInfo.iNewestBufferedFullFrame)
                     {
                         if (m_verbose > 0)
-                            cerr << "WARNING: Already processed MW video buffer "
+                            cerr << lock_ios()
+                                 << "WARNING: Already processed MW video buffer "
                                  << frame_idx << " -- Skipping (frame "
                                  << frame_cnt << ")\n";
                         pro_image_buffer_available(pbImage, nullptr);
@@ -2066,7 +2105,8 @@ bool Magewell::capture_video(void)
                     {
                         if (m_verbose > 0)
                         {
-                            cerr << "WARNING: Expected MW video buffer " << frame_idx
+                            cerr << lock_ios()
+                                 << "WARNING: Expected MW video buffer " << frame_idx
                                  << " but current is "
                                  << (int)videoBufferInfo.iNewestBufferedFullFrame
                                  << " (frame " << frame_cnt << ")\n";
@@ -2078,7 +2118,8 @@ bool Magewell::capture_video(void)
                                         &videoFrameInfo) != MW_SUCCEEDED)
                 {
                     if (m_verbose > 0)
-                        cerr << "WARNING: Failed to get video frame info (frame "
+                        cerr << lock_ios()
+                             << "WARNING: Failed to get video frame info (frame "
                              << frame_cnt << ")\n";
                     pro_image_buffer_available(pbImage, nullptr);
                     continue;
@@ -2099,7 +2140,8 @@ bool Magewell::capture_video(void)
                 if (MWWaitEvent(capture_event, 1000) <= 0)
                 {
                     if (m_verbose > 0)
-                        cerr << "WARNING: wait capture event error or timeout "
+                        cerr << lock_ios()
+                             << "WARNING: wait capture event error or timeout "
                              << "(frame " << frame_cnt << ")\n";
                     pro_image_buffer_available(pbImage, nullptr);
                     continue;
@@ -2117,7 +2159,7 @@ bool Magewell::capture_video(void)
 
             if (ret != MW_SUCCEEDED)
             {
-                cerr << "Failed\n";
+                cerr << lock_ios() << "Failed\n";
                 if (m_isEco)
                 {
                     eco_image_buffer_available(pbImage,
@@ -2170,7 +2212,7 @@ bool Magewell::capture_video(void)
     }
 
     if (m_verbose > 2)
-        cerr << "Video Capture finished.\n";
+        cerr << lock_ios() << "Video Capture finished.\n";
     Stop();
 
     return true;
@@ -2226,7 +2268,7 @@ bool Magewell::Capture(const string & video_codec, const string & preset,
 void Magewell::Stop(void)
 {
     if (m_verbose > 4)
-        cerr << "Magewell::Stop\n";
+        cerr << lock_ios() << "Magewell::Stop\n";
     m_running.store(false);
     m_reset.store(true);
 }

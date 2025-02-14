@@ -26,7 +26,7 @@ project(magewell2ts VERSION 3.5)
 configure_file(version.h.in version.h)
 
 # add the executable
-add_executable(magewell2ts magewell2ts.cpp Magewell.cpp AudioIO.cpp OutputTS.cpp)
+add_executable(magewell2ts magewell2ts.cpp Magewell.cpp AudioIO.cpp OutputTS.cpp lock_ios.cpp)
 
 # set_target_properties(magewell2ts PROPERTIES
 #   LINK_SEARCH_START_STATIC ON
