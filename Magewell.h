@@ -68,11 +68,23 @@ class Magewell
                     MWCAP_PTR hNotifyEvent,
                     DWORD     flags);
 
-    bool capture_video(void);
-    bool capture_pro_video(void);
-
     bool open_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN & eco_params);
     void close_eco_video(void);
+
+    void capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
+                           HNOTIFY video_notify,
+                           MWCAP_PTR notify_event,
+                           MWCAP_PTR capture_event,
+                           int       frame_wrap_idx,
+                           DWORD     event_mask,
+                           ULONGLONG ullStatusBits,
+                           bool interlaced);
+    void capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
+                           int eco_event,
+                           HNOTIFY video_notify,
+                           ULONGLONG ullStatusBits,
+                           bool interlaced);
+    bool capture_video(void);
 
     bool capture_audio(void);
 
