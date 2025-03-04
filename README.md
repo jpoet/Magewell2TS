@@ -2,9 +2,9 @@
 
 [//]: # (Install retext from your distribution then ./README.md will look prettier.)
  
-# Magewell PRO capture to Transport Stream
+# Magewell capture to Transport Stream
 
-This application reads audio and video from a Magewell PRO capture card and muxes them into a Transport Stream.
+This application reads audio and video from a Magewell Pro or Eco capture card and muxes them into a Transport Stream.
 
 If bitstream audio is detected it will be muxed directly into the resulting Transport Stream. LPCM audio will be encoded as AC3 and then muxed.
 
@@ -20,25 +20,38 @@ The Magewell driver provides V4L2 and ALSA interfaces to the card. This applicat
 The Magewell PRO capture cards capture raw audio and video. The video (at least) needs compressed and it is up to the Linux PC to do that. The only practical way of accomplishing this is with GPU assist. Intel QSV and nVidia nvenc are supported.
 
 ***
-## Magewell driver
+## Magewell Pro driver
 The Magewell driver can be found here:
 [https://www.magewell.com/downloads/pro-capture#/driver/linux-x86](https://www.magewell.com/downloads/pro-capture#/driver/linux-x86)
 
-Install the driver:
-----
+### Install the Pro driver:
 ```bash
 mkdir -p ~/src/Magewell
 cd ~/src/Magewell
-gtar -xzvf ~/Downloads/ProCaptureForLinux_4390.tar.gz
-cd ProCaptureForLinux_4236/
+gtar -xzvf ~/Downloads/ProCaptureForLinux_4415.tar.gz
+cd ProCaptureForLinux_4415/
 sudo ./install.sh
 ```
+
+## Magewell Eco driver
+
+The Magewell Eco driver can be found here:
+[https://www.magewell.com/downloads/eco-capture#/driver/linux-x86](https://www.magewell.com/downloads/eco-capture#/driver/linux-x86)
+
+### Install the Eco driver:
+```bash
+mkdir -p ~/src/Magewell
+cd ~/src/Magewell
+gtar -xzvf ~/Downloads/EcoCaptureForLinuxX86_1.4.256.tar.gz
+cd EcoCaptureForLinuxX86_1.4.256/
+sudo ./install.sh
+```
+
+### ibt=off
 With newer kernels, it may be necessary to add "ibt=off" to the kernel parameters:
 ```
 sudo grubby --update-kernel=All --args="ibt=off"
-sudo grub2-mkconfig -o /boot/grub2/grub.cfg
 ```
-
 
 ### Testing the Magewell driver using ALSA and V4L
 
@@ -71,41 +84,48 @@ Download the Linux version. Then unpacket it
 ```bash
 mkdir -p ~/src/Magewell/
 cd ~/src/Magewell/
-gtar -xzvf ~/Download/Magewell_Capture_SDK_Linux_3.3.1.1313.tar.gz
+gtar -xzvf ~/Download/Magewell_Capture_SDK_Linux_3.3.1.1505.tar.gz
 ```
+This application needs to be able to find the Magewell SDK. Cmake will
+look in the parent directory as well as adjacent directories for know
+versions. If Cmake finds "Include" in the parent directory it will use
+that, then it will search for ../
+Magewell_Capture_SDK_Linux_3.3.1.1505/Include, etc) until it finds a
+version it knows about. If cmake does not find the SDK due to it being
+an unknow version, either edit helpers/FindMagewell.cmake or download
+this git into the Magewell SDK directory itself, so the version name doesn't matter.
 
-In the Magewell SDK directory, grab the source for this application:
+For example, along side the Magewell SDK directory, grab the source for this application:
 ```bash
-cd ~/src/Magewell/Magewell_Capture_SDK_Linux_3.3.1.131
+cd ~/src/Magewell/
 git clone https://github.com/jpoet/Magewell2TS.git
 ```
-If you place the Magewell2TS source somewhere else, you will need to edit Magewell2TS/helpers/FindMagewell.cmake and teach it how to find the Magewell SDK.
 
 ### Dependencies
-Fedora:
+####Fedora:
 ```bash
 sudo dnf install -y make gcc gcc-c++ libstdc++-devel libv4l-devel patch kernel-devel alsa-lib-devel v4l-utils-devel-tools systemd-devel
 ```
-Ubuntu:
+####Ubuntu:
 ```bash
-sudo apt-get install build-essential libv4l-dev cmake libudev-dev nvidia-cuda-toolkit
+sudo apt-get install libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev libvpl-dev
 ```
 
-### Intel
+#### Intel
 For Intel QSV you will also need oneVPL libs. For example:
 ```
 sudo dnf install oneVPL-devel intel-media-driver
 ```
 See [https://www.intel.com/content/www/us/en/developer/articles/guide/onevpl-installation-guide.html](https://www.intel.com/content/www/us/en/developer/articles/guide/onevpl-installation-guide.html) for more information.
 
-### Nvidia
+#### Nvidia
 For nVidia you will want to have the closed source driver installed as well as cuda libs. For example:
 ```
 sudo dnf install https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm https://download1.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm`
 sudo dnf install akmod-nvidia xorg-x11-drv-nvidia-cuda xorg-x11-drv-nvidia-cuda-libs vdpauinfo
 ```
 
-### FFmpeg
+#### FFmpeg
 FFmpeg is also required. If you want bitstream eac3 to work, then a minimum of version 6.1 shoudl be used.
 ```
 sudo dnf install ffmpeg-devel
@@ -133,9 +153,9 @@ sudo make install
 ## Running
 The application provides help via --help or -h:
 ```bash
-magewellpro2ts -h
-magewellpro2ts --list
-magewellpro2ts -i 1 -m -c hevc_qsv -d renderD129 | mpv -
+magewell2ts -h
+magewell2ts --list
+magewell2ts -i 1 -m -c hevc_qsv -d renderD129 | mpv -
 ```
 
 ----
@@ -153,7 +173,7 @@ CODEC=hevc_qsv -q 22
 # The recorder command to execute.  %URL% is optional, and
 # will be replaced with the channel's "URL" as defined in the
 # [TUNER/channels] (channel conf) configuration file
-command="/usr/local/bin/magewellpro2ts -i %INPUT% -s 100 -m -c %CODEC%"
+command="/usr/local/bin/magewell2ts -i %INPUT% -s 100 -m -c %CODEC%"
 
 # cleanup="/home/mythtv/mythtvguide/adb-1-finished.sh"
 cleanup="%TUNER% --reset"
@@ -201,10 +221,10 @@ Environment=HOME=/home/mythtv
 LimitCORE=infinity
 User=mythtv
 PermissionsStartOnly=true
-ExecStartPre=/usr/local/bin/magewellpro2ts --wait-for 4 -i 1 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStartPre=/usr/local/bin/magewellpro2ts --wait-for 4 -i 2 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStartPre=/usr/local/bin/magewellpro2ts --wait-for 4 -i 3 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStartPre=/usr/local/bin/magewellpro2ts --wait-for 4 -i 4 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 1 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 2 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 3 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 4 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
 
 ExecStart=/usr/local/bin/mythbackend -q --syslog none --logpath /var/log/mythtv -v channel,record
 RestartSec=5
