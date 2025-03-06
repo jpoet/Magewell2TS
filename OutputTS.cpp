@@ -135,7 +135,8 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
 
     m_audio_ready = !m_has_audio;
 
-    m_image_ready_thread = std::thread(&OutputTS::Write, this);
+    m_image_thread = std::thread(&OutputTS::mux, this);
+    m_frame_thread = std::thread(&OutputTS::encode_video, this);
 
     m_display_primaries  = av_mastering_display_metadata_alloc();
     m_content_light  = av_content_light_metadata_alloc(NULL);
@@ -523,11 +524,109 @@ bool OutputTS::open_video(void)
         return false;
     }
 
+#if 0
     /* Add the audio and video streams using the default format codecs
      * and initialize the codecs. */
     if (!add_stream(&m_video_stream, m_output_format_context,
                     &video_codec))
         return false;
+#else
+    m_video_stream.tmp_pkt = av_packet_alloc();
+    if (!m_video_stream.tmp_pkt)
+    {
+        cerr << lock_ios()
+        << "ERROR: Could not allocate AVPacket\n";
+        return false;
+    }
+
+    AVCodecContext* codec_context;
+    codec_context = avcodec_alloc_context3(video_codec);
+    if (!codec_context)
+    {
+        cerr << lock_ios()
+             << "ERROR: Could not alloc an encoding context\n";
+        return false;
+    }
+    m_video_stream.enc = codec_context;
+    m_video_stream.next_pts = 0;
+
+    m_video_stream.enc->codec_id = (video_codec)->id;
+
+//          m_video_stream.enc->bit_rate = m_video_bitrate;
+    /* Resolution must be a multiple of two. */
+    m_video_stream.enc->width    = m_input_width;
+    m_video_stream.enc->height   = m_input_height;
+    /* timebase: This is the fundamental unit of time (in
+     * seconds) in terms of which frame timestamps are
+     * represented. For fixed-fps content, timebase should be
+     * 1/framerate and timestamp increments should be identical
+     * to 1. */
+    m_video_stream.enc->time_base = AVRational{m_input_frame_rate.den,
+                                               m_input_frame_rate.num};
+#if 0
+    m_video_stream.enc->gop_size      = 12; /* emit one intra frame every twelve frames at most */
+#endif
+
+    /*
+      For av1_qsv, pix_fmt options are:
+      AV_PIX_FMT_NV12, AV_PIX_FMT_P010, AV_PIX_FMT_QSV
+    */
+
+    if (m_isHDR)
+    {
+        if (m_verbose > 0)
+            cerr << lock_ios()
+                 << "Open video stream with HDR.\n";
+#if 1
+        // Full color range
+        m_video_stream.enc->color_range     = AVCOL_RANGE_JPEG;
+#else
+        // Limited color range
+        m_video_stream.enc->color_range     = AVCOL_RANGE_MPEG;
+#endif
+    }
+    else
+        m_video_stream.enc->color_range     = AVCOL_RANGE_UNSPECIFIED;
+
+    m_video_stream.enc->color_primaries = m_color_primaries;
+    m_video_stream.enc->color_trc       = m_color_trc;
+    m_video_stream.enc->colorspace      = m_color_space;
+
+    if (m_encoderType == EncoderType::QSV)
+        m_video_stream.enc->pix_fmt = AV_PIX_FMT_QSV;
+    else if (m_encoderType == EncoderType::VAAPI)
+        m_video_stream.enc->pix_fmt = AV_PIX_FMT_VAAPI;
+    else
+        m_video_stream.enc->pix_fmt = AV_PIX_FMT_YUV420P;
+
+    if (m_video_stream.enc->codec->capabilities & AV_CODEC_CAP_SLICE_THREADS)
+    {
+        m_video_stream.enc->thread_type = FF_THREAD_SLICE;
+        if (m_verbose > 1)
+            cerr << lock_ios()
+                 << " Video = THREAD SLICE\n";
+    }
+    else if (m_video_stream.enc->codec->capabilities & AV_CODEC_CAP_FRAME_THREADS)
+    {
+        m_video_stream.enc->thread_type = FF_THREAD_FRAME;
+        if (m_verbose > 1)
+            cerr << lock_ios()
+                 << " Video = THREAD FRAME\n";
+    }
+
+    if (m_verbose > 1)
+    {
+        cerr << lock_ios()
+             << "Output stream Video: " << m_video_stream.enc->width
+             << "x" << m_video_stream.enc->height
+             << (m_interlaced ? 'i' : 'p')
+#if 0
+             << " time_base: " << m_video_stream.st->time_base.num
+             << "/" << m_video_stream.st->time_base.den
+#endif
+             << "\n";
+    }
+#endif
 
     /* Now that all the parameters are set, we can open the audio and
      * video codecs and allocate the necessary encode buffers. */
@@ -590,8 +689,32 @@ bool OutputTS::open_container(void)
 
     if (!open_audio())
         return false;
+#if 0 // Do it in setVideoParams
     if (!open_video())
         return false;
+#else
+    m_video_stream.st = avformat_new_stream(m_output_format_context, NULL);
+    if (!m_video_stream.st)
+    {
+        cerr << lock_ios()
+             << "ERROR: Could not allocate stream\n";
+        return false;
+    }
+    m_video_stream.st->id = m_output_format_context->nb_streams-1;
+    m_video_stream.st->time_base = m_video_stream.enc->time_base;
+    /* copy the stream parameters to the muxer */
+    ret = avcodec_parameters_from_context(m_video_stream.st->codecpar,
+                                          m_video_stream.enc);
+    if (ret < 0)
+    {
+        cerr << lock_ios()
+             << "ERROR: Could not copy the stream parameters." << endl;
+        Shutdown();
+        return false;
+    }
+
+
+#endif
 
     if (m_verbose > 0)
         av_dump_format(m_output_format_context, 0, m_filename.c_str(), 1);
@@ -653,18 +776,25 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
                               AVRational time_base, double frame_duration,
                               AVRational frame_rate, bool is_hdr)
 {
-    unique_lock<mutex> lock(m_imagequeue_mutex);
+    unique_lock<mutex> lock(m_image_mutex);
 
-    m_image_queue_empty.wait(lock,
-                             [this]{return m_imagequeue.empty() ||
+    m_frame_queue_empty.wait(lock,
+                             [this]{return m_frame_queue.empty() ||
                                      !m_running.load(); });
+
+#if 1
+    cerr << lock_ios() << "######### setVideoParams. frame_queue.size: "
+         << m_frame_queue.size()
+         << " image_queue.size: "
+         << m_image_queue.size() << endl;
+#endif
 
     m_input_width = width;
     m_input_height = height;
     m_interlaced = interlaced;
     m_input_time_base = time_base;
     m_input_frame_duration = frame_duration;
-    m_input_frame_wait_ms = frame_duration / 10000 / 2;
+    m_input_frame_wait_ms = frame_duration / 10000;
     m_input_frame_rate = frame_rate;
     m_isHDR = is_hdr;
 
@@ -681,7 +811,13 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
                  << "Video Params set\n";
     }
 
-//    m_init_needed = true;
+    if (!open_video())
+    {
+        cerr << lock_ios() << "ERROR: Failed to create video stream\n";
+        return false;
+    }
+
+    m_init_needed = !m_audioIO.ChangePending();
 
     return true;
 }
@@ -690,8 +826,10 @@ OutputTS::~OutputTS(void)
 {
     Shutdown();
 
-    if (m_image_ready_thread.joinable())
-        m_image_ready_thread.join();
+    if (m_image_thread.joinable())
+        m_image_thread.join();
+    if (m_frame_thread.joinable())
+        m_frame_thread.join();
 
     close_stream(&m_video_stream);
     if (m_video_stream.hw_device_ctx != nullptr)
@@ -766,8 +904,9 @@ bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
         /* Write the compressed frame to the media file. */
 
 #if 0
-        log_packet("write_frame", fmt_ctx, pkt);
+        log_packet("wrt(audio)", fmt_ctx, pkt);
 #endif
+
         ret = av_interleaved_write_frame(fmt_ctx, pkt);
         /* pkt is now blank (av_interleaved_write_frame() takes ownership of
          * its contents and resets pkt), so that no unreferencing is necessary.
@@ -799,7 +938,6 @@ bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
 
     return ret == AVERROR_EOF ? false : true;
 }
-
 
 void OutputTS::close_container(void)
 {
@@ -917,6 +1055,13 @@ bool OutputTS::write_pcm_frame(AVFormatContext* oc, OutputStream* ost)
     /* convert samples from native format to destination codec format,
      * using the resampler */
     /* compute destination number of samples */
+#if 0
+    if (ost->swr_ctx->in_sample_rate < 1)
+    {
+        cerr << lock_ios() << "WARNING: write_pcm_frame, but sample rate is not set!\n";
+        return false;
+    }
+#endif
     dst_nb_samples = av_rescale(swr_get_delay(ost->swr_ctx,
                                               enc_ctx->sample_rate)
                                 + frame->nb_samples,
@@ -965,7 +1110,7 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
         return false;
 
     ost->timestamp = m_audioIO.TimeStamp();
-#if 1
+#if 0
             cerr << " write_bit ts: " << m_audio_stream.timestamp << endl;
 #endif
     pkt->pts = av_rescale_q(ost->timestamp,
@@ -1148,16 +1293,6 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
         }
     }
 
-    /* copy the stream parameters to the muxer */
-    ret = avcodec_parameters_from_context(ost->st->codecpar, ctx);
-    if (ret < 0)
-    {
-        cerr << lock_ios()
-             << "ERROR: Could not copy the stream parameters." << endl;
-        Shutdown();
-        return false;
-    }
-
     return true;
 }
 
@@ -1268,16 +1403,6 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     {
         cerr << lock_ios()
              << "ERROR: Could not allocate VAAPI video frame\n";
-        Shutdown();
-        return false;
-    }
-
-    /* copy the stream parameters to the muxer */
-    ret = avcodec_parameters_from_context(ost->st->codecpar, ctx);
-    if (ret < 0)
-    {
-        cerr << lock_ios()
-             << "ERROR: Could not copy the VAAPI stream parameters." << endl;
         Shutdown();
         return false;
     }
@@ -1416,27 +1541,15 @@ bool OutputTS::open_qsv(const AVCodec* codec,
         return false;
     }
 
-    /* copy the stream parameters to the muxer */
-    ret = avcodec_parameters_from_context(ost->st->codecpar, ost->enc);
-    if (ret < 0)
-    {
-        cerr << lock_ios()
-             << "ERROR: Could not copy the stream parameters." << endl;
-        Shutdown();
-        return false;
-    }
-
     return true;
 }
 
-bool OutputTS::nv_encode(AVFormatContext* oc,
+AVFrame* OutputTS::nv_encode(AVFormatContext* oc,
                          OutputStream* ost,
                          uint8_t* pImage, void* pEco,
                          int image_size,
                          int64_t timestamp)
 {
-    AVCodecContext* ctx = ost->enc;
-
 #if 0
     /* when we pass a frame to the encoder, it may keep a reference to it
      * internally; make sure we do not overwrite it here */
@@ -1444,7 +1557,7 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
     {
         cerr << lock_ios()
              << "ERROR: get_video_frame: Make frame writable failed.\n";
-        return false;
+        return nullptr;
     }
 #endif
 
@@ -1465,27 +1578,26 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
     }
 
     ost->frame->pts = av_rescale_q_rnd(timestamp, m_input_time_base,
-                                       ctx->time_base,
-                      static_cast<AVRounding>(AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX));
+                                       ost->enc->time_base,
+               static_cast<AVRounding>(AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX));
 
     ost->timestamp = timestamp;
     ost->next_pts = timestamp + 1;
 
-    return write_frame(oc, ost->enc, ost->frame, ost);
+    return ost->frame;
 }
 
-bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
-                                OutputStream* ost,
-                                uint8_t* pImage, void* pEco,
-                                int image_size,
-                                int64_t timestamp)
+AVFrame* OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
+                                    OutputStream* ost,
+                                    uint8_t* pImage, void* pEco,
+                                    int image_size,
+                                    int64_t timestamp)
 {
-    AVCodecContext* enc_ctx = ost->enc;
-    static AVFrame* hw_frame = nullptr;
+    AVFrame* hw_frame = nullptr;
     int    ret;
 
     int64_t pts = av_rescale_q(timestamp, m_input_time_base,
-                               enc_ctx->time_base);
+                               ost->enc->time_base);
 
     memcpy(ost->frame->data[0], pImage, image_size);
     memcpy(ost->frame->data[1], pImage + image_size, image_size / 2);
@@ -1506,17 +1618,17 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
         cerr << lock_ios()
              << "ERROR: Failed to allocate hw frame.";
         Shutdown();
-        return false;
+        return nullptr;
     }
 
-    if ((ret = av_hwframe_get_buffer(enc_ctx->hw_frames_ctx,
+    if ((ret = av_hwframe_get_buffer(ost->enc->hw_frames_ctx,
                                      hw_frame, 0)) < 0)
     {
         cerr << lock_ios()
              << "ERROR: Failed to get hw buffer: "
              << AV_ts2str(ret) << endl;
         Shutdown();
-        return false;
+        return nullptr;
     }
 
     if (!hw_frame->hw_frames_ctx)
@@ -1524,7 +1636,7 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
         cerr << lock_ios()
              << "ERROR: Failed to allocate hw frame CTX.\n";
         Shutdown();
-        return false;
+        return nullptr;
     }
 
     if ((ret = av_hwframe_transfer_data(hw_frame,
@@ -1534,85 +1646,96 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
              << "ERROR: failed transferring frame data to surface: "
              << AV_ts2str(ret) << endl;
         Shutdown();
-        return false;
+        return nullptr;
     }
 
     hw_frame->pts = pts;
     ost->timestamp = timestamp;
     ost->next_pts = timestamp + 1;
 
-    ret = write_frame(oc, enc_ctx, hw_frame, ost);
-    av_frame_free(&hw_frame);
-
-    return ret;
+    return hw_frame;
 }
 
-void OutputTS::Write(void)
+void OutputTS::mux(void)
 {
-    uint8_t* pImage;
-    void*    pEco;
-    int      image_size;
-    int64_t timestamp = -1;
+//    AVFrame* frame;
+//    AVPacket* pkt;
+    pkts_t::iterator Ipkt;
+    pkts_t  pkts;
+
+    int64_t  video_timestamp = -1;
+    bool     ready;
+    int      ret;
 
     while (m_running.load() == true)
     {
-        bool ready;
-        if (m_audioIO.CodecChanged(ready))
+        if (m_video_stream.enc && m_audioIO.CodecChanged(ready))
         {
-            m_audio_ready = m_init_needed = ready;
+            if (ready)
+            {
+                m_audio_ready = true;
+                if (!open_container())
+                {
+                    Shutdown();
+                    break;
+                }
+                m_audio_stream.timestamp = m_audioIO.TimeStamp();
+            }
         }
 
-        if (m_init_needed)
         {
-            if (!open_container())
+            std::unique_lock<std::mutex> lock(m_frame_mutex);
+#if 0
+            if (m_video_stream.st == nullptr || m_frame_queue.empty())
             {
-                Shutdown();
-                break;
+                m_frame_queue_empty.notify_one();
+                m_frame_ready.wait_for(lock,
+                                     std::chrono::milliseconds(m_input_frame_wait_ms));
+                continue;
             }
-            m_audio_stream.timestamp = m_audioIO.TimeStamp();
-#if 1
-            cerr << " Write() audio ts: [" << m_audioIO.BufId() << "] "
-                 << m_audio_stream.timestamp << endl;
+#else
+            m_frame_ready.wait(lock,
+                               [this]
+                               {
+                                   return !m_frame_queue.empty() ||
+                                       !m_running.load();
+                               }
+                               );
+            if (m_video_stream.st == nullptr || !m_running.load())
+            {
+                cerr << lock_ios() << "####### mux: TS not open. "
+                     << m_frame_queue.size() << " queued.\n";
+                continue;
+            }
 #endif
+
+            video_timestamp = m_frame_queue.front().timestamp;
+            pkts = m_frame_queue.front().pkts;
+            m_frame_queue.pop_front();
         }
 
+        for (Ipkt = pkts.begin(); Ipkt != pkts.end(); ++Ipkt)
         {
-            std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
-            if (m_imagequeue.empty())
+            /* rescale output packet timestamp values from codec to stream
+         * timebase */
+            av_packet_rescale_ts((*Ipkt), m_video_stream.enc->time_base,
+                                 m_video_stream.st->time_base);
+            (*Ipkt)->stream_index = m_video_stream.st->index;
+#if 0
+            log_packet("mux(video)", m_output_format_context, *Ipkt);
+#endif
+            if ((ret =
+                 av_interleaved_write_frame(m_output_format_context,
+                                            (*Ipkt))) < 0)
             {
-                m_image_queue_empty.notify_one();
-                m_image_ready.wait_for(lock,
-                             std::chrono::milliseconds(m_input_frame_wait_ms));
-                continue;
+                cerr << lock_ios()
+                     << "WARNING: Failed to write packet: " << AVerr2str(ret)
+                     << "\n";
             }
-
-            if (m_video_stream.enc == nullptr)
-                continue;
-
-            pImage    = m_imagequeue.front().image;
-            pEco      = m_imagequeue.front().pEco;
-            timestamp = m_imagequeue.front().timestamp;
-            image_size = m_imagequeue.front().image_size;
-
-            m_imagequeue.pop_front();
+            av_packet_free(&(*Ipkt));
         }
 
-        if (m_encoderType == EncoderType::NV)
-            nv_encode(m_output_format_context, &m_video_stream,
-                      pImage, pEco, image_size, timestamp);
-        else if (m_encoderType == EncoderType::QSV ||
-                 m_encoderType == EncoderType::VAAPI)
-            qsv_vaapi_encode(m_output_format_context, &m_video_stream,
-                             pImage, pEco, image_size, timestamp);
-        else
-        {
-            cerr << lock_ios()
-                 << "ERROR: Unknown encoderType.\n";
-            Shutdown();
-            return;
-        }
-
-#if 1
+#if 0
 //        if (m_video_stream.next_pts <= m_audio_stream.next_pts)
             cerr << lock_ios()
                  << "Write: video " << m_video_stream.next_pts << "\n"
@@ -1620,7 +1743,7 @@ void OutputTS::Write(void)
                  << "] " << m_audio_stream.next_pts << endl;
 #endif
 
-        while (m_video_stream.timestamp > m_audio_stream.timestamp)
+        while (m_audio_stream.timestamp < video_timestamp)
         {
             if (!write_audio_frame(m_output_format_context,
                                    &m_audio_stream))
@@ -1630,26 +1753,143 @@ void OutputTS::Write(void)
 #endif
                 break;
             }
+            m_audio_stream.timestamp = m_audioIO.TimeStamp();
+#if 0
+            cerr << " Write() audio ts: [" << m_audioIO.BufId() << "] "
+                 << m_audio_stream.timestamp << endl;
+#endif
         }
 
     }
 }
 
+void OutputTS::encode_video(void)
+{
+    AVFrame* frame;
+    uint8_t* pImage;
+    void*    pEco;
+    int      image_size;
+    int64_t  timestamp = -1;
+    int      ret;
+
+    while (m_running.load() == true)
+    {
+        {
+            std::unique_lock<std::mutex> lock(m_image_mutex);
+#if 0
+            if (m_image_queue.empty())
+            {
+                m_image_ready.wait_for(lock,
+                               std::chrono::milliseconds(m_input_frame_wait_ms));
+                continue;
+            }
+#else
+            m_image_ready.wait(lock,
+                               [this]{ return !m_image_queue.empty() ||
+                                       !m_running.load(); });
+            if (!m_running.load())
+                break;
+#endif
+
+            pImage    = m_image_queue.front().image;
+            pEco      = m_image_queue.front().pEco;
+            timestamp = m_image_queue.front().timestamp;
+            image_size = m_image_queue.front().image_size;
+
+            m_image_queue.pop_front();
+        }
+
+        if (m_video_stream.enc == nullptr)
+        {
+#if 1
+            cerr << lock_ios() << " encode_video: codec is not open\n";
+#endif
+            continue;
+        }
+
+        if (m_encoderType == EncoderType::NV)
+            frame = nv_encode(m_output_format_context, &m_video_stream,
+                              pImage, pEco, image_size, timestamp);
+        else if (m_encoderType == EncoderType::QSV ||
+                 m_encoderType == EncoderType::VAAPI)
+            frame = qsv_vaapi_encode(m_output_format_context, &m_video_stream,
+                                     pImage, pEco, image_size, timestamp);
+#if 0
+        else
+        {
+            cerr << lock_ios()
+                 << "ERROR: Unknown encoderType.\n";
+            Shutdown();
+            return;
+        }
+#endif
+
+        if (frame == nullptr)
+        {
+            cerr << lock_ios() << "WARNING: Failed to encode the video frame.\n";
+            continue;
+        }
+
+#if 0
+        cerr << lock_ios() << "Frame pts " << frame->pts << endl;
+#endif
+        if ((ret = avcodec_send_frame(m_video_stream.enc, frame)) < 0)
+        {
+            cerr << lock_ios()
+                 << "WARNING: Failed sending a frame to the encoder: "
+                 << AVerr2str(ret) << "\n";
+            Shutdown();
+            break;
+        }
+
+        pkts_t   pkts;
+        for (;;)
+        {
+            AVPacket* pkt = av_packet_alloc();
+            ret = avcodec_receive_packet(m_video_stream.enc, pkt);
+            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+                break;
+            if (ret < 0)
+            {
+                cerr << lock_ios()
+                     << "WARNING: Failed encoding a frame: AVerr2str(ret)\n";
+                Shutdown();
+                break;
+            }
+
+            pkt->stream_index = 1;
+
+            if (m_video_stream.prev_dts >= pkt->dts)
+                pkt->dts = m_video_stream.prev_dts + 1;
+            m_video_stream.prev_dts = pkt->dts;
+
+            if (pkt->pts < pkt->dts)
+                pkt->pts = pkt->dts;
+
+            pkts.push_back(pkt);
+        }
+
+        m_frame_queue.push_back({timestamp, pkts});
+        av_frame_free(&frame);
+        m_frame_ready.notify_one();
+    }
+}
+
 void OutputTS::ClearImageQueue(void)
 {
-    const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
+    const std::unique_lock<std::mutex> lock(m_image_mutex);
     imageque_t::iterator Iq;
-    for (Iq = m_imagequeue.begin(); Iq != m_imagequeue.end(); ++Iq)
+    for (Iq = m_image_queue.begin(); Iq != m_image_queue.end(); ++Iq)
         f_image_buffer_available((*Iq).image, (*Iq).pEco);
-    m_imagequeue.clear();
+    m_image_queue.clear();
 }
 
 bool OutputTS::AddVideoFrame(uint8_t* pImage, void* pEco,
                              int imageSize, int64_t timestamp)
 {
-    const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
+    const std::unique_lock<std::mutex> lock(m_image_mutex);
 
-    m_imagequeue.push_back(imagepkt_t{timestamp, pImage, pEco, imageSize});
+    m_image_queue.push_back(imagepkt_t{timestamp, pImage, pEco, imageSize});
 
     m_image_ready.notify_one();
     return m_running.load();

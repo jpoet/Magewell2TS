@@ -232,6 +232,10 @@ int AudioBuffer::Read(uint8_t* dest, int32_t len)
 
     if (Empty())
     {
+        std::unique_lock<std::mutex> lock(m_write_mutex);
+        m_data_avail.wait_for(lock, chrono::microseconds(1500),
+                              [this]{ return !Empty() || m_EoF.load(); });
+
         if (m_EoF.load() == true)
         {
             if (m_verbose > 2)
@@ -244,11 +248,8 @@ int AudioBuffer::Read(uint8_t* dest, int32_t len)
             return AVERROR_EOF;
         }
 
-        std::unique_lock<std::mutex> lock(m_write_mutex);
-        m_data_avail.wait_for(lock, chrono::milliseconds(1),
-                              [this]{ return !Empty() && !m_EoF.load(); });
-
-        return 0;
+        if (Empty())
+            return 0;
     }
 
 #if 0
@@ -321,7 +322,7 @@ int AudioBuffer::Read(uint8_t* dest, int32_t len)
     if (m_report_next > 0)
         --m_report_next;
 
-#if 1
+#if 0
     cerr << lock_ios()
          << "\n[" << m_id << "] TS: " << m_parent->m_timestamp
          << " sz " << sz << " Frames " << sz / m_frame_size << endl;
@@ -337,6 +338,7 @@ AVPacket* AudioBuffer::ReadSPDIF(void)
     cerr << "[" << m_id << "S]";
 #endif
 
+#if 0
     if (Size() < m_frame_size)
     {
         if (m_verbose > 1)
@@ -346,6 +348,7 @@ AVPacket* AudioBuffer::ReadSPDIF(void)
                  << m_frame_size << " desired.\n";
         return nullptr;
     }
+#endif
 
     AVPacket* pkt = av_packet_alloc();
     if (!pkt)
@@ -372,7 +375,7 @@ AVPacket* AudioBuffer::ReadSPDIF(void)
          << " size: " << pkt->size
          << endl;
 #endif
-#if 1
+#if 0
     cerr << lock_ios() << "[" << m_id << "] ReadSPDIF ret " << ret
          << " ts " << m_parent->m_timestamp << endl;
 
@@ -390,7 +393,7 @@ AVPacket* AudioBuffer::ReadSPDIF(void)
     }
 
 
-#if 1
+#if 0
     cerr << lock_ios() << "[" << m_id << "] ReadSPDIF Good "
          << " ts " << m_parent->m_timestamp << endl;
 
@@ -485,7 +488,7 @@ int64_t AudioBuffer::Seek(int64_t offset, int whence)
                 m_read -= desired;
         }
         m_parent->m_timestamp = get_timestamp(m_read /* - m_frame_size */);
-#if 1
+#if 0
         cerr << lock_ios() << " AudioBuffer::Seek TS "
              << m_parent->m_timestamp << endl;
 #endif
@@ -509,7 +512,7 @@ void AudioBuffer::set_mark(void)
 void AudioBuffer::return_to_mark(void)
 {
     Seek(m_mark - m_frame_cnt, SEEK_CUR);
-#if 1
+#if 0
     cerr << lock_ios() << "%%%%%%%%%%%%%%% "
          << "return_to_mark: " <<m_parent->m_timestamp << endl;
 #endif
@@ -519,7 +522,7 @@ static int read_packet(void* opaque, uint8_t* buf, int buf_size)
 {
     AudioBuffer* q = reinterpret_cast<AudioBuffer* >(opaque);
 
-#if 0
+#if 1
     return q->Read(buf, buf_size);
 #else
     int ret = q->Read(buf, buf_size);
@@ -966,6 +969,12 @@ AVPacket* AudioIO::ReadSPDIF(void)
     return (*Ibuf).ReadSPDIF();
 }
 
+bool AudioIO::ChangePending(void)
+{
+    std::unique_lock<std::mutex> lock(m_codec_mutex);
+    return m_codec_changed && !m_codec_initialized;
+}
+
 bool AudioIO::CodecChanged(bool & ready)
 {
     std::unique_lock<std::mutex> lock(m_codec_mutex);
@@ -1003,7 +1012,6 @@ void AudioIO::codec_changed(void)
         std::unique_lock<std::mutex> changed_lock(m_codec_mutex);
         m_changing.wait(changed_lock, /*  chrono::milliseconds(10)); */
                         [this]{ return m_state_changed || !m_running.load(); });
-
 #if 1
     cerr << lock_ios() << " codec_changed woken up  ##########################\n";
 #endif

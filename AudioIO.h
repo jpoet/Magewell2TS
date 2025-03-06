@@ -155,6 +155,7 @@ class AudioIO
     int     BytesPerSample(void) const { return m_bytes_per_sample; }
 
     bool    Bitstream(void) { return !m_lpcm; }
+    bool    ChangePending(void);
     bool    CodecChanged(bool & ready);
 
   private:

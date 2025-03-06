@@ -58,7 +58,6 @@ class OutputTS
                         AVRational frame_rate, bool is_hdr);
     bool addAudio(uint8_t* buf, size_t len, int64_t timestamp);
     void ClearImageQueue(void);
-    void Write(void);
     bool AddVideoFrame(uint8_t*  pImage, void* pEco,
                        int imageSize, int64_t timestamp);
 
@@ -95,7 +94,15 @@ class OutputTS
         int      image_size;
     };
     using imageque_t = std::deque<imagepkt_t>;
-    imageque_t m_imagequeue;
+    imageque_t m_image_queue;
+
+    using pkts_t = std::deque<AVPacket*>;
+    using frame_t = struct {
+        int64_t timestamp;
+        pkts_t  pkts;
+    };
+    using frameque_t = std::deque<frame_t>;
+    frameque_t m_frame_queue;
 
     bool add_stream(OutputStream* ost, AVFormatContext* oc,
                     const AVCodec* *codec);
@@ -108,6 +115,9 @@ class OutputTS
 
     bool write_frame(AVFormatContext* fmt_ctx, AVCodecContext* c,
                      AVFrame* frame, OutputStream* ost);
+    void mux(void);
+    void encode_video(void);
+
     // Audio output
     static AVFrame* alloc_audio_frame(enum AVSampleFormat sample_fmt,
                                       const AVChannelLayout* channel_layout,
@@ -127,12 +137,12 @@ class OutputTS
                     AVDictionary* opt_arg);
     bool open_qsv(const AVCodec* codec, OutputStream* ost,
                   AVDictionary* opt_arg);
-    bool nv_encode(AVFormatContext* oc, OutputStream* ost,
-                   uint8_t* pImage, void* pEco,
-                   int image_size, int64_t timestamp);
-    bool qsv_vaapi_encode(AVFormatContext* oc, OutputStream* ost,
-                          uint8_t*  pImage, void* pEco,
-                          int image_size, int64_t timestamp);
+    AVFrame* nv_encode(AVFormatContext* oc, OutputStream* ost,
+                       uint8_t* pImage, void* pEco,
+                       int image_size, int64_t timestamp);
+    AVFrame* qsv_vaapi_encode(AVFormatContext* oc, OutputStream* ost,
+                              uint8_t*  pImage, void* pEco,
+                              int image_size, int64_t timestamp);
 
     EncoderType     m_encoderType  { UNKNOWN };
 
@@ -176,10 +186,14 @@ class OutputTS
     StopCallback            f_stop;
     MagCallback             f_image_buffer_available;
 
-    std::thread             m_image_ready_thread;
-    std::mutex              m_imagequeue_mutex;
+    std::thread             m_image_thread;
     std::condition_variable m_image_ready;
-    std::condition_variable m_image_queue_empty;
+    std::mutex              m_image_mutex;
+
+    std::thread             m_frame_thread;
+    std::condition_variable m_frame_ready;
+    std::mutex              m_frame_mutex;
+    std::condition_variable m_frame_queue_empty;
 
     std::atomic<bool>       m_running      {true};
     bool                    m_init_needed  {false};
