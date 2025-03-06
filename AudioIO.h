@@ -50,7 +50,7 @@ class AudioBuffer
     int  Size(void) const { return m_audio_queue.size() * m_frame_size; }
     int  Tell(void) const { return m_total_read; }
 
-    void SetInit(bool val) { m_initialized = val; }
+    void SetInitState(bool val) { m_initialized = val; }
     bool Initialized(void) const { return m_initialized; }
     bool Flushed(void) const { return m_flushed; }
 
@@ -67,7 +67,6 @@ class AudioBuffer
   private:
     bool open_spdif_context(void);
     bool open_spdif(void);
-    int64_t get_timestamp(uint8_t* P) const;
 
     using frame_t = struct {
         AudioFrame  frame;
@@ -90,7 +89,7 @@ class AudioBuffer
     std::string      m_codec_name;
     int              m_num_channels         {-1};
     int              m_bytes_per_sample     {-1};
-    int              m_frame_size           {-1};
+    int32_t          m_frame_size           {-1};
     int              m_samples_per_frame    {-1};
     int              m_sample_rate          {-1};
     int              m_block_size           {-1};
@@ -109,9 +108,6 @@ class AudioBuffer
     int              m_total_write      {0};
     int              m_total_read       {0};
     size_t           m_pkts_read        {0};
-
-    size_t           m_missaligned_pkts {0};
-
 };
 
 class AudioIO
@@ -139,7 +135,7 @@ class AudioIO
     int     Size(void) const;
     bool    Empty(void) const;
     int64_t TimeStamp(void) const { return m_timestamp; }
-    void StateChanged(const std::string & where);
+    void    Reset(const std::string & where);
     std::string CodecName(void) const { return m_codec_name; }
     AVChannelLayout ChannelLayout(void) const { return m_channel_layout; }
     int     SampleRate(void) const { return m_sample_rate; }

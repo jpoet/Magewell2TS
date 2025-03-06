@@ -43,8 +43,6 @@ AudioBuffer& AudioBuffer::operator=(const AudioBuffer & rhs)
     m_id                   = rhs.m_id;
     m_verbose              = rhs.m_verbose;
 
-    PrintState("=", true);
-
     return *this;
 }
 
@@ -81,6 +79,7 @@ void AudioBuffer::Clear(void)
 {
     const unique_lock<mutex> lock(m_write_mutex);
     m_audio_queue.clear();
+    m_probed_queue.clear();
     if (m_verbose > 1)
         cerr << lock_ios()
              << "[" << m_id << "] audio buffer cleared.\n";
@@ -126,7 +125,7 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
 {
     uint8_t* dest = buf;
 
-    cerr << "{" << len << "}\n";
+//    cerr << "{" << len << "}\n";
 
     unique_lock<mutex> lock(m_write_mutex);
     if (m_audio_queue.empty())
@@ -139,7 +138,7 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
                      << "[" << m_id << "] AudioIO::Read: EOF\n";
             }
             m_flushed = true;
-            m_parent->StateChanged("Read flushed");
+            m_parent->Reset("Read flushed");
             return AVERROR_EOF;
         }
 
@@ -147,6 +146,9 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
         if (m_audio_queue.empty())
             return 0;
     }
+
+#if 0 // More reliable detection in OutputTS::write_bitstream_frame ?
+    static size_t m_missaligned_pkts = 0;
 
     if ((len % m_frame_size) % 32 != 0)
     {
@@ -168,10 +170,20 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
     }
     else
         ++m_missaligned_pkts = 0;
+#endif
 
     uint32_t frm = 0;
     while (frm + m_frame_size <= len)
     {
+        if (m_audio_queue.front().frame.size() !=
+            static_cast<size_t>(m_frame_size))
+        {
+            cerr << lock_ios() << "WARNING: Invalid audio frame size queued: "
+                 << m_audio_queue.front().frame.size() << " bytes!\n";
+            m_total_read += frm;
+            return frm;
+        }
+
         copy(m_audio_queue.front().frame.begin(),
              m_audio_queue.front().frame.end(), dest);
 
@@ -341,7 +353,7 @@ bool AudioBuffer::open_spdif(void)
             cerr << lock_ios()
                  << "WARNING: [" << m_id << "] Abort S/PDIF scan due EoF.\n";
             m_flushed = true;
-            m_parent->StateChanged("open_spdif EoF");
+            m_parent->Reset("open_spdif EoF");
             return false;
         }
 
@@ -431,10 +443,12 @@ bool AudioBuffer::open_spdif(void)
 
 void AudioBuffer::reset(void)
 {
-    SetInit(false);
+#if 0
+    SetInitState(false);
     m_missaligned_pkts = 0;
+#endif
     m_probing = true;
-    m_parent->StateChanged("Read out of sync");
+    m_parent->Reset("Read out of sync");
 }
 
 void AudioBuffer::initialized(void)
@@ -519,14 +533,18 @@ bool AudioIO::AddBuffer(int num_channels, bool is_lpcm,
                         int bytes_per_sample, int sample_rate,
                         int samples_per_frame, int frame_size)
 {
-    cerr << lock_ios()
-         << "AddBuffer(num_channels = " << num_channels << "\n"
-         << "               is_lpcm = " << (is_lpcm ? "true" : "false") << "\n"
-         << "      bytes_per_sample = " << bytes_per_sample << "\n"
-         << "           sample_rate = " << sample_rate << "\n"
-         << "     samples_per_frame = " << samples_per_frame << "\n"
-         << "            frame_size = " << frame_size << "\n"
-         << ")\n";
+    if (m_verbose > 3)
+    {
+        cerr << lock_ios()
+             << "AddBuffer(num_channels = " << num_channels << "\n"
+             << "               is_lpcm = "
+             << (is_lpcm ? "true" : "false") << "\n"
+             << "      bytes_per_sample = " << bytes_per_sample << "\n"
+             << "           sample_rate = " << sample_rate << "\n"
+             << "     samples_per_frame = " << samples_per_frame << "\n"
+             << "            frame_size = " << frame_size << "\n"
+             << ")\n";
+    }
 
     {
         const unique_lock<mutex> lock(m_buffer_mutex);
@@ -546,11 +564,9 @@ bool AudioIO::AddBuffer(int num_channels, bool is_lpcm,
                                          samples_per_frame, frame_size,
                                          this, m_verbose, m_buf_id++));
         Ibuf = m_buffer_q.end() - 1;
-
-//        (*Ibuf).OwnBuffer();
     }
 
-    StateChanged("AddBuffer");
+    Reset("AddBuffer");
 
     return true;
 }
@@ -706,14 +722,17 @@ bool AudioIO::CodecChanged(bool & ready)
     return m_codec_changed;
 }
 
-void AudioIO::StateChanged(const string & where)
+void AudioIO::Reset(const string & where)
 {
     {
         unique_lock<mutex> changed_lock(m_codec_mutex);
         m_state_changed = true;
+        m_codec_changed = true;
+        if (!m_buffer_q.empty())
+            m_buffer_q.front().SetInitState(false);
     }
     if (m_verbose > 2)
-        cerr << lock_ios() << "AudioIO StateChanged by " << where << endl;
+        cerr << lock_ios() << "AudioIO Reset by " << where << endl;
     m_changing.notify_one();
 }
 
@@ -800,7 +819,7 @@ void AudioIO::codec_changed(void)
         av_channel_layout_copy(&m_channel_layout, (*Ibuf).ChannelLayout());
 
         changed_lock.lock();
-        (*Ibuf).SetInit(true);
+        (*Ibuf).SetInitState(true);
         m_codec_initialized = true;
     }
 }

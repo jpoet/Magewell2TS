@@ -978,6 +978,7 @@ bool OutputTS::write_pcm_frame(AVFormatContext* oc, OutputStream* ost)
 bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
 {
     AVPacket* pkt = m_audioIO.ReadSPDIF();
+    static int dur_err_cnt = 0;
 
     if (pkt == nullptr)
     {
@@ -985,77 +986,27 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
         return false;
     }
 
-#if 0
-    if (abs(m_audioIO.TimeStamp() - ost->next_timestamp) > 5)
+    ost->timestamp = m_audioIO.TimeStamp();
+    if (abs(ost->timestamp - ost->next_timestamp) > 5)
     {
-        cerr << lock_ios() << "BITSTREAM audio: expected TS\n"
-             << ost->next_timestamp << " but got\n"
-             << m_audioIO.TimeStamp() << "\n";
+        /* When two packets in a row take longer than expected, this
+         * seems to indicate that the bitstream audio is out of
+         * sync. This often happens after seeking within a stream.
+         */
+        if (dur_err_cnt++ > 1)
+        {
+            m_audioIO.Reset("Invalid audio duration");
+            dur_err_cnt = 0;
+            return false;
+        }
     }
-#endif
+    else
+        dur_err_cnt = 0;
 
-#if 1
     int64_t duration = av_rescale_q(pkt->duration,
                                     ost->st->time_base,
                                     m_input_time_base);
-    ost->next_timestamp = m_audioIO.TimeStamp() + duration;
-#endif
-
-#if 0
-    if (duration == 0)
-    {
-        cerr << lock_ios() << "Audio pkt duration ZERO: "
-             << pkt->duration << " ST->TB: "
-             << ost->st->time_base.num << "/" << ost->st->time_base.den
-             << " IN->TB: " << m_input_time_base.num
-             << "/" << m_input_time_base.den << "\n";
-    }
-    else if (m_audioIO.TimeStamp() > ost->timestamp + duration)
-    {
-        uint8_t* data = new uint8_t[pkt->size];
-        memcpy(data, pkt->data, pkt->size);
-
-        cerr << lock_ios() << "write_bitstream_frame expected duration:\n"
-             << duration << " but actual duration:\n"
-             << m_audioIO.TimeStamp() - ost->timestamp << "\n";
-
-        while (m_audioIO.TimeStamp() > ost->timestamp + duration)
-        {
-            cerr << '.';
-#if 0
-            if (!m_audioIO.RescanSPDIF())
-                Shutdown();
-#endif
-            AVPacket* missing_pkt = av_packet_alloc();
-            ost->timestamp += duration;
-            missing_pkt->pts = av_rescale_q(ost->timestamp,
-                                            m_input_time_base,
-                                            ost->st->time_base);
-            missing_pkt->dts = missing_pkt->pts;
-            missing_pkt->stream_index = ost->st->index;
-            missing_pkt->size = pkt->size;
-            missing_pkt->data = data;
-            missing_pkt->flags = pkt->flags;
-            missing_pkt->duration = duration;
-
-            int ret = av_interleaved_write_frame(oc, missing_pkt);
-            /* pkt is now blank (av_interleaved_write_frame() takes
-             * ownership of its contents and resets pkt), so that no
-             * unreferencing is necessary.  This would be different if
-             * one used av_write_frame(). */
-            if (ret < 0)
-            {
-                cerr << lock_ios()
-                     << "WARNING: Failed to write missing audio packet: "
-                     << AVerr2str(ret) << "\n";
-                return false;
-            }
-        }
-    }
-#endif
-
-#if 1 // Use av_rescale_q
-    ost->timestamp = m_audioIO.TimeStamp();
+    ost->next_timestamp = ost->timestamp + duration;
     pkt->pts = av_rescale_q(ost->timestamp,
                             m_input_time_base,
                             ost->st->time_base);
@@ -1071,10 +1022,6 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
 
 //    pkt->duration = pkt->pts;
     pkt->dts = pkt->pts;
-#else // Use av_packet_rescale_ts
-    pkt->dts = pkt->pts = m_audioIO.TimeStamp();
-    av_packet_rescale_ts(pkt, m_input_time_base, ost->st->time_base);
-#endif
 
     pkt->stream_index = ost->st->index;
 
