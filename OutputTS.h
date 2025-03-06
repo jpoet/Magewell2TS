@@ -104,8 +104,10 @@ class OutputTS
     using frameque_t = std::deque<frame_t>;
     frameque_t m_frame_queue;
 
+#if 0
     bool add_stream(OutputStream* ost, AVFormatContext* oc,
                     const AVCodec* *codec);
+#endif
     static void close_stream(OutputStream* ost);
 
     bool open_audio(void);

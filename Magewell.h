@@ -44,7 +44,7 @@ class Magewell
                  int quality, int look_ahead, bool no_audio,
                  const std::string & gpu_device);
     void Stop(void);
-    void Reset(void) { m_reset.store(true); }
+    void Reset(void) { m_reset_audio.store(true); }
 
 
     bool operator! (void) { return m_fatal; }
@@ -88,7 +88,7 @@ class Magewell
     bool capture_audio(void);
 
   private:
-    int m_audio_buf_sz   {1768};
+    int m_audio_buf_frames   {4096};
 
     OutputTS*            m_out2ts  {nullptr};
     HCHANNEL             m_channel {nullptr};
@@ -118,8 +118,8 @@ class Magewell
 
     std::thread       m_audio_thread;
 
-    std::atomic<bool> m_running  {true};
-    std::atomic<bool> m_reset    {false};
+    std::atomic<bool> m_running     {true};
+    std::atomic<bool> m_reset_audio {true};
 
     std::function<bool (void)>  f_open_video;
 

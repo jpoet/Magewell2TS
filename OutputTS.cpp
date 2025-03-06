@@ -133,7 +133,7 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
         Shutdown();
     }
 
-    m_audio_ready = !m_has_audio;
+    m_audio_ready = false;
 
     m_image_thread = std::thread(&OutputTS::mux, this);
     m_frame_thread = std::thread(&OutputTS::encode_video, this);
@@ -159,6 +159,7 @@ void OutputTS::setLight(AVMasteringDisplayMetadata * display_meta,
     }
 }
 
+#if 0
 /* Add an output stream. */
 bool OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
                           const AVCodec* *codec)
@@ -328,6 +329,7 @@ bool OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
 
     return true;
 }
+#endif
 
 AVFrame* OutputTS::alloc_audio_frame(enum AVSampleFormat sample_fmt,
                                      const AVChannelLayout* channel_layout,
@@ -365,24 +367,14 @@ AVFrame* OutputTS::alloc_audio_frame(enum AVSampleFormat sample_fmt,
 
 bool OutputTS::open_audio(void)
 {
+    int idx;
+
     close_stream(&m_audio_stream);
 
-    if (!m_has_audio)
+    if (m_verbose > 1)
     {
-        if (m_verbose > 1)
-        {
-            cerr << lock_ios()
-                 << "\nAUDIO NOT READY." << endl;
-        }
-        return true;
-    }
-    else
-    {
-        if (m_verbose > 1)
-        {
-            cerr << lock_ios()
-                 << "Adding audio stream." << endl;
-        }
+        cerr << lock_ios()
+             << "Adding audio stream." << endl;
     }
 
     const AVCodec* audio_codec = nullptr;
@@ -396,49 +388,105 @@ bool OutputTS::open_audio(void)
         return true;
     }
 
-    if (!add_stream(&m_audio_stream, m_output_format_context, &audio_codec))
-        return false;
+    AVChannelLayout channel_layout = m_audioIO.ChannelLayout();
 
-    OutputStream* ost = &m_audio_stream;
+    m_audio_stream.tmp_pkt = av_packet_alloc();
+    if (!m_audio_stream.tmp_pkt)
+    {
+        cerr << lock_ios()
+             << "ERROR: Could not allocate AVPacket\n";
+        return false;
+    }
+
+    m_audio_stream.enc = avcodec_alloc_context3(audio_codec);
+    if (!m_audio_stream.enc)
+    {
+        cerr << lock_ios()
+             << "ERROR: Could not alloc an encoding context\n";
+        return false;
+    }
+    m_audio_stream.next_pts = 0;
+
+    m_audio_stream.enc->sample_fmt  = audio_codec->sample_fmts ?
+                            audio_codec->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
+    m_audio_stream.enc->bit_rate    = 192000;
+    if (audio_codec->supported_samplerates)
+    {
+        m_audio_stream.enc->sample_rate = audio_codec->supported_samplerates[0];
+        for (idx = 0; audio_codec->supported_samplerates[idx]; ++idx)
+        {
+            if (audio_codec->supported_samplerates[idx] == m_audioIO.SampleRate())
+            {
+                m_audio_stream.enc->sample_rate = m_audioIO.SampleRate();
+                break;
+            }
+        }
+    }
+    else
+        m_audio_stream.enc->sample_rate = 48000;
+
+    av_channel_layout_copy(&m_audio_stream.enc->ch_layout, &channel_layout);
+
+    if (m_audio_stream.enc->codec->capabilities & AV_CODEC_CAP_SLICE_THREADS)
+    {
+        m_audio_stream.enc->thread_type = FF_THREAD_SLICE;
+        if (m_verbose > 1)
+            cerr << lock_ios()
+                 << " Audio = THREAD SLICE\n";
+    }
+    else if (m_audio_stream.enc->codec->capabilities &
+             AV_CODEC_CAP_FRAME_THREADS)
+    {
+        m_audio_stream.enc->thread_type = FF_THREAD_FRAME;
+        if (m_verbose > 1)
+            cerr << lock_ios()
+                 << " Audio = THREAD FRAME\n";
+    }
+
 //    AVFormatContext* oc = m_output_format_context;
     const AVCodec* codec = audio_codec;
-    AVCodecContext* enc_ctx = m_audio_stream.enc;
+//    AVCodecContext* enc_ctx = m_audio_stream.enc;
     AVDictionary* opt = NULL;
     int nb_samples;
     int ret;
 
-    if ((ret = avcodec_open2(enc_ctx, codec, &opt)) < 0)
+    if ((ret = avcodec_open2(m_audio_stream.enc, codec, &opt)) < 0)
     {
         cerr << lock_ios()
              << "ERROR: Could not open audio codec: " << AVerr2str(ret) << endl;
         return false;
     }
 
-    if (enc_ctx->codec->capabilities & AV_CODEC_CAP_VARIABLE_FRAME_SIZE)
+    if (m_audio_stream.enc->codec->capabilities &
+        AV_CODEC_CAP_VARIABLE_FRAME_SIZE)
         nb_samples = 10000;
     else
     {
-        nb_samples = enc_ctx->frame_size;
+        nb_samples = m_audio_stream.enc->frame_size;
     }
 
-    ost->frame = alloc_audio_frame(enc_ctx->sample_fmt, &enc_ctx->ch_layout,
-                                   enc_ctx->sample_rate, nb_samples);
-    if (ost->frame == nullptr)
+    m_audio_stream.frame = alloc_audio_frame(m_audio_stream.enc->sample_fmt,
+                                             &m_audio_stream.enc->ch_layout,
+                                             m_audio_stream.enc->sample_rate,
+                                             nb_samples);
+    if (m_audio_stream.frame == nullptr)
     {
         Shutdown();
         return false;
     }
 
     if (m_audioIO.BytesPerSample() == 4)
-        ost->tmp_frame = alloc_audio_frame(AV_SAMPLE_FMT_S32,
-                                           &enc_ctx->ch_layout,
-                                           enc_ctx->sample_rate, nb_samples);
+        m_audio_stream.tmp_frame = alloc_audio_frame(AV_SAMPLE_FMT_S32,
+                                           &m_audio_stream.enc->ch_layout,
+                                           m_audio_stream.enc->sample_rate,
+                                                     nb_samples);
     else
-        ost->tmp_frame = alloc_audio_frame(AV_SAMPLE_FMT_S16,
-                                           &enc_ctx->ch_layout,
-                                           enc_ctx->sample_rate, nb_samples);
+        m_audio_stream.tmp_frame = alloc_audio_frame(AV_SAMPLE_FMT_S16,
+                                             &m_audio_stream.enc->ch_layout,
+                                              m_audio_stream.enc->sample_rate,
+                                                     nb_samples);
 
-    if (ost->tmp_frame == nullptr)
+    if (m_audio_stream.tmp_frame == nullptr)
     {
         cerr << lock_ios()
              << "ERROR: Unable to allocate a temporary audio frame.\n";
@@ -446,18 +494,9 @@ bool OutputTS::open_audio(void)
         return false;
     }
 
-    /* copy the stream parameters to the muxer */
-    ret = avcodec_parameters_from_context(ost->st->codecpar, enc_ctx);
-    if (ret < 0)
-    {
-        cerr << lock_ios()
-             << "ERROR: Could not copy the stream parameters\n";
-        return false;
-    }
-
     /* create resampler context */
-    ost->swr_ctx = swr_alloc();
-    if (!ost->swr_ctx)
+    m_audio_stream.swr_ctx = swr_alloc();
+    if (!m_audio_stream.swr_ctx)
     {
         cerr << lock_ios()
              << "ERROR: Could not allocate resampler context\n";
@@ -465,30 +504,30 @@ bool OutputTS::open_audio(void)
     }
 
     /* set options */
-    av_opt_set_chlayout  (ost->swr_ctx, "in_chlayout",
-                          &enc_ctx->ch_layout,     0);
-    av_opt_set_int       (ost->swr_ctx, "in_sample_rate",
-                          enc_ctx->sample_rate,    0);
+    av_opt_set_chlayout  (m_audio_stream.swr_ctx, "in_chlayout",
+                          &m_audio_stream.enc->ch_layout,     0);
+    av_opt_set_int       (m_audio_stream.swr_ctx, "in_sample_rate",
+                          m_audio_stream.enc->sample_rate,    0);
 
     if (m_audioIO.BytesPerSample() == 4)
     {
-        av_opt_set_sample_fmt(ost->swr_ctx, "in_sample_fmt",
+        av_opt_set_sample_fmt(m_audio_stream.swr_ctx, "in_sample_fmt",
                               AV_SAMPLE_FMT_S32, 0);
 //        ctx->bits_per_raw_sample = 24;
     }
     else
-        av_opt_set_sample_fmt(ost->swr_ctx, "in_sample_fmt",
+        av_opt_set_sample_fmt(m_audio_stream.swr_ctx, "in_sample_fmt",
                               AV_SAMPLE_FMT_S16, 0);
 
-    av_opt_set_chlayout  (ost->swr_ctx, "out_chlayout",
-                          &enc_ctx->ch_layout,     0);
-    av_opt_set_int       (ost->swr_ctx, "out_sample_rate",
-                          enc_ctx->sample_rate,    0);
-    av_opt_set_sample_fmt(ost->swr_ctx, "out_sample_fmt",
-                          enc_ctx->sample_fmt,     0);
+    av_opt_set_chlayout  (m_audio_stream.swr_ctx, "out_chlayout",
+                          &m_audio_stream.enc->ch_layout,     0);
+    av_opt_set_int       (m_audio_stream.swr_ctx, "out_sample_rate",
+                          m_audio_stream.enc->sample_rate,    0);
+    av_opt_set_sample_fmt(m_audio_stream.swr_ctx, "out_sample_fmt",
+                          m_audio_stream.enc->sample_fmt,     0);
 
     /* initialize the resampling context */
-    if ((ret = swr_init(ost->swr_ctx)) < 0)
+    if ((ret = swr_init(m_audio_stream.swr_ctx)) < 0)
     {
         cerr << lock_ios()
              << "ERROR: Failed to initialize the resampling context\n";
@@ -539,15 +578,13 @@ bool OutputTS::open_video(void)
         return false;
     }
 
-    AVCodecContext* codec_context;
-    codec_context = avcodec_alloc_context3(video_codec);
-    if (!codec_context)
+    m_video_stream.enc = avcodec_alloc_context3(video_codec);
+    if (!m_video_stream.enc)
     {
         cerr << lock_ios()
              << "ERROR: Could not alloc an encoding context\n";
         return false;
     }
-    m_video_stream.enc = codec_context;
     m_video_stream.next_pts = 0;
 
     m_video_stream.enc->codec_id = (video_codec)->id;
@@ -658,11 +695,13 @@ bool OutputTS::open_container(void)
     int ret;
     AVDictionary* opt = NULL;
 
+#if 0
     if (!m_audio_ready)
     {
         cerr << lock_ios() << "open_container: Audio not ready\n";
         return true;
     }
+#endif
 
     close_container();
     if (m_running.load() == false)
@@ -687,20 +726,15 @@ bool OutputTS::open_container(void)
 
     m_fmt = m_output_format_context->oformat;
 
-    if (!open_audio())
-        return false;
-#if 0 // Do it in setVideoParams
-    if (!open_video())
-        return false;
-#else
+    /* Video */
     m_video_stream.st = avformat_new_stream(m_output_format_context, NULL);
     if (!m_video_stream.st)
     {
         cerr << lock_ios()
-             << "ERROR: Could not allocate stream\n";
+             << "ERROR: Could not allocate video stream\n";
         return false;
     }
-    m_video_stream.st->id = m_output_format_context->nb_streams-1;
+    m_video_stream.st->id = 0;
     m_video_stream.st->time_base = m_video_stream.enc->time_base;
     /* copy the stream parameters to the muxer */
     ret = avcodec_parameters_from_context(m_video_stream.st->codecpar,
@@ -713,9 +747,39 @@ bool OutputTS::open_container(void)
         return false;
     }
 
+    if (m_audio_ready)
+    {
+        /* Audio */
+        m_audio_stream.st = avformat_new_stream(m_output_format_context, NULL);
+        if (!m_audio_stream.st)
+        {
+            cerr << lock_ios()
+                 << "ERROR: Could not allocate stream\n";
+            return false;
+        }
+        m_audio_stream.st->id = 1;
+        m_audio_stream.st->time_base =
+            (AVRational){ 1, m_audio_stream.enc->sample_rate };
+        if (m_verbose > 1)
+        {
+            cerr << lock_ios()
+                 << "Audio time base " << m_audio_stream.st->time_base.num << "/"
+                 << m_audio_stream.st->time_base.den << "\n";
+        }
+        /* copy the stream parameters to the muxer */
+        ret = avcodec_parameters_from_context(m_audio_stream.st->codecpar,
+                                              m_audio_stream.enc);
+        if (ret < 0)
+        {
+            cerr << lock_ios()
+                 << "ERROR: Could not copy the stream parameters\n";
+            return false;
+        }
+    }
 
-#endif
+// #endif  // ??
 
+    /* Transport Stream elements */
     if (m_verbose > 0)
         av_dump_format(m_output_format_context, 0, m_filename.c_str(), 1);
 
@@ -817,7 +881,11 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
         return false;
     }
 
+#if 1
     m_init_needed = !m_audioIO.ChangePending();
+#else
+    m_init_needed = true;
+#endif
 
     return true;
 }
@@ -957,7 +1025,7 @@ void OutputTS::close_container(void)
 
 void OutputTS::close_stream(OutputStream* ost)
 {
-    if (ost == nullptr)
+    if (ost->st == nullptr)
         return;
 
     if (ost->enc && ost->enc->hw_frames_ctx && ost->hw_device)
@@ -996,8 +1064,8 @@ void OutputTS::close_stream(OutputStream* ost)
          */
 #if 0
         avcodec_free_context(&ost->enc);
-        ost->enc = nullptr;
 #endif
+        ost->enc = nullptr;
     }
 
     /* Documentation says to call avformat_free_context, but
@@ -1005,8 +1073,8 @@ void OutputTS::close_stream(OutputStream* ost)
        the stream either, so... */
 #if 0
     avformat_free_context(&ost->st);
-    ost->st = nullptr;
 #endif
+    ost->st = nullptr;
 }
 
 /**************************************************************/
@@ -1107,7 +1175,10 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
     AVPacket* pkt = m_audioIO.ReadSPDIF();
 
     if (pkt == nullptr)
+    {
+        cerr << lock_ios() << "No data from S/PDIF\n";
         return false;
+    }
 
     ost->timestamp = m_audioIO.TimeStamp();
 #if 0
@@ -1177,7 +1248,17 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
 bool OutputTS::write_audio_frame(AVFormatContext* oc, OutputStream* ost)
 {
     if (m_audio_stream.st == nullptr /* || !m_audioIO.BlockReady() */)
+    {
+        cerr << lock_ios() << "Audio stream not open.\n";
         return false;
+    }
+
+    /* This only partially protects against a race condition! */
+    if (m_audioIO.ChangePending())
+    {
+        cerr << lock_ios() << "Audio codec change pending.\n";
+        return false;
+    }
 
     if (m_audioIO.Bitstream())
         return write_bitstream_frame(oc, ost);
@@ -1316,8 +1397,8 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
 
     if (ost->hw_device_ctx == nullptr)
     {
-        vector<std::string> drivers{ "iHD", "i965" };
-        vector<std::string>::iterator Idriver;
+        vector<string> drivers{ "iHD", "i965" };
+        vector<string>::iterator Idriver;
         for (Idriver = drivers.begin(); Idriver != drivers.end(); ++Idriver)
         {
             static string envstr = "LIBVA_DRIVER_NAME=" + *Idriver;
@@ -1669,55 +1750,94 @@ void OutputTS::mux(void)
 
     while (m_running.load() == true)
     {
-        if (m_video_stream.enc && m_audioIO.CodecChanged(ready))
+        if (m_audioIO.CodecChanged(ready))
         {
             if (ready)
             {
-                m_audio_ready = true;
-                if (!open_container())
+                if (!open_audio())
                 {
+                    cerr << lock_ios()
+                         << "ERROR: Failed to create audio stream\n";
                     Shutdown();
                     break;
                 }
                 m_audio_stream.timestamp = m_audioIO.TimeStamp();
+                m_init_needed = true;
+                m_audio_ready = true;
+            }
+            else
+            {
+                m_audio_ready = false;
+                close_stream(&m_audio_stream);
+            }
+        }
+
+        if (m_init_needed && (!m_has_audio || m_audio_stream.enc != nullptr) &&
+            m_video_stream.enc)
+        {
+            if (!open_container())
+            {
+                Shutdown();
+                break;
             }
         }
 
         {
-            std::unique_lock<std::mutex> lock(m_frame_mutex);
-#if 0
-            if (m_video_stream.st == nullptr || m_frame_queue.empty())
+            unique_lock<mutex> lock(m_frame_mutex);
+
+            if (m_frame_queue.empty())
             {
                 m_frame_queue_empty.notify_one();
                 m_frame_ready.wait_for(lock,
-                                     std::chrono::milliseconds(m_input_frame_wait_ms));
+                               chrono::milliseconds(m_input_frame_wait_ms));
                 continue;
             }
-#else
-            m_frame_ready.wait(lock,
-                               [this]
-                               {
-                                   return !m_frame_queue.empty() ||
-                                       !m_running.load();
-                               }
-                               );
-            if (m_video_stream.st == nullptr || !m_running.load())
-            {
-                cerr << lock_ios() << "####### mux: TS not open. "
-                     << m_frame_queue.size() << " queued.\n";
-                continue;
-            }
-#endif
 
             video_timestamp = m_frame_queue.front().timestamp;
+
+            if (m_video_stream.st == nullptr)
+            {
+#if 1
+                cerr << lock_ios() << "####### mux: TS not open. "
+                     << m_frame_queue.size() << " queued.\n";
+#if 0
+                cerr << lock_ios() << "video TS " << video_timestamp << "\n"
+                     << "audio TS " << m_audioIO.TimeStamp() << endl;
+#endif
+#endif
+                this_thread::sleep_for
+                    (chrono::milliseconds(m_input_frame_wait_ms));
+                continue;
+            }
+
+            if (!m_running.load())
+                break;
+
             pkts = m_frame_queue.front().pkts;
             m_frame_queue.pop_front();
+        }
+
+        while (m_audioIO.TimeStamp() < video_timestamp)
+        {
+#if 0
+//        if (m_video_stream.next_pts <= m_audio_stream.next_pts)
+            cerr << lock_ios()
+                 << "Write: video " << m_video_stream.timestamp << "\n"
+                 << "  audio [" << setw(2) << m_audioIO.BufId()
+                 << "] " << m_audioIO.TimeStamp()
+                 << " First " << m_audioIO.FirstTimeStamp() << endl;
+#endif
+
+            if (!write_audio_frame(m_output_format_context,
+                                   &m_audio_stream))
+                break;
         }
 
         for (Ipkt = pkts.begin(); Ipkt != pkts.end(); ++Ipkt)
         {
             /* rescale output packet timestamp values from codec to stream
-         * timebase */
+             * timebase
+             */
             av_packet_rescale_ts((*Ipkt), m_video_stream.enc->time_base,
                                  m_video_stream.st->time_base);
             (*Ipkt)->stream_index = m_video_stream.st->index;
@@ -1734,32 +1854,10 @@ void OutputTS::mux(void)
             }
             av_packet_free(&(*Ipkt));
         }
-
 #if 0
-//        if (m_video_stream.next_pts <= m_audio_stream.next_pts)
-            cerr << lock_ios()
-                 << "Write: video " << m_video_stream.next_pts << "\n"
-                 << "  audio [" << setw(2) << m_audioIO.BufId()
-                 << "] " << m_audio_stream.next_pts << endl;
+        cerr << lock_ios() << " Wrote video pkts for " << video_timestamp
+             << endl;
 #endif
-
-        while (m_audio_stream.timestamp < video_timestamp)
-        {
-            if (!write_audio_frame(m_output_format_context,
-                                   &m_audio_stream))
-            {
-#if 0
-                cerr << lock_ios() << "Write audio not ready\n";
-#endif
-                break;
-            }
-            m_audio_stream.timestamp = m_audioIO.TimeStamp();
-#if 0
-            cerr << " Write() audio ts: [" << m_audioIO.BufId() << "] "
-                 << m_audio_stream.timestamp << endl;
-#endif
-        }
-
     }
 }
 
@@ -1775,28 +1873,30 @@ void OutputTS::encode_video(void)
     while (m_running.load() == true)
     {
         {
-            std::unique_lock<std::mutex> lock(m_image_mutex);
-#if 0
+            unique_lock<mutex> lock(m_image_mutex);
             if (m_image_queue.empty())
             {
                 m_image_ready.wait_for(lock,
-                               std::chrono::milliseconds(m_input_frame_wait_ms));
+                               chrono::milliseconds(m_input_frame_wait_ms));
                 continue;
             }
-#else
-            m_image_ready.wait(lock,
-                               [this]{ return !m_image_queue.empty() ||
-                                       !m_running.load(); });
-            if (!m_running.load())
-                break;
-#endif
 
             pImage    = m_image_queue.front().image;
             pEco      = m_image_queue.front().pEco;
-            timestamp = m_image_queue.front().timestamp;
             image_size = m_image_queue.front().image_size;
+            timestamp = m_image_queue.front().timestamp;
 
             m_image_queue.pop_front();
+        }
+
+        if (m_audioIO.FirstTimeStamp() == -1 ||
+            m_audioIO.FirstTimeStamp() > timestamp)
+        {
+            cerr << lock_ios() << " Skipping video TS "
+                 << timestamp << " first audio TS " << m_audioIO.FirstTimeStamp()
+                 << endl;
+            f_image_buffer_available(pImage, pEco);
+            continue;
         }
 
         if (m_video_stream.enc == nullptr)
@@ -1814,7 +1914,6 @@ void OutputTS::encode_video(void)
                  m_encoderType == EncoderType::VAAPI)
             frame = qsv_vaapi_encode(m_output_format_context, &m_video_stream,
                                      pImage, pEco, image_size, timestamp);
-#if 0
         else
         {
             cerr << lock_ios()
@@ -1822,7 +1921,6 @@ void OutputTS::encode_video(void)
             Shutdown();
             return;
         }
-#endif
 
         if (frame == nullptr)
         {
@@ -1877,7 +1975,7 @@ void OutputTS::encode_video(void)
 
 void OutputTS::ClearImageQueue(void)
 {
-    const std::unique_lock<std::mutex> lock(m_image_mutex);
+    const unique_lock<mutex> lock(m_image_mutex);
     imageque_t::iterator Iq;
     for (Iq = m_image_queue.begin(); Iq != m_image_queue.end(); ++Iq)
         f_image_buffer_available((*Iq).image, (*Iq).pEco);
@@ -1887,7 +1985,7 @@ void OutputTS::ClearImageQueue(void)
 bool OutputTS::AddVideoFrame(uint8_t* pImage, void* pEco,
                              int imageSize, int64_t timestamp)
 {
-    const std::unique_lock<std::mutex> lock(m_image_mutex);
+    const unique_lock<mutex> lock(m_image_mutex);
 
     m_image_queue.push_back(imagepkt_t{timestamp, pImage, pEco, imageSize});
 

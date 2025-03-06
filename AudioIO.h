@@ -31,7 +31,7 @@ class AudioBuffer
     void Clear(void);
     bool RescanSPDIF(void);
     void OwnBuffer(void);
-    void setEoF(void) { m_EoF.store(true); }
+    void setEoF(void) { m_EoF.store(true); m_data_avail.notify_one(); }
     bool isEoF(void) const { return m_EoF.load() == true; }
     void PrintState(const std::string & where,
                     bool force = false) const;
@@ -52,7 +52,7 @@ class AudioBuffer
     int  Id(void) const { return m_id; }
     bool Empty(void) const { return m_read == m_write; }
     int  Size(void) const;
-    int  Tell(void) const { return m_frame_cnt; }
+    int  Tell(void) const { return m_total_read; }
 
     void SetInit(bool val) { m_initialized = val; }
     bool Initialized(void) const { return m_initialized; }
@@ -83,7 +83,6 @@ class AudioBuffer
     AVChannelLayout  m_channel_layout;
 
     int64_t* m_timestamps  {nullptr};
-    int      m_frame_cnt   {0};
     bool     m_own_buffer  {false};
 
     int              m_mark;
@@ -113,7 +112,8 @@ class AudioBuffer
 
     int              m_id               {-1};
     int              m_verbose          {0};
-    int              m_total            {0};
+    int              m_total_write      {0};
+    int              m_total_read       {0};
     int              m_report_next      {0};
 };
 
@@ -146,8 +146,12 @@ class AudioIO
     int     Size(void) const;
     bool    Empty(void) const;
     bool    BlockReady(void) const;
+#if 1
     int64_t TimeStamp(void) const { return m_timestamp; }
-
+    int64_t FirstTimeStamp(void) const { return m_first_timestamp; }
+#else
+    int64_t TimeStamp(void) const;
+#endif
     void StateChanged(const std::string & where);
     std::string CodecName(void) const { return m_codec_name; }
     AVChannelLayout ChannelLayout(void) const { return m_channel_layout; }
@@ -172,6 +176,7 @@ class AudioIO
 
     bool             m_lpcm             {true};
     int64_t          m_timestamp        {0LL};
+    int64_t          m_first_timestamp  {-1LL};
 
     std::thread      m_codec_changed_thread;
     mutable std::mutex m_buffer_mutex;
