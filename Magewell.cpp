@@ -935,13 +935,15 @@ bool Magewell::capture_audio(void)
             }
         }
 
+#if 0
         if (params_changed)
+#endif
         {
             params_changed = false;
 
             if (m_verbose > 1 /* && frame_cnt > 0 */)
                 cerr << lock_ios()
-                     << "WARNING: Audio signal CHANGED after "
+                     << "Audio signal CHANGED after "
                      << frame_cnt << " frames.\n";
 
             cur_channels = 0;
@@ -2114,7 +2116,7 @@ bool Magewell::capture_video(void)
             params_changed = false;
 
             if (m_verbose > 1 /* && frame_cnt > 0 */)
-                cerr << lock_ios() << "WARNING: Video signal CHANGED.\n";
+                cerr << lock_ios() << "Video signal CHANGED.\n";
 
             m_frame_ms = eco_params.llFrameDuration / 10000;
             m_frame_ms2 = m_frame_ms * 2;
@@ -2335,7 +2337,10 @@ bool Magewell::Capture(const string & video_codec, const string & preset,
     }
 
     if (!no_audio)
+    {
         m_audio_thread = thread(&Magewell::capture_audio, this);
+        this_thread::sleep_for(chrono::milliseconds(1));
+    }
 
     capture_video();
 

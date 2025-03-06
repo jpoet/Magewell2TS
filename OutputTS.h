@@ -73,7 +73,7 @@ class OutputTS
         /* pts of the next frame that will be generated */
         int64_t next_pts           {-1};
         int64_t timestamp          {-1};
-
+        int64_t next_timestamp     {-1};
         int samples_count          {0};
 
         AVFrame* frame             {nullptr};
@@ -108,7 +108,7 @@ class OutputTS
     bool add_stream(OutputStream* ost, AVFormatContext* oc,
                     const AVCodec* *codec);
 #endif
-    static void close_stream(OutputStream* ost);
+    static void close_encoder(OutputStream* ost);
 
     bool open_audio(void);
     bool open_video(void);

@@ -88,7 +88,7 @@ class Magewell
     bool capture_audio(void);
 
   private:
-    int m_audio_buf_frames   {4096};
+    int m_audio_buf_frames {12288};
 
     OutputTS*            m_out2ts  {nullptr};
     HCHANNEL             m_channel {nullptr};

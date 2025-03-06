@@ -511,34 +511,6 @@ void AudioBuffer::return_to_mark(void)
 #else
     Seek(0, SEEK_SET);
 #endif
-
-#if 1
-    m_parent->m_first_timestamp = get_timestamp(m_read);
-    cerr << lock_ios() << "return_to_mark: " << m_total_read
-         << " -> " << m_mark
-         << " ts " << m_parent->m_first_timestamp << endl;
-#endif
-
-
-//    if (get_timestamp(m_read) != m_parent->m_first_timestamp)
-    {
-        cerr << lock_ios() << "WARNING: return_to_mark ("
-             << setw(6) << (int)(m_read - m_begin) << ") got\n"
-             << get_timestamp(m_read) << " instead of\n"
-             << m_parent->m_first_timestamp << endl;
-    }
-
-
-#if 0
-    m_parent->m_timestamp = get_timestamp(m_read);
-    cerr << lock_ios() << "$$$$$$$$$$$$$$$$$$$ return_to_mark TS "
-         << m_parent->m_timestamp << endl;
-#endif
-
-#if 0
-    cerr << lock_ios() << "%%%%%%%%%%%%%%% "
-         << "return_to_mark: " <<m_parent->m_timestamp << endl;
-#endif
 }
 
 static int read_packet(void* opaque, uint8_t* buf, int buf_size)
@@ -628,12 +600,16 @@ bool AudioBuffer::open_spdif(void)
     int ret;
     int idx;
 
+#if 0
     int probe_size = static_cast<int>(m_end - m_begin) / 2;
     if (probe_size > m_block_size * 50)
         probe_size = m_block_size * 50;
 
     if (Size() < probe_size)
         return false;
+#else
+    int probe_size = 0;
+#endif
 
     if (m_verbose > 1)
         cerr << lock_ios()
@@ -726,6 +702,12 @@ bool AudioBuffer::open_spdif(void)
 
     m_codec_name = m_spdif_codec->name;
     m_channel_layout = AV_CHANNEL_LAYOUT_5POINT1;
+
+#if 1
+    cerr << lock_ios() << "Probed S/PDIF with "
+         << (int)(m_read - m_begin) << " bytes "
+         << (int)(m_read - m_begin) / m_frame_size << " buffer.\n";
+#endif
 
     /* The AVIO buffer is not timestamp aware, so discard it
      */
@@ -841,6 +823,13 @@ bool AudioIO::AddBuffer(uint8_t* Pbegin, uint8_t* Pend,
     StateChanged("AddBuffer");
 
     return true;
+}
+
+void AudioIO::PrintPointers(const std::string & where,
+                            bool force) const
+{
+    if (!m_buffer_q.empty())
+        return m_buffer_q.begin()->PrintPointers(where, force);
 }
 
 bool AudioIO::RescanSPDIF(void)
@@ -1019,9 +1008,8 @@ void AudioIO::StateChanged(const string & where)
         unique_lock<mutex> changed_lock(m_codec_mutex);
         m_state_changed = true;
     }
-    if (m_verbose > 1)
-        cerr << lock_ios() << "******************************* "
-             << "AudioIO StateChanged by " << where << endl;
+    if (m_verbose > 2)
+        cerr << lock_ios() << "AudioIO StateChanged by " << where << endl;
     m_changing.notify_one();
 }
 
@@ -1044,31 +1032,22 @@ void AudioIO::codec_changed(void)
             const unique_lock<mutex> lock(m_buffer_mutex);
             while (!m_buffer_q.empty() && m_buffer_q.front().Flushed())
             {
-#if 1
-                cerr << lock_ios() << "**************** codec_changed: Popped stale buffer\n";
-#endif
                 m_buffer_q.pop_front();
             }
 
             if (m_buffer_q.empty())
             {
                 m_codec_name.clear();
-#if 1
-                cerr << lock_ios() << " ############ Audio buffer Q empty\n";
-#endif
                 continue;
             }
 
             if (m_buffer_q.front().Initialized())
-            {
-                cerr << lock_ios() << "[" << m_buffer_q.front().Id()
-                     << "] ########### Audio already init.\n";
                 continue;
-            }
         }
 
+#if 0
         cerr << lock_ios() << "$$$$$$$$$$$$$$$$$$ AUDIO STATE CHANGED\n";
-
+#endif
         m_codec_changed = true;
         m_codec_initialized = false;
 

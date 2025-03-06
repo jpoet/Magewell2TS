@@ -133,6 +133,8 @@ class AudioIO
                    int bytes_per_sample, int sample_rate,
                    int samples_per_frame, int frame_size,
                    int64_t* timestamps);
+    void PrintPointers(const std::string & where,
+                       bool force = false) const;
     bool      RescanSPDIF(void);
     int       Add(uint8_t* Pframe, int len, int64_t timestamp);
     int64_t   Seek(int64_t offset, int whence);
