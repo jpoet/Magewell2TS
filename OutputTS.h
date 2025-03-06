@@ -48,15 +48,13 @@ class OutputTS
                   AVContentLightMetadata * light_meta);
 
     EncoderType encoderType(void) const { return m_encoderType; }
-    bool setAudioParams(uint8_t* capture_buf, size_t capture_buf_size,
-                        int num_channels, bool is_lpcm,
+    bool setAudioParams(int num_channels, bool is_lpcm,
                         int bytes_per_sample, int sample_rate,
-                        int samples_per_frame, int frame_size,
-                        int64_t* timestamps);
+                        int samples_per_frame, int frame_size);
     bool setVideoParams(int width, int height, bool interlaced,
                         AVRational time_base, double frame_duration,
                         AVRational frame_rate, bool is_hdr);
-    bool addAudio(uint8_t* buf, size_t len, int64_t timestamp);
+    bool addAudio(AudioBuffer::AudioFrame & buf, int64_t timestamp);
     void ClearImageQueue(void);
     bool AddVideoFrame(uint8_t*  pImage, void* pEco,
                        int imageSize, int64_t timestamp);
@@ -73,7 +71,9 @@ class OutputTS
         /* pts of the next frame that will be generated */
         int64_t next_pts           {-1};
         int64_t timestamp          {-1};
+#if 1
         int64_t next_timestamp     {-1};
+#endif
         int samples_count          {0};
 
         AVFrame* frame             {nullptr};

@@ -637,17 +637,13 @@ bool OutputTS::open_container(void)
     return true;
 }
 
-bool OutputTS::setAudioParams(uint8_t* capture_buf, size_t capture_buf_size,
-                              int num_channels, bool is_lpcm,
+bool OutputTS::setAudioParams(int num_channels, bool is_lpcm,
                               int bytes_per_sample, int sample_rate,
-                              int samples_per_frame, int frame_size,
-                              int64_t* timestamps)
+                              int samples_per_frame, int frame_size)
 {
-    if (!m_audioIO.AddBuffer(capture_buf, capture_buf + capture_buf_size,
-                             num_channels, is_lpcm,
+    if (!m_audioIO.AddBuffer(num_channels, is_lpcm,
                              bytes_per_sample, sample_rate,
-                             samples_per_frame, frame_size,
-                             timestamps))
+                             samples_per_frame, frame_size))
         return false;
 
     if (m_verbose > 2)
@@ -718,9 +714,9 @@ OutputTS::~OutputTS(void)
     av_freep(&m_content_light);
 }
 
-bool OutputTS::addAudio(uint8_t* buf, size_t len, int64_t timestamp)
+bool OutputTS::addAudio(AudioBuffer::AudioFrame & buf, int64_t timestamp)
 {
-    m_audioIO.Add(buf, len, timestamp);
+    m_audioIO.Add(buf, timestamp);
     return true;
 }
 
@@ -989,13 +985,14 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
         return false;
     }
 
+#if 0
     if (abs(m_audioIO.TimeStamp() - ost->next_timestamp) > 5)
     {
         cerr << lock_ios() << "BITSTREAM audio: expected TS\n"
              << ost->next_timestamp << " but got\n"
              << m_audioIO.TimeStamp() << "\n";
-        m_audioIO.PrintPointers("write", true);
     }
+#endif
 
 #if 1
     int64_t duration = av_rescale_q(pkt->duration,
@@ -1609,10 +1606,11 @@ void OutputTS::mux(void)
         if (m_audioIO.CodecChanged(ready))
         {
             close_container();
-#if 1
-            cerr << lock_ios() << " Audio changing: closing audio encoder\n";
-#endif
-            close_encoder(&m_audio_stream);
+            if (m_audio_stream.st)
+            {
+                cerr << lock_ios() << " Audio changing: closing audio encoder\n";
+                close_encoder(&m_audio_stream);
+            }
             if (ready)
             {
 #if 1
@@ -1717,8 +1715,7 @@ void OutputTS::mux(void)
             cerr << lock_ios()
                  << "Write: video " << m_video_stream.timestamp << "\n"
                  << "  audio [" << setw(2) << m_audioIO.BufId()
-                 << "] " << m_audioIO.TimeStamp()
-                 << " First " << m_audioIO.FirstTimeStamp() << endl;
+                 << "] " << m_audioIO.TimeStamp() << endl;
 #endif
 
             if (!write_audio_frame(m_output_format_context,
@@ -1759,16 +1756,6 @@ void OutputTS::encode_video(void)
             timestamp = m_image_queue.front().timestamp;
 
             m_image_queue.pop_front();
-        }
-
-        if (m_audioIO.FirstTimeStamp() == -1 ||
-            m_audioIO.FirstTimeStamp() > timestamp)
-        {
-            cerr << lock_ios() << " Skipping video TS "
-                 << timestamp << " first audio TS " << m_audioIO.FirstTimeStamp()
-                 << endl;
-            f_image_buffer_available(pImage, pEco);
-            continue;
         }
 
         if (m_video_stream.enc == nullptr)
