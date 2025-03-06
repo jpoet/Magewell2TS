@@ -27,7 +27,6 @@ AudioBuffer& AudioBuffer::operator=(const AudioBuffer & rhs)
     m_end           = rhs.m_end;
     m_write         = rhs.m_write;
     m_read          = rhs.m_read;
-    m_prev_frame    = rhs.m_prev_frame;
     m_lpcm          = rhs.m_lpcm;
     m_write_wrapped = rhs.m_write_wrapped;
 
@@ -180,49 +179,43 @@ void AudioBuffer::PrintPointers(const string & where, bool force) const
 
 int AudioBuffer::Add(uint8_t* Pframe, int len, int64_t timestamp)
 {
-    const std::unique_lock<std::mutex> lock(m_write_mutex);
-
-    m_total += len;
-
-    PrintPointers("      Add");
-    m_write = Pframe + len;
-
-    if (m_write > m_end)
     {
-        cerr << lock_ios()
-             << "WARNING: [" << m_id << "] Add audio to " << (uint64_t)Pframe
-             << " - " << m_write
-             << " which is greater than the end " << (uint64_t)m_end
-             << endl;
-    }
+        const std::unique_lock<std::mutex> lock(m_write_mutex);
 
-    if (m_prev_frame == m_end)
-    {
-        ++m_loop_cnt;
-        m_write_wrapped = true;
-    }
-    else if (Pframe < m_prev_frame)
-    {
-        cerr << lock_ios()
-             << "WARNING: [" << m_id << "] Add audio to " << (uint64_t)Pframe
-             << " which is less than " << (uint64_t)m_prev_frame
-             << " but not the begining " << (uint64_t)m_begin
-             << endl;
-    }
-    m_prev_frame = m_write;
+        m_total += len;
 
-    if (m_write_wrapped && m_read < m_write)
-    {
-        if (m_verbose > 1 && m_read != m_begin)
+        PrintPointers("      Add");
+        m_write = Pframe + len;
+
+        if (m_write > m_end)
         {
             cerr << lock_ios()
-                 << "INFO: [" << m_id
-                 << "] Overwrote buffer begin, moving read\n";
-            PrintPointers("      Add", true);
+                 << "WARNING: [" << m_id << "] Add audio to " << (uint64_t)Pframe
+                 << " - " << m_write
+                 << " which is greater than the end " << (uint64_t)m_end
+                 << endl;
         }
-        m_parent->f_grow_audio_buf();
-        m_read = m_write;
+
+        if (m_write == m_end)
+        {
+            m_write_wrapped = true;
+            m_write = m_begin;
+            ++m_loop_cnt;
+        }
+
+        if (!m_EoF && m_write <= m_read && (m_write + len) >= m_read)
+        {
+            // Next write /could/ pass the read point!
+            if (m_verbose > 0)
+            {
+                cerr << lock_ios() << "WARNING [" << m_id
+                     << "] Next AUDIO write could overwrite read position.\n";
+                PrintPointers("      Add", true);
+            }
+        }
     }
+
+    m_data_avail.notify_one();
 
     return 0;
 }
@@ -233,29 +226,42 @@ int AudioBuffer::Read(uint8_t* dest, int32_t len)
     int   sz;
     static int empty_cnt = 0;
 
+#if 0
+    cerr << "\n[" << m_id << "R]";
+#endif
+
     if (Empty())
     {
         if (m_EoF.load() == true)
         {
-            if (m_verbose > 3)
+            if (m_verbose > 2)
+            {
                 cerr << lock_ios()
                      << "[" << m_id << "] AudioIO::Read: EOF\n";
+            }
+            m_flushed = true;
+            m_parent->StateChanged("Read flushed");
             return AVERROR_EOF;
         }
 
-        ++empty_cnt;
+        std::unique_lock<std::mutex> lock(m_write_mutex);
+        m_data_avail.wait_for(lock, chrono::milliseconds(1),
+                              [this]{ return !Empty() && !m_EoF.load(); });
+
         return 0;
     }
 
+#if 0
     if (empty_cnt)
     {
-        if (m_verbose > 4)
+        if (m_verbose > 2)
             cerr << lock_ios()
                  << "INFO: [" << m_id
                  << "] AudioBuffer::Read: contiguously called " << empty_cnt
                  << " times with no data available.\n";
         empty_cnt = 0;
     }
+#endif
 
     const std::unique_lock<std::mutex> lock(m_write_mutex);
 
@@ -315,9 +321,9 @@ int AudioBuffer::Read(uint8_t* dest, int32_t len)
     if (m_report_next > 0)
         --m_report_next;
 
-#if 0
+#if 1
     cerr << lock_ios()
-         << "\nTS: " << m_parent->m_timestamp
+         << "\n[" << m_id << "] TS: " << m_parent->m_timestamp
          << " sz " << sz << " Frames " << sz / m_frame_size << endl;
 #endif
 
@@ -327,6 +333,10 @@ int AudioBuffer::Read(uint8_t* dest, int32_t len)
 
 AVPacket* AudioBuffer::ReadSPDIF(void)
 {
+#if 0
+    cerr << "[" << m_id << "S]";
+#endif
+
     if (Size() < m_frame_size)
     {
         if (m_verbose > 1)
@@ -357,10 +367,15 @@ AVPacket* AudioBuffer::ReadSPDIF(void)
 #if 0
     cerr << lock_ios()
          << "ReadSPDIF [" << pkt->stream_index << "] pts: " << pkt->pts
-         << " dts: " << AV_ts2str(pkt->dts)
-         << " duration: " << AV_ts2str(pkt->duration)
+         << " dts: " << AVerr2str(pkt->dts)
+         << " duration: " << AVerr2str(pkt->duration)
          << " size: " << pkt->size
          << endl;
+#endif
+#if 1
+    cerr << lock_ios() << "[" << m_id << "] ReadSPDIF ret " << ret
+         << " ts " << m_parent->m_timestamp << endl;
+
 #endif
 
     if (0 > ret)
@@ -374,6 +389,12 @@ AVPacket* AudioBuffer::ReadSPDIF(void)
         return nullptr;
     }
 
+
+#if 1
+    cerr << lock_ios() << "[" << m_id << "] ReadSPDIF Good "
+         << " ts " << m_parent->m_timestamp << endl;
+
+#endif
     return pkt;
 }
 
@@ -463,7 +484,11 @@ int64_t AudioBuffer::Seek(int64_t offset, int whence)
             else
                 m_read -= desired;
         }
-        m_parent->m_timestamp = get_timestamp(m_read - m_frame_size);
+        m_parent->m_timestamp = get_timestamp(m_read /* - m_frame_size */);
+#if 1
+        cerr << lock_ios() << " AudioBuffer::Seek TS "
+             << m_parent->m_timestamp << endl;
+#endif
     }
     else if (desired > 0)
     {
@@ -484,13 +509,23 @@ void AudioBuffer::set_mark(void)
 void AudioBuffer::return_to_mark(void)
 {
     Seek(m_mark - m_frame_cnt, SEEK_CUR);
+#if 1
+    cerr << lock_ios() << "%%%%%%%%%%%%%%% "
+         << "return_to_mark: " <<m_parent->m_timestamp << endl;
+#endif
 }
 
 static int read_packet(void* opaque, uint8_t* buf, int buf_size)
 {
     AudioBuffer* q = reinterpret_cast<AudioBuffer* >(opaque);
 
+#if 0
     return q->Read(buf, buf_size);
+#else
+    int ret = q->Read(buf, buf_size);
+    cerr << lock_ios() << " read_packet: " << ret << endl;
+    return ret;
+#endif
 }
 
 static int64_t seek_packet(void* opaque, int64_t offset, int whence)
@@ -583,20 +618,23 @@ bool AudioBuffer::open_spdif(void)
     if (m_spdif_format_context == nullptr)
         open_spdif_context();
 
-    int try_cnt = 3;
+    int try_cnt = 1;
     for (idx = 0; idx < try_cnt; ++idx)
     {
         if (m_EoF.load())
         {
             cerr << lock_ios()
                  << "WARNING: [" << m_id << "] Abort S/PDIF scan due EoF.\n";
+            m_flushed = true;
+            m_parent->StateChanged("open_spdif EoF");
             return false;
         }
 
         if ((ret = av_probe_input_buffer(m_spdif_avio_context,
                                          &fmt, "", nullptr, 0,
-                                         m_block_size * 50)) != 0)
+                                         /* m_block_size * 50 */ 0)) != 0)
         {
+#if 0
             if (!m_codec_name.empty())
             {
                 return_to_mark();
@@ -604,6 +642,7 @@ bool AudioBuffer::open_spdif(void)
                      << "Re-initilized S/PDIF. Skipping rest of bitstream scan.\n";
                 return true;
             }
+#endif
             cerr << lock_ios()
                  << "WARNING: [" << m_id << "] Failed to probe spdif input: "
                  << AVerr2str(ret) << endl;
@@ -686,7 +725,7 @@ bool AudioBuffer::DetectCodec(void)
     int idx = 0;
     while (m_EoF.load() == false)
     {
-        if (m_verbose > 0)
+        if (m_verbose > 5)
             cerr << lock_ios()
                  << "\n[" << m_id << "] Detect codec (try " << ++idx << ")\n";
 
@@ -696,7 +735,12 @@ bool AudioBuffer::DetectCodec(void)
             return true;
         }
         if (idx > 11)
+        {
+#if 0
             std::raise(SIGHUP);
+#endif
+            break;
+        }
     }
 
     setEoF();
@@ -715,10 +759,17 @@ int AudioBuffer::Size(void) const
 /************************************************
  * AudioIO
  ************************************************/
-AudioIO::AudioIO(AudioBufCallback grow_audio_buf, int verbose)
-    : f_grow_audio_buf(grow_audio_buf)
-    , m_verbose(verbose)
+AudioIO::AudioIO(int verbose)
+    : m_verbose(verbose)
 {
+    m_codec_changed_thread = std::thread(&AudioIO::codec_changed, this);
+}
+
+AudioIO::~AudioIO(void)
+{
+    m_running.store(false);
+    if (m_codec_changed_thread.joinable())
+        m_codec_changed_thread.join();
 }
 
 void AudioIO::Shutdown(void)
@@ -738,28 +789,33 @@ bool AudioIO::AddBuffer(uint8_t* Pbegin, uint8_t* Pend,
                         int samples_per_frame, int frame_size,
                         int64_t* timestamps)
 {
-    const std::unique_lock<std::mutex> lock(m_buffer_mutex);
-    buffer_que_t::iterator Ibuf;
-
-    if (m_running.load() == false)
-        return false;
-
-    if (!m_buffer_q.empty())
     {
+        const std::unique_lock<std::mutex> lock(m_buffer_mutex);
+        buffer_que_t::iterator Ibuf;
+
+        if (m_running.load() == false)
+            return false;
+
+        if (!m_buffer_q.empty())
+        {
+            Ibuf = m_buffer_q.end() - 1;
+            (*Ibuf).setEoF();
+        }
+
+        m_buffer_q.push_back(AudioBuffer(Pbegin, Pend,
+                                         num_channels, is_lpcm,
+                                         bytes_per_sample, sample_rate,
+                                         samples_per_frame, frame_size,
+                                         timestamps,
+                                         this, m_verbose, m_buf_id++));
         Ibuf = m_buffer_q.end() - 1;
-        (*Ibuf).setEoF();
+        (*Ibuf).OwnBuffer();
     }
 
-    m_buffer_q.push_back(AudioBuffer(Pbegin, Pend,
-                                     num_channels, is_lpcm,
-                                     bytes_per_sample, sample_rate,
-                                     samples_per_frame, frame_size,
-                                     timestamps,
-                                     this, m_verbose, m_buf_id++));
+#if 0
     m_codec_initialized = false;
-
-    Ibuf = m_buffer_q.end() - 1;
-    (*Ibuf).OwnBuffer();
+#endif
+    StateChanged("AddBuffer");
 
     return true;
 }
@@ -780,6 +836,17 @@ int AudioIO::BufId(void) const
 
     buffer_que_t::const_iterator Ibuf = m_buffer_q.begin();
     return (*Ibuf).Id();
+}
+
+bool AudioIO::Ready(void) const
+{
+    const std::unique_lock<std::mutex> lock(m_buffer_mutex);
+
+    if (m_buffer_q.empty())
+        return 0;
+
+    buffer_que_t::const_iterator Ibuf = m_buffer_q.begin();
+    return (*Ibuf).Initialized();
 }
 
 int AudioIO::Size(void) const
@@ -869,6 +936,12 @@ int AudioIO::Read(uint8_t* dest, int len)
     }
 
     buffer_que_t::iterator Ibuf = m_buffer_q.begin();
+#if 0
+    if ((*Ibuf).Id() > 1)
+    {
+        cerr << "[" << (*Ibuf).Id() << "] Read\n";
+    }
+#endif
     return (*Ibuf).Read(dest, len);
 }
 
@@ -882,54 +955,156 @@ AVPacket* AudioIO::ReadSPDIF(void)
     }
 
     buffer_que_t::iterator Ibuf = m_buffer_q.begin();
+
+#if 0
+    if ((*Ibuf).Id() > 1)
+    {
+        cerr << "[" << (*Ibuf).Id() << "] ReadSPDIF\n";
+    }
+#endif
+
     return (*Ibuf).ReadSPDIF();
 }
 
-bool AudioIO::CodecChanged(void)
+bool AudioIO::CodecChanged(bool & ready)
+{
+    std::unique_lock<std::mutex> lock(m_codec_mutex);
+    ready = m_codec_initialized;
+#if 0
+    cerr << lock_ios() << "CodecChanged: "
+         << (m_codec_changed ? "True" : "False") << " "
+         << (m_codec_initialized ? "True" : "False") << endl;
+#endif
+    if (m_codec_changed && m_codec_initialized)
+    {
+        m_codec_initialized = false;
+        m_codec_changed = false;
+        return true;
+    }
+    return m_codec_changed;
+}
+
+void AudioIO::StateChanged(const string & where)
 {
     {
-        const std::unique_lock<std::mutex> lock(m_buffer_mutex);
-        while (!m_buffer_q.empty() && m_buffer_q.front().isEoF())
-            m_buffer_q.pop_front();
-        if (m_buffer_q.empty())
-        {
-            m_codec_name.clear();
-            return true;
-        }
+        std::unique_lock<std::mutex> changed_lock(m_codec_mutex);
+        m_state_changed = true;
     }
+    if (m_verbose > 1)
+        cerr << lock_ios() << "******************************* "
+             << "AudioIO StateChanged by " << where << endl;
+    m_changing.notify_one();
+}
 
-    string codec = m_codec_name;
-    int    bytes_per_sample = m_bytes_per_sample;
-    int    sample_rate = m_sample_rate;
-
-    buffer_que_t::iterator Ibuf = m_buffer_q.begin();
-    if ((*Ibuf).CodecName().empty())
+void AudioIO::codec_changed(void)
+{
+    while (m_running.load())
     {
-        if (!(*Ibuf).DetectCodec())
-        {
-#if 0
-            cerr << lock_ios()
-             << "Failed to detect S/PDIF\n";
+        std::unique_lock<std::mutex> changed_lock(m_codec_mutex);
+        m_changing.wait(changed_lock, /*  chrono::milliseconds(10)); */
+                        [this]{ return m_state_changed || !m_running.load(); });
+
+#if 1
+    cerr << lock_ios() << " codec_changed woken up  ##########################\n";
 #endif
-            m_codec_name.clear();
-            return true;
-        }
-    }
+        m_state_changed = false;
 
-    if (m_codec_initialized == false)
-    {
-        m_codec_name = (*Ibuf).CodecName();
-        m_channel_layout = (*Ibuf).ChannelLayout();
-        m_sample_rate = (*Ibuf).SampleRate();
-        m_bytes_per_sample = (*Ibuf).BytesPerSample();
-        m_lpcm = (*Ibuf).LPCM();
+        if (!m_running.load())
+            break;
+
+        {
+            const std::unique_lock<std::mutex> lock(m_buffer_mutex);
+            while (!m_buffer_q.empty() && m_buffer_q.front().Flushed())
+            {
+#if 1
+                cerr << lock_ios() << "**************** codec_changed: Popped stale buffer\n";
+#endif
+                m_buffer_q.pop_front();
+            }
+
+            if (m_buffer_q.empty())
+            {
+                m_codec_name.clear();
+#if 1
+                cerr << lock_ios() << " ############ Audio buffer Q empty\n";
+#endif
+                continue;
+            }
+
+            if (m_buffer_q.front().Initialized())
+            {
+                cerr << lock_ios() << "[" << m_buffer_q.front().Id()
+                     << "] ########### Audio already init.\n";
+                continue;
+            }
+        }
+
+        cerr << lock_ios() << "$$$$$$$$$$$$$$$$$$ AUDIO STATE CHANGED\n";
+
+        m_codec_changed = true;
+        m_codec_initialized = false;
+        changed_lock.unlock();
+
+        buffer_que_t::iterator Ibuf = m_buffer_q.begin();
+        if ((*Ibuf).CodecName().empty())
+        {
+            if (!(*Ibuf).DetectCodec())
+            {
+#if 0
+                cerr << lock_ios()
+                     << "Failed to detect S/PDIF\n";
+#endif
+                m_codec_name.clear();
+                continue;
+            }
+        }
+
+        if (m_codec_name != (*Ibuf).CodecName())
+        {
+            if (m_verbose > 1)
+                cerr << lock_ios()
+                     << "Audio codec '" << m_codec_name << "' -> '"
+                     << (*Ibuf).CodecName() << "'" << endl;
+            m_codec_name = (*Ibuf).CodecName();
+        }
+
+        if (m_sample_rate != (*Ibuf).SampleRate())
+        {
+            if (m_verbose > 1)
+                cerr << lock_ios()
+                     << "Audio sample rate " << m_sample_rate << " -> "
+                     << (*Ibuf).SampleRate() << endl;
+            m_sample_rate = (*Ibuf).SampleRate();
+        }
+        if (m_bytes_per_sample != (*Ibuf).BytesPerSample())
+        {
+            if (m_verbose > 1)
+                cerr << lock_ios()
+                     << "Audio bytes per sample " << m_bytes_per_sample << " -> "
+                     << (*Ibuf).BytesPerSample() << endl;
+            m_bytes_per_sample = (*Ibuf).BytesPerSample();
+        }
+        if (m_lpcm != (*Ibuf).LPCM())
+        {
+            if (m_verbose > 1)
+                cerr << lock_ios()
+                     << "Audio " << (m_lpcm ? "LPCM" : "Bitstream")
+                     << " -> "
+                     << ((*Ibuf).LPCM() ? "LPCM" : "Bitstream")
+                     << endl;
+            m_lpcm = (*Ibuf).LPCM();
+        }
+
+        char layout_str[64] {0};
+        char new_layout_str[64] {0};
+        AVChannelLayout  layout = (*Ibuf).ChannelLayout();
+        av_channel_layout_describe(&m_channel_layout, layout_str, 64);
+        av_channel_layout_describe(&layout, new_layout_str, 64);
+        if (memcmp(layout_str, new_layout_str, 64) != 0)
+            m_channel_layout = layout;
+
+        changed_lock.lock();
+        (*Ibuf).SetInit(true);
         m_codec_initialized = true;
     }
-
-    if (codec == m_codec_name &&
-        bytes_per_sample == m_bytes_per_sample &&
-        sample_rate == m_sample_rate)
-        return false;
-
-    return true;
 }

@@ -762,14 +762,6 @@ int EcoEventWait(mw_event_t event, int timeout/*ms*/)
     return 0;
 }
 
-void Magewell::GrowAudioBuf(void)
-{
-    if (m_verbose > 0)
-        cerr << "WARNING: Growing audio buffer to " << m_audio_buf_sz << endl;
-    m_audio_buf_sz += 512;
-    m_reset.store(true);
-}
-
 bool Magewell::capture_audio(void)
 {
     int       idx;
@@ -901,13 +893,13 @@ bool Magewell::capture_audio(void)
 
             if (m_reset.load() == true)
             {
-                if (m_verbose > 0)
+                if (m_verbose > 1)
                     cerr << "Audio reset." << endl;
                 params_changed = true;
             }
             if (lpcm != audio_signal_status.bLPCM)
             {
-                if (m_verbose > 0)
+                if (m_verbose > 1)
                 {
                     if (lpcm)
                         cerr << "lPCM -> Bitstream" << endl;
@@ -919,7 +911,7 @@ bool Magewell::capture_audio(void)
             }
             if (sample_rate != audio_signal_status.dwSampleRate)
             {
-                if (m_verbose > 0)
+                if (m_verbose > 1)
                     cerr << "Audio sample rate " << sample_rate
                          << " -> " << audio_signal_status.dwSampleRate << endl;
                 sample_rate = audio_signal_status.dwSampleRate;
@@ -927,7 +919,7 @@ bool Magewell::capture_audio(void)
             }
             if (bytes_per_sample != even_bytes_per_sample)
             {
-                if (m_verbose > 0)
+                if (m_verbose > 1)
                     cerr << "Audio bytes per sample " << bytes_per_sample
                          << " -> " << even_bytes_per_sample << endl;
                 bytes_per_sample = even_bytes_per_sample;
@@ -935,7 +927,7 @@ bool Magewell::capture_audio(void)
             }
             if (valid_channels != audio_signal_status.wChannelValid)
             {
-                if (m_verbose > 0)
+                if (m_verbose > 1)
                     cerr << "Audio channels " << valid_channels
                          << " -> " << audio_signal_status.wChannelValid << endl;
                 valid_channels = audio_signal_status.wChannelValid;
@@ -2011,6 +2003,13 @@ bool Magewell::capture_video(void)
               continue;
         }
 
+        if (videoSignalStatus.bInterlaced)
+        {
+            if (err_cnt++ % 25 && m_verbose > 0)
+                cerr << lock_ios() << "REJECTING interlaced video.\n";
+            continue;
+        }
+
         if (update_HDRinfo())
         {
             color_changed = update_HDRcolorspace(videoSignalStatus);
@@ -2292,7 +2291,6 @@ bool Magewell::Capture(const string & video_codec, const string & preset,
     {
         m_out2ts = new OutputTS(m_verbose, video_codec, preset, quality,
                                 look_ahead, no_audio, gpu_device,
-                                [=](void) { this->GrowAudioBuf(); },
                                 [=](void) { this->Stop(); },
                                 [=](uint8_t* ib, void* eb)
                                 { this->eco_image_buffer_available(ib, eb); });
@@ -2301,7 +2299,6 @@ bool Magewell::Capture(const string & video_codec, const string & preset,
     {
         m_out2ts = new OutputTS(m_verbose, video_codec, preset, quality,
                                 look_ahead, no_audio, gpu_device,
-                                [=](void) { this->GrowAudioBuf(); },
                                 [=](void) { this->Stop(); },
                                 [=](uint8_t* ib, void* eb)
                                 { this->pro_image_buffer_available(ib, eb); });

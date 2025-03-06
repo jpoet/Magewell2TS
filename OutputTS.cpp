@@ -106,9 +106,9 @@ static void log_packet(string where, const AVFormatContext* fmt_ctx,
 OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
                    const string & preset, int quality, int look_ahead,
                    bool no_audio, const string & device,
-                   AudioIO::AudioBufCallback grow_audio_buf, StopCallback stop,
+                   StopCallback stop,
                    MagCallback image_buffer_avail)
-    : m_audioIO(grow_audio_buf, verbose_level)
+    : m_audioIO(verbose_level)
     , m_verbose(verbose_level)
     , m_has_audio(!no_audio)
     , m_video_codec_name(video_codec_name)
@@ -364,26 +364,33 @@ AVFrame* OutputTS::alloc_audio_frame(enum AVSampleFormat sample_fmt,
 
 bool OutputTS::open_audio(void)
 {
+    close_stream(&m_audio_stream);
+
     if (!m_has_audio)
     {
-        cerr << lock_ios()
-             << "\nAUDIO NOT READY." << endl;
+        if (m_verbose > 1)
+        {
+            cerr << lock_ios()
+                 << "\nAUDIO NOT READY." << endl;
+        }
         return true;
     }
     else
-        cerr << lock_ios()
-             << "Adding audio stream." << endl;
-
-    close_stream(&m_audio_stream);
+    {
+        if (m_verbose > 1)
+        {
+            cerr << lock_ios()
+                 << "Adding audio stream." << endl;
+        }
+    }
 
     const AVCodec* audio_codec = nullptr;
 
     audio_codec = avcodec_find_encoder_by_name(m_audioIO.CodecName().c_str());
-
     if (!audio_codec)
     {
         cerr << lock_ios()
-             << "ERROR: Could not find audio encoder for '"
+             << "WARNING: Could not find audio encoder for '"
              << m_audioIO.CodecName() << "'\n";
         return true;
     }
@@ -552,6 +559,12 @@ bool OutputTS::open_container(void)
     int ret;
     AVDictionary* opt = NULL;
 
+    if (!m_audio_ready)
+    {
+        cerr << lock_ios() << "open_container: Audio not ready\n";
+        return true;
+    }
+
     close_container();
     if (m_running.load() == false)
         return false;
@@ -612,6 +625,7 @@ bool OutputTS::open_container(void)
         cerr << lock_ios()
              << "\n================== open_container end ==================\n";
 #endif
+    m_init_needed = false;
     return true;
 }
 
@@ -667,7 +681,7 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
                  << "Video Params set\n";
     }
 
-    m_init_needed = true;
+//    m_init_needed = true;
 
     return true;
 }
@@ -808,9 +822,10 @@ void OutputTS::close_stream(OutputStream* ost)
     if (ost == nullptr)
         return;
 
-    if (ost->hw_device)
+    if (ost->enc && ost->enc->hw_frames_ctx && ost->hw_device)
     {
         av_buffer_unref(&ost->enc->hw_frames_ctx);
+        ost->enc->hw_frames_ctx = nullptr;
         ost->hw_device = false;
     }
 
@@ -877,7 +892,10 @@ AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
     if (m_audioIO.Read(q, bytes) == 0)
         return nullptr;
 
-    frame->pts = m_audioIO.TimeStamp();
+    ost->timestamp = frame->pts = m_audioIO.TimeStamp();
+#if 0
+            cerr << " get_pcm ts: " << m_audio_stream.timestamp << endl;
+#endif
     ost->frame->pts = av_rescale_q(frame->pts, m_input_time_base,
                                    ost->enc->time_base);
 
@@ -930,7 +948,7 @@ bool OutputTS::write_pcm_frame(AVFormatContext* oc, OutputStream* ost)
     }
 
     frame = ost->frame;
-    frame->pts = av_rescale_q(m_audioIO.TimeStamp(),
+    frame->pts = av_rescale_q(ost->timestamp,
                               m_input_time_base,
                               enc_ctx->time_base);
 
@@ -946,7 +964,11 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
     if (pkt == nullptr)
         return false;
 
-    pkt->pts = av_rescale_q(m_audioIO.TimeStamp(),
+    ost->timestamp = m_audioIO.TimeStamp();
+#if 1
+            cerr << " write_bit ts: " << m_audio_stream.timestamp << endl;
+#endif
+    pkt->pts = av_rescale_q(ost->timestamp,
                             m_input_time_base,
                             ost->st->time_base);
 
@@ -978,7 +1000,7 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
     ost->prev_audio_pts = pkt->pts;
 
     /* Frame size passed from magewell includes all channels */
-    ost->next_pts = m_audioIO.TimeStamp() + ost->frame->nb_samples;
+    ost->next_pts = ost->timestamp + ost->frame->nb_samples;
 
     pkt->duration = pkt->pts;
     pkt->dts = pkt->pts;
@@ -1009,13 +1031,7 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
  */
 bool OutputTS::write_audio_frame(AVFormatContext* oc, OutputStream* ost)
 {
-    if (m_audioIO.CodecChanged())
-    {
-        m_init_needed = true;
-        return false;
-    }
-
-    if (!m_audioIO.BlockReady())
+    if (m_audio_stream.st == nullptr /* || !m_audioIO.BlockReady() */)
         return false;
 
     if (m_audioIO.Bitstream())
@@ -1452,6 +1468,7 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
                                        ctx->time_base,
                       static_cast<AVRounding>(AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX));
 
+    ost->timestamp = timestamp;
     ost->next_pts = timestamp + 1;
 
     return write_frame(oc, ost->enc, ost->frame, ost);
@@ -1521,6 +1538,7 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
     }
 
     hw_frame->pts = pts;
+    ost->timestamp = timestamp;
     ost->next_pts = timestamp + 1;
 
     ret = write_frame(oc, enc_ctx, hw_frame, ost);
@@ -1531,23 +1549,17 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
 
 void OutputTS::Write(void)
 {
-    std::unique_lock<std::mutex> lock(m_imagepkt_mutex);
-
     uint8_t* pImage;
     void*    pEco;
     int      image_size;
-    uint64_t timestamp;
+    int64_t timestamp = -1;
 
     while (m_running.load() == true)
     {
-        m_image_ready.wait_for(lock,
-                      std::chrono::milliseconds(m_input_frame_wait_ms));
-
-        if (!m_audio_ready)
+        bool ready;
+        if (m_audioIO.CodecChanged(ready))
         {
-            if (m_audioIO.CodecChanged())
-                continue;
-            m_audio_ready = true;
+            m_audio_ready = m_init_needed = ready;
         }
 
         if (m_init_needed)
@@ -1557,54 +1569,69 @@ void OutputTS::Write(void)
                 Shutdown();
                 break;
             }
-            m_init_needed = false;
+            m_audio_stream.timestamp = m_audioIO.TimeStamp();
+#if 1
+            cerr << " Write() audio ts: [" << m_audioIO.BufId() << "] "
+                 << m_audio_stream.timestamp << endl;
+#endif
         }
 
-        while (!m_init_needed && m_running.load() == true)
         {
-            if (m_has_audio)
+            std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
+            if (m_imagequeue.empty())
+            {
+                m_image_queue_empty.notify_one();
+                m_image_ready.wait_for(lock,
+                             std::chrono::milliseconds(m_input_frame_wait_ms));
+                continue;
+            }
+
+            if (m_video_stream.enc == nullptr)
+                continue;
+
+            pImage    = m_imagequeue.front().image;
+            pEco      = m_imagequeue.front().pEco;
+            timestamp = m_imagequeue.front().timestamp;
+            image_size = m_imagequeue.front().image_size;
+
+            m_imagequeue.pop_front();
+        }
+
+        if (m_encoderType == EncoderType::NV)
+            nv_encode(m_output_format_context, &m_video_stream,
+                      pImage, pEco, image_size, timestamp);
+        else if (m_encoderType == EncoderType::QSV ||
+                 m_encoderType == EncoderType::VAAPI)
+            qsv_vaapi_encode(m_output_format_context, &m_video_stream,
+                             pImage, pEco, image_size, timestamp);
+        else
+        {
+            cerr << lock_ios()
+                 << "ERROR: Unknown encoderType.\n";
+            Shutdown();
+            return;
+        }
+
+#if 1
+//        if (m_video_stream.next_pts <= m_audio_stream.next_pts)
+            cerr << lock_ios()
+                 << "Write: video " << m_video_stream.next_pts << "\n"
+                 << "  audio [" << setw(2) << m_audioIO.BufId()
+                 << "] " << m_audio_stream.next_pts << endl;
+#endif
+
+        while (m_video_stream.timestamp > m_audio_stream.timestamp)
+        {
+            if (!write_audio_frame(m_output_format_context,
+                                   &m_audio_stream))
             {
 #if 0
-                cerr << lock_ios()
-                     << "Write: video " << m_video_stream.next_pts << "\n"
-                     << "  audio [" << setw(2) << m_audioIO.BufId()
-                     << "] " << m_audio_stream.next_pts << endl;
+                cerr << lock_ios() << "Write audio not ready\n";
 #endif
-                while (m_video_stream.next_pts > m_audio_stream.next_pts)
-                {
-                    if (!write_audio_frame(m_output_format_context,
-                                           &m_audio_stream))
-                        break;
-                }
-            }
-
-            {
-                const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
-                if (m_imagequeue.empty())
-                    break;
-
-                pImage    = m_imagequeue.front().image;
-                pEco      = m_imagequeue.front().pEco;
-                timestamp = m_imagequeue.front().timestamp;
-                image_size = m_imagequeue.front().image_size;
-                m_imagequeue.pop_front();
-            }
-
-            if (m_encoderType == EncoderType::NV)
-                nv_encode(m_output_format_context, &m_video_stream,
-                          pImage, pEco, image_size, timestamp);
-            else if (m_encoderType == EncoderType::QSV ||
-                     m_encoderType == EncoderType::VAAPI)
-                qsv_vaapi_encode(m_output_format_context, &m_video_stream,
-                                 pImage, pEco, image_size, timestamp);
-            else
-            {
-                cerr << lock_ios() << "ERROR: Unknown encoderType.\n";
-                Shutdown();
-                return;
+                break;
             }
         }
-        m_image_queue_empty.notify_one();
+
     }
 }
 

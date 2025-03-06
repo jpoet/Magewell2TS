@@ -54,6 +54,10 @@ class AudioBuffer
     int  Size(void) const;
     int  Tell(void) const { return m_frame_cnt; }
 
+    void SetInit(bool val) { m_initialized = val; }
+    bool Initialized(void) const { return m_initialized; }
+    bool Flushed(void) const { return m_flushed; }
+
     std::string CodecName(void) const { return m_codec_name; }
     AVChannelLayout ChannelLayout(void) const { return m_channel_layout; }
     bool LPCM(void) const { return m_lpcm; }
@@ -75,7 +79,6 @@ class AudioBuffer
     uint8_t* m_end           {nullptr};
     uint8_t* m_write         {nullptr};
     uint8_t* m_read          {nullptr};
-    uint8_t* m_prev_frame    {nullptr};
     bool     m_write_wrapped {false};
     AVChannelLayout  m_channel_layout;
 
@@ -101,8 +104,12 @@ class AudioBuffer
     int              m_block_size           {-1};
 
     AudioIO*         m_parent               {nullptr};
+    bool             m_initialized          {false};
+    bool             m_flushed              {false};
 
     std::mutex       m_write_mutex;
+    std::condition_variable m_new_buffer;
+    std::condition_variable m_data_avail;
 
     int              m_id               {-1};
     int              m_verbose          {0};
@@ -117,8 +124,8 @@ class AudioIO
   public:
     using AudioBufCallback = std::function<void (void)>;
 
-    AudioIO(AudioBufCallback grow_audio_buf, int verbose = 0);
-    ~AudioIO(void) { m_running.store(false); }
+    AudioIO(int verbose = 0);
+    ~AudioIO(void);
     void Shutdown(void);
 
     bool AddBuffer(uint8_t* Pbegin, uint8_t* Pend,
@@ -132,6 +139,7 @@ class AudioIO
     int       Read(uint8_t* dest, int32_t len);
     AVPacket* ReadSPDIF(void);
 
+    bool    Ready(void) const;
     int     BufId(void) const;
     int     LastBufId(void) const { return m_buf_id - 1; }
     int     Buffers(void) const { return m_buffer_q.size(); }
@@ -140,15 +148,17 @@ class AudioIO
     bool    BlockReady(void) const;
     int64_t TimeStamp(void) const { return m_timestamp; }
 
+    void StateChanged(const std::string & where);
     std::string CodecName(void) const { return m_codec_name; }
     AVChannelLayout ChannelLayout(void) const { return m_channel_layout; }
     int     SampleRate(void) const { return m_sample_rate; }
     int     BytesPerSample(void) const { return m_bytes_per_sample; }
 
     bool    Bitstream(void) { return !m_lpcm; }
-    bool    CodecChanged(void);
+    bool    CodecChanged(bool & ready);
 
   private:
+    void codec_changed(void);
 
     using buffer_que_t = std::deque<AudioBuffer>;
 
@@ -162,13 +172,18 @@ class AudioIO
     bool             m_lpcm             {true};
     int64_t          m_timestamp        {0LL};
 
+    std::thread      m_codec_changed_thread;
     mutable std::mutex m_buffer_mutex;
+    std::condition_variable m_new_buffer;
+    std::condition_variable m_changing;
+    std::mutex       m_codec_mutex;
+    bool             m_state_changed     {false};
+    bool             m_codec_changed     {false};
     bool             m_codec_initialized {false};
 
     int              m_buf_id           {0};
     std::atomic<bool> m_running         {true};
 
-    AudioBufCallback  f_grow_audio_buf;
     int              m_verbose          {1};
 };
 

@@ -40,7 +40,6 @@ class Magewell
     bool ReadEDID(const std::string & filepath);
     bool WriteEDID(const std::string & filepath);
 
-    void GrowAudioBuf(void);
     bool Capture(const std::string & video_codec, const std::string & preset,
                  int quality, int look_ahead, bool no_audio,
                  const std::string & gpu_device);
@@ -84,12 +83,12 @@ class Magewell
                            HNOTIFY video_notify,
                            ULONGLONG ullStatusBits,
                            bool interlaced);
-    bool capture_video(void);
 
+    bool capture_video(void);
     bool capture_audio(void);
 
   private:
-    int m_audio_buf_sz   {1024};
+    int m_audio_buf_sz   {768};
 
     OutputTS*            m_out2ts  {nullptr};
     HCHANNEL             m_channel {nullptr};

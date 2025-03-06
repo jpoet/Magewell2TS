@@ -28,7 +28,6 @@ class OutputTS
     OutputTS(int verbose, const std::string & video_codec_name,
              const std::string & preset, int quality, int look_ahead,
              bool no_audio, const std::string & device,
-             AudioIO::AudioBufCallback grow_audio_buf,
              StopCallback stop,
              MagCallback image_buffer_avail);
     ~OutputTS(void);
@@ -74,6 +73,7 @@ class OutputTS
 
         /* pts of the next frame that will be generated */
         int64_t next_pts           {-1};
+        int64_t timestamp          {-1};
 
         int samples_count          {0};
 
@@ -147,6 +147,7 @@ class OutputTS
 
     std::string      m_filename               {"pipe:1"};
 
+    bool             m_flushing               {false};
     bool             m_has_audio              {false};
     int              m_slow_audio_cnt         {0};
 
@@ -172,8 +173,6 @@ class OutputTS
     AVMasteringDisplayMetadata*   m_display_primaries {nullptr};
     AVContentLightMetadata*       m_content_light     {nullptr};
 
-    std::mutex              m_imagepkt_mutex;
-
     StopCallback            f_stop;
     MagCallback             f_image_buffer_available;
 
@@ -183,7 +182,7 @@ class OutputTS
     std::condition_variable m_image_queue_empty;
 
     std::atomic<bool>       m_running      {true};
-    bool                    m_init_needed  {true};
+    bool                    m_init_needed  {false};
     bool                    m_audio_ready  {false};
     std::mutex              m_ready_mutex;
     std::condition_variable m_ready_cond;
