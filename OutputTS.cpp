@@ -108,8 +108,7 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
                    bool no_audio, const string & device,
                    StopCallback stop,
                    MagCallback image_buffer_avail)
-    : m_audioIO(verbose_level)
-    , m_verbose(verbose_level)
+    : m_verbose(verbose_level)
     , m_has_audio(!no_audio)
     , m_video_codec_name(video_codec_name)
     , m_device("/dev/dri/" + device)
@@ -133,6 +132,9 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
         Shutdown();
     }
 
+    if (m_has_audio)
+        m_audioIO = new AudioIO(verbose_level);
+
 #if 0
     m_audio_ready = false;
 #endif
@@ -146,7 +148,12 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
 
 void OutputTS::Shutdown(void)
 {
-    m_audioIO.Shutdown();
+    if (m_audioIO)
+    {
+        delete m_audioIO;
+        m_audioIO = nullptr;
+    }
+
     m_running.store(false);
     f_stop();
 }
@@ -209,16 +216,16 @@ bool OutputTS::open_audio(void)
 
     const AVCodec* audio_codec = nullptr;
 
-    audio_codec = avcodec_find_encoder_by_name(m_audioIO.CodecName().c_str());
+    audio_codec = avcodec_find_encoder_by_name(m_audioIO->CodecName().c_str());
     if (!audio_codec)
     {
         cerr << lock_ios()
              << "WARNING: Could not find audio encoder for '"
-             << m_audioIO.CodecName() << "'\n";
+             << m_audioIO->CodecName() << "'\n";
         return true;
     }
 
-    AVChannelLayout channel_layout = m_audioIO.ChannelLayout();
+    AVChannelLayout channel_layout = m_audioIO->ChannelLayout();
 
     m_audio_stream.tmp_pkt = av_packet_alloc();
     if (!m_audio_stream.tmp_pkt)
@@ -245,9 +252,9 @@ bool OutputTS::open_audio(void)
         m_audio_stream.enc->sample_rate = audio_codec->supported_samplerates[0];
         for (idx = 0; audio_codec->supported_samplerates[idx]; ++idx)
         {
-            if (audio_codec->supported_samplerates[idx] == m_audioIO.SampleRate())
+            if (audio_codec->supported_samplerates[idx] == m_audioIO->SampleRate())
             {
-                m_audio_stream.enc->sample_rate = m_audioIO.SampleRate();
+                m_audio_stream.enc->sample_rate = m_audioIO->SampleRate();
                 break;
             }
         }
@@ -305,7 +312,7 @@ bool OutputTS::open_audio(void)
         return false;
     }
 
-    if (m_audioIO.BytesPerSample() == 4)
+    if (m_audioIO->BytesPerSample() == 4)
         m_audio_stream.tmp_frame = alloc_audio_frame(AV_SAMPLE_FMT_S32,
                                            &m_audio_stream.enc->ch_layout,
                                            m_audio_stream.enc->sample_rate,
@@ -339,7 +346,7 @@ bool OutputTS::open_audio(void)
     av_opt_set_int       (m_audio_stream.swr_ctx, "in_sample_rate",
                           m_audio_stream.enc->sample_rate,    0);
 
-    if (m_audioIO.BytesPerSample() == 4)
+    if (m_audioIO->BytesPerSample() == 4)
     {
         av_opt_set_sample_fmt(m_audio_stream.swr_ctx, "in_sample_fmt",
                               AV_SAMPLE_FMT_S32, 0);
@@ -641,7 +648,7 @@ bool OutputTS::setAudioParams(int num_channels, bool is_lpcm,
                               int bytes_per_sample, int sample_rate,
                               int samples_per_frame, int frame_size)
 {
-    if (!m_audioIO.AddBuffer(num_channels, is_lpcm,
+    if (!m_audioIO->AddBuffer(num_channels, is_lpcm,
                              bytes_per_sample, sample_rate,
                              samples_per_frame, frame_size))
         return false;
@@ -691,7 +698,11 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
         return false;
     }
 
-    m_init_needed |= !m_audioIO.ChangePending();
+    if (!m_audioIO || !m_audioIO->ChangePending())
+    {
+        close_container();
+        m_init_needed = true;
+    }
 
     return true;
 }
@@ -716,8 +727,7 @@ OutputTS::~OutputTS(void)
 
 bool OutputTS::addAudio(AudioBuffer::AudioFrame & buf, int64_t timestamp)
 {
-    m_audioIO.Add(buf, timestamp);
-    return true;
+    return m_audioIO->Add(buf, timestamp);
 }
 
 bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
@@ -891,18 +901,18 @@ AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
     uint8_t* q = (uint8_t*)frame->data[0];
 
     int bytes = ost->enc->ch_layout.nb_channels *
-                frame->nb_samples * m_audioIO.BytesPerSample();
-    if (m_audioIO.Size() < bytes)
+                frame->nb_samples * m_audioIO->BytesPerSample();
+    if (m_audioIO->Size() < bytes)
     {
         if (m_verbose > 4)
             cerr << lock_ios()
                  << "Not enough audio data.\n";
         return nullptr;
     }
-    if (m_audioIO.Read(q, bytes) == 0)
+    if (m_audioIO->Read(q, bytes) == 0)
         return nullptr;
 
-    ost->timestamp = frame->pts = m_audioIO.TimeStamp();
+    ost->timestamp = frame->pts = m_audioIO->TimeStamp();
 
 #if 0
             cerr << " get_pcm ts: " << m_audio_stream.timestamp << endl;
@@ -977,7 +987,7 @@ bool OutputTS::write_pcm_frame(AVFormatContext* oc, OutputStream* ost)
 
 bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
 {
-    AVPacket* pkt = m_audioIO.ReadSPDIF();
+    AVPacket* pkt = m_audioIO->ReadSPDIF();
     static int dur_err_cnt = 0;
 
     if (pkt == nullptr)
@@ -986,8 +996,8 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
         return false;
     }
 
-    ost->timestamp = m_audioIO.TimeStamp();
-    if (abs(ost->timestamp - ost->next_timestamp) > 5)
+    ost->timestamp = m_audioIO->TimeStamp();
+    if (ost->next_timestamp > 0 && abs(ost->timestamp - ost->next_timestamp) > 5)
     {
         /* When two packets in a row take longer than expected, this
          * seems to indicate that the bitstream audio is out of
@@ -995,8 +1005,9 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
          */
         if (dur_err_cnt++ > 1)
         {
-            m_audioIO.Reset("Invalid audio duration");
+            m_audioIO->Reset("Invalid audio duration");
             dur_err_cnt = 0;
+            ost->next_timestamp = -1;
             return false;
         }
     }
@@ -1049,20 +1060,20 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
  */
 bool OutputTS::write_audio_frame(AVFormatContext* oc, OutputStream* ost)
 {
-    if (m_audio_stream.st == nullptr /* || !m_audioIO.BlockReady() */)
+    if (m_audio_stream.st == nullptr /* || !m_audioIO->BlockReady() */)
     {
         cerr << lock_ios() << "Audio stream not open.\n";
         return false;
     }
 
     /* This only partially protects against a race condition! */
-    if (m_audioIO.ChangePending())
+    if (m_audioIO->ChangePending())
     {
         cerr << lock_ios() << "Audio codec change pending.\n";
         return false;
     }
 
-    if (m_audioIO.Bitstream())
+    if (m_audioIO->Bitstream())
         return write_bitstream_frame(oc, ost);
     else
         return write_pcm_frame(oc, ost);
@@ -1550,7 +1561,7 @@ void OutputTS::mux(void)
 
     while (m_running.load() == true)
     {
-        if (m_audioIO.CodecChanged(ready))
+        if (m_audioIO && m_audioIO->CodecChanged(ready))
         {
             close_container();
             if (m_audio_stream.st)
@@ -1570,7 +1581,7 @@ void OutputTS::mux(void)
                     Shutdown();
                     break;
                 }
-                m_audio_stream.timestamp = m_audioIO.TimeStamp();
+                m_audio_stream.timestamp = m_audioIO->TimeStamp();
                 m_init_needed = true;
             }
         }
@@ -1615,7 +1626,7 @@ void OutputTS::mux(void)
             if (m_output_format_context == nullptr)
             {
                 if (m_verbose > 2)
-                    cerr << lock_ios() << "####### mux: TS not open. "
+                    cerr << lock_ios() << "# mux: TS not open. "
                          << m_frame_queue.size() << " queued.\n";
                 this_thread::sleep_for
                     (chrono::milliseconds(m_input_frame_wait_ms));
@@ -1651,29 +1662,23 @@ void OutputTS::mux(void)
             av_packet_free(&(*Ipkt));
         }
 
-#if 0
-        while (m_audioIO.TimeStamp() < video_timestamp)
-#else
-        while (m_audio_stream.next_timestamp < video_timestamp)
-#endif
+        if (m_audioIO)
         {
+            while (m_audio_stream.next_timestamp < video_timestamp)
+            {
 #if 0
 //        if (m_video_stream.next_pts <= m_audio_stream.next_pts)
-            cerr << lock_ios()
-                 << "Write: video " << m_video_stream.timestamp << "\n"
-                 << "  audio [" << setw(2) << m_audioIO.BufId()
-                 << "] " << m_audioIO.TimeStamp() << endl;
+                cerr << lock_ios()
+                     << "Write: video " << m_video_stream.timestamp << "\n"
+                     << "  audio [" << setw(2) << m_audioIO->BufId()
+                     << "] " << m_audioIO->TimeStamp() << endl;
 #endif
 
-            if (!write_audio_frame(m_output_format_context,
-                                   &m_audio_stream))
-                break;
+                if (!write_audio_frame(m_output_format_context,
+                                       &m_audio_stream))
+                    break;
+            }
         }
-
-#if 0
-        cerr << lock_ios() << " Wrote video pkts for " << video_timestamp
-             << endl;
-#endif
     }
 }
 

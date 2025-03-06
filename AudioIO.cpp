@@ -107,8 +107,19 @@ void AudioBuffer::PrintState(const string & where, bool force) const
     }
 }
 
-int AudioBuffer::Add(AudioFrame & buf, int64_t timestamp)
+bool AudioBuffer::Add(AudioFrame & buf, int64_t timestamp)
 {
+#if 1
+    if (static_cast<int32_t>(buf.size()) != m_frame_size)
+    {
+        cerr << lock_ios() << "\n[" << m_id
+             << "] WARNING: AudioBuffer::Add buf size "
+             << buf.size() << " != " << m_frame_size << " frame size\n"
+             << "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n";
+        return false;
+    }
+#endif
+
     {
         const unique_lock<mutex> lock(m_write_mutex);
         {
@@ -117,13 +128,13 @@ int AudioBuffer::Add(AudioFrame & buf, int64_t timestamp)
         }
     }
     m_data_avail.notify_one();
-
-    return 0;
+    return true;
 }
 
 int AudioBuffer::Read(uint8_t* buf, uint32_t len)
 {
     uint8_t* dest = buf;
+    size_t   pkt_sz;
 
 //    cerr << "{" << len << "}\n";
 
@@ -175,26 +186,25 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
     uint32_t frm = 0;
     while (frm + m_frame_size <= len)
     {
-        if (m_audio_queue.front().frame.size() !=
-            static_cast<size_t>(m_frame_size))
+        pkt_sz = m_audio_queue.front().frame.size();
+#if 1
+        if (pkt_sz > static_cast<size_t>(m_frame_size))
         {
-            cerr << lock_ios() << "WARNING: Invalid audio frame size queued: "
-                 << m_audio_queue.front().frame.size() << " bytes!\n";
-            m_total_read += frm;
-            return frm;
+            cerr << lock_ios() << "\nWARNING: Invalid audio frame size queued: "
+                 << pkt_sz << " bytes!\n" << "&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&\n";
+            m_audio_queue.pop_front();
+            break;
         }
+#endif
 
         copy(m_audio_queue.front().frame.begin(),
              m_audio_queue.front().frame.end(), dest);
 
-        dest += m_frame_size;
-        frm += m_frame_size;
+        dest += pkt_sz;
+        frm += pkt_sz;
 
         if (m_probing)
-        {
             m_probed_queue.push_back(m_audio_queue.front());
-//            cerr << lock_ios() << "Probed " << m_total_read << endl;
-        }
         else
             ++m_pkts_read;
 
@@ -454,6 +464,7 @@ void AudioBuffer::reset(void)
 void AudioBuffer::initialized(void)
 {
     cerr << lock_ios() << "[" << m_id << "] Initialized.\n";
+    unique_lock<mutex> lock(m_write_mutex);
     copy(m_probed_queue.begin(), m_probed_queue.end(),
          std::inserter(m_audio_queue, m_audio_queue.begin()));
     m_probed_queue.clear();
@@ -533,19 +544,6 @@ bool AudioIO::AddBuffer(int num_channels, bool is_lpcm,
                         int bytes_per_sample, int sample_rate,
                         int samples_per_frame, int frame_size)
 {
-    if (m_verbose > 3)
-    {
-        cerr << lock_ios()
-             << "AddBuffer(num_channels = " << num_channels << "\n"
-             << "               is_lpcm = "
-             << (is_lpcm ? "true" : "false") << "\n"
-             << "      bytes_per_sample = " << bytes_per_sample << "\n"
-             << "           sample_rate = " << sample_rate << "\n"
-             << "     samples_per_frame = " << samples_per_frame << "\n"
-             << "            frame_size = " << frame_size << "\n"
-             << ")\n";
-    }
-
     {
         const unique_lock<mutex> lock(m_buffer_mutex);
         buffer_que_t::iterator Ibuf;
@@ -564,6 +562,20 @@ bool AudioIO::AddBuffer(int num_channels, bool is_lpcm,
                                          samples_per_frame, frame_size,
                                          this, m_verbose, m_buf_id++));
         Ibuf = m_buffer_q.end() - 1;
+
+        if (m_verbose > 2)
+        {
+            cerr << lock_ios()
+                 << "[" << (*Ibuf).Id() << "] "
+                 << "AddBuffer(num_channels = " << num_channels << "\n"
+                 << "               is_lpcm = "
+                 << (is_lpcm ? "true" : "false") << "\n"
+                 << "      bytes_per_sample = " << bytes_per_sample << "\n"
+                 << "           sample_rate = " << sample_rate << "\n"
+                 << "     samples_per_frame = " << samples_per_frame << "\n"
+                 << "            frame_size = " << frame_size << "\n"
+                 << ")\n";
+        }
     }
 
     Reset("AddBuffer");
@@ -626,26 +638,9 @@ bool AudioIO::Empty(void) const
     return true;
 }
 
-#if 0
-bool AudioIO::BlockReady(void) const
+bool AudioIO::Add(AudioBuffer::AudioFrame & buf, int64_t timestamp)
 {
     const unique_lock<mutex> lock(m_buffer_mutex);
-
-    if (m_buffer_q.empty())
-    {
-        cerr << lock_ios()
-             << "q empty\n";
-        return false;
-    }
-
-    buffer_que_t::const_iterator Ibuf = m_buffer_q.begin();
-    return (*Ibuf).Size() > (*Ibuf).BlockSize();
-}
-#endif
-
-int AudioIO::Add(AudioBuffer::AudioFrame & buf, int64_t timestamp)
-{
-//    const unique_lock<mutex> lock(m_buffer_mutex);
 
     if (m_buffer_q.empty())
     {
@@ -653,7 +648,17 @@ int AudioIO::Add(AudioBuffer::AudioFrame & buf, int64_t timestamp)
              << "WARNING: No audio buffers to Add to\n";
         return 0;
     }
+
     buffer_que_t::iterator Ibuf = m_buffer_q.end() - 1;
+#if 1
+    if (static_cast<int32_t>(buf.size()) != (*Ibuf).FrameSize())
+    {
+        cerr << lock_ios() << "\nWARNING: AudioIO::Add buf size: "
+             << buf.size() << " expected " << (*Ibuf).FrameSize() << "\n"
+             << "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n";
+        return false;
+    }
+#endif
 
     return (*Ibuf).Add(buf, timestamp);
 }

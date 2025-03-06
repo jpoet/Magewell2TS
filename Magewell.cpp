@@ -1047,6 +1047,10 @@ bool Magewell::capture_audio(void)
               L1R1L5R5(2byte)
             */
 #if 0
+            audio_frame.resize(frame_size, '\0');
+#endif
+
+#if 0
             for (int j = 0; j < (cur_channels/2); ++j)
             {
                 for (int i = 0 ; i < MWCAP_AUDIO_SAMPLES_PER_FRAME; ++i)
@@ -1073,17 +1077,18 @@ bool Magewell::capture_audio(void)
 //            WORD     temp;
             for (idx = 0 ; idx < MWCAP_AUDIO_SAMPLES_PER_FRAME; ++idx)
             {
-                WORD temp = capture_buf[0] >> (32 - audio_signal_status.cBitsPerSample);
+                WORD temp = capture_buf[0] >>
+                            (32 - audio_signal_status.cBitsPerSample);
                 memcpy(dest, &temp, bytes_per_sample);
                 dest += bytes_per_sample;
 
-                temp = capture_buf[MWCAP_AUDIO_MAX_NUM_CHANNELS / 2] >> (32 - audio_signal_status.cBitsPerSample);
+                temp = capture_buf[MWCAP_AUDIO_MAX_NUM_CHANNELS / 2] >>
+                       (32 - audio_signal_status.cBitsPerSample);
                 memcpy(dest, &temp, bytes_per_sample);
                 dest += bytes_per_sample;
                 capture_buf += MWCAP_AUDIO_MAX_NUM_CHANNELS;
             }
 #endif
-
             m_out2ts->addAudio(audio_frame, macf.llTimestamp);
         }
     }
@@ -1667,8 +1672,9 @@ void Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     uint8_t* pbImage = nullptr;
     int64_t  timestamp;
 
-    MWCAP_VIDEO_BUFFER_INFO videoBufferInfo;
-    MWCAP_VIDEO_FRAME_INFO  videoFrameInfo;
+    MWCAP_VIDEO_BUFFER_INFO   videoBufferInfo;
+    MWCAP_VIDEO_FRAME_INFO    videoFrameInfo;
+    MWCAP_VIDEO_SIGNAL_STATUS videoSignalStatus;
     MW_RESULT ret;
 
     while (m_running.load() == true)
@@ -1701,18 +1707,7 @@ void Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             return;
         }
 
-#if 0
-        if (m_reset_audio.load())
-        {
-            if (m_verbose > 1)
-                cerr << lock_ios()
-                     << "Video: wait for audio\n";
-            this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
-            return;
-        }
-#endif
-
-#if 0
+#if 1
         MWGetVideoSignalStatus(m_channel, &videoSignalStatus);
         if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
         {
@@ -2205,7 +2200,7 @@ bool Magewell::capture_video(void)
             Stop();
         }
 
-#if 1
+#if 0
         if (m_reset_audio.load())
         {
             this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
