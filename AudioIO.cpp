@@ -22,13 +22,13 @@ AudioBuffer& AudioBuffer::operator=(const AudioBuffer & rhs)
     if (this == &rhs)
         return *this;
 
-    m_loop_cnt      = rhs.m_loop_cnt;
+    m_write_loop_cnt = rhs.m_write_loop_cnt;
+    m_read_loop_cnt = rhs.m_read_loop_cnt;
     m_begin         = rhs.m_begin;
     m_end           = rhs.m_end;
     m_write         = rhs.m_write;
     m_read          = rhs.m_read;
     m_lpcm          = rhs.m_lpcm;
-    m_write_wrapped = rhs.m_write_wrapped;
 
     m_timestamps = rhs.m_timestamps;
     m_frame_cnt  = rhs.m_frame_cnt;
@@ -108,7 +108,8 @@ void AudioBuffer::Clear(void)
 {
     const std::unique_lock<std::mutex> lock(m_write_mutex);
     m_read = m_write;
-    m_write_wrapped = false;
+    m_write_loop_cnt = 0;
+    m_read_loop_cnt = 0;
     if (m_verbose > 1)
         cerr << lock_ios()
              << "[" << m_id << "] audio buffer cleared.\n";
@@ -168,7 +169,8 @@ void AudioBuffer::PrintPointers(const string & where, bool force) const
              << ", write : " << std::setw(6) << (int)(m_write - m_begin)
              << ", read : " << std::setw(6) << (int)(m_read - m_begin)
              << ", frame sz: " << m_frame_size
-             << ", wrapped: " << (m_write_wrapped ? "Yes, " : "No, ")
+             << ", loops write: " << m_write_loop_cnt
+             << " read: " << m_read_loop_cnt
              << (m_lpcm ? " LPCM" : " bistream")
              << " codec: " << m_codec_name
 //             << ", timestamp: " << m_timestamp
@@ -198,9 +200,8 @@ int AudioBuffer::Add(uint8_t* Pframe, int len, int64_t timestamp)
 
         if (m_write == m_end)
         {
-            m_write_wrapped = true;
+            ++m_write_loop_cnt;
             m_write = m_begin;
-            ++m_loop_cnt;
         }
 
         if (!m_EoF && m_write <= m_read && (m_write + len) >= m_read)
@@ -224,7 +225,6 @@ int AudioBuffer::Read(uint8_t* dest, int32_t len)
 {
     uint8_t* Pend;
     int   sz;
-    static int empty_cnt = 0;
 
 #if 0
     cerr << "\n[" << m_id << "R]";
@@ -265,13 +265,13 @@ int AudioBuffer::Read(uint8_t* dest, int32_t len)
 
     const std::unique_lock<std::mutex> lock(m_write_mutex);
 
-    if (m_write_wrapped)
+    if (m_write_loop_cnt > m_read_loop_cnt)
     {
         if (m_read == m_end)
         {
             Pend = m_write;
             m_read = m_begin;
-            m_write_wrapped = false;
+            ++m_read_loop_cnt;
         }
         else if (m_read > m_end)
         {
@@ -447,7 +447,7 @@ int64_t AudioBuffer::Seek(int64_t offset, int whence)
     else if (whence == SEEK_SET)
     {
         // Basically rewind as much as we can and seek from there.
-        if (m_loop_cnt)
+        if (m_write_loop_cnt > m_read_loop_cnt)
             m_read = m_write;
         else
             m_read = m_begin;
@@ -460,7 +460,7 @@ int64_t AudioBuffer::Seek(int64_t offset, int whence)
     {
         // Backwards
         desired = -desired; // To keep my head from exploading
-        if (m_write_wrapped)
+        if (m_write_loop_cnt > m_read_loop_cnt)
         {
             if (m_read - desired < m_write)
                 m_read = m_write;
@@ -471,7 +471,7 @@ int64_t AudioBuffer::Seek(int64_t offset, int whence)
         {
             if (m_read - desired < m_begin)
             {
-                if (m_loop_cnt)
+                if (m_read_loop_cnt)
                 {
                     // Wrapped
                     m_read = m_end - (m_begin - (m_read - desired));
@@ -749,7 +749,7 @@ bool AudioBuffer::DetectCodec(void)
 
 int AudioBuffer::Size(void) const
 {
-    if (m_write_wrapped)
+    if (m_write_loop_cnt > m_read_loop_cnt)
         return (m_end - m_read) +
             (m_write - m_begin);
     else

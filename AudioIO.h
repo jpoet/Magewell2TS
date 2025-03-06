@@ -74,12 +74,12 @@ class AudioBuffer
     int64_t get_timestamp(uint8_t* P) const;
 
     std::atomic<bool> m_EoF  {false};
-    uint32_t m_loop_cnt      {0};
+    uint32_t m_write_loop_cnt {0};
+    uint32_t m_read_loop_cnt  {0};
     uint8_t* m_begin         {nullptr};
     uint8_t* m_end           {nullptr};
     uint8_t* m_write         {nullptr};
     uint8_t* m_read          {nullptr};
-    bool     m_write_wrapped {false};
     AVChannelLayout  m_channel_layout;
 
     int64_t* m_timestamps  {nullptr};
