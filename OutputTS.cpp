@@ -129,7 +129,7 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
         m_encoderType = EncoderType::UNKNOWN;
         cerr << lock_ios()
              << "ERROR: Codec '" << m_video_codec_name << "' not supported.\n";
-        Shutdown();
+        Stop();
     }
 
     if (m_has_audio)
@@ -146,16 +146,14 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     m_content_light  = av_content_light_metadata_alloc(NULL);
 }
 
-void OutputTS::Shutdown(void)
+void OutputTS::Stop(bool from_above)
 {
-    if (m_audioIO)
-    {
-        delete m_audioIO;
-        m_audioIO = nullptr;
-    }
-
     m_running.store(false);
-    f_stop();
+
+    m_audioIO->Stop();
+
+    if (!from_above)
+        f_stop();
 }
 
 void OutputTS::setLight(AVMasteringDisplayMetadata * display_meta,
@@ -308,7 +306,7 @@ bool OutputTS::open_audio(void)
                                              nb_samples);
     if (m_audio_stream.frame == nullptr)
     {
-        Shutdown();
+        Stop();
         return false;
     }
 
@@ -327,7 +325,7 @@ bool OutputTS::open_audio(void)
     {
         cerr << lock_ios()
              << "ERROR: Unable to allocate a temporary audio frame.\n";
-        Shutdown();
+        Stop();
         return false;
     }
 
@@ -550,7 +548,7 @@ bool OutputTS::open_container(void)
     {
         cerr << lock_ios()
              << "ERROR: Could not create output format context.\n";
-        Shutdown();
+        Stop();
         return false;
     }
 
@@ -573,7 +571,7 @@ bool OutputTS::open_container(void)
     {
         cerr << lock_ios()
              << "ERROR: Could not copy the stream parameters." << endl;
-        Shutdown();
+        Stop();
         return false;
     }
 
@@ -619,7 +617,7 @@ bool OutputTS::open_container(void)
             cerr << lock_ios()
                  << "ERROR: Could not open '" << m_filename << "': "
                  << AVerr2str(ret) << endl;
-            Shutdown();
+            Stop();
             return false;
         }
     }
@@ -631,7 +629,7 @@ bool OutputTS::open_container(void)
         cerr << lock_ios()
              << "ERROR: Could not open output file: %s\n"
              << AVerr2str(ret) << endl;
-        Shutdown();
+        Stop();
         return false;
     }
 
@@ -709,7 +707,7 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
 
 OutputTS::~OutputTS(void)
 {
-    Shutdown();
+    Stop();
 
     if (m_image_thread.joinable())
         m_image_thread.join();
@@ -997,7 +995,12 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
     }
 
     ost->timestamp = m_audioIO->TimeStamp();
-    if (ost->next_timestamp > 0 && abs(ost->timestamp - ost->next_timestamp) > 5)
+    int64_t duration = av_rescale_q(pkt->duration,
+                                    ost->st->time_base,
+                                    m_input_time_base);
+
+    if (ost->next_timestamp > 0 && pkt->duration &&
+        abs(ost->timestamp - ost->next_timestamp) > 150)
     {
         /* When two packets in a row take longer than expected, this
          * seems to indicate that the bitstream audio is out of
@@ -1005,6 +1008,12 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
          */
         if (dur_err_cnt++ > 1)
         {
+#if 0
+            cerr << lock_ios() << "%%%%%%%%%%% PKT duration " << pkt->duration
+                 << " Scaled " << duration << " TS\n"
+                 << ost->timestamp << " expected\n"
+                 << ost->next_timestamp << "\n";
+#endif
             m_audioIO->Reset("Invalid audio duration");
             dur_err_cnt = 0;
             ost->next_timestamp = -1;
@@ -1014,9 +1023,6 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
     else
         dur_err_cnt = 0;
 
-    int64_t duration = av_rescale_q(pkt->duration,
-                                    ost->st->time_base,
-                                    m_input_time_base);
     ost->next_timestamp = ost->timestamp + duration;
     pkt->pts = av_rescale_q(ost->timestamp,
                             m_input_time_base,
@@ -1156,7 +1162,7 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
         cerr << lock_ios()
              << "ERROR: Could not open video codec: "
              << AVerr2str(ret) << "\n";
-        Shutdown();
+        Stop();
         return false;
     }
 
@@ -1166,7 +1172,7 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
     {
         cerr << lock_ios()
              << "ERROR: Could not allocate NVIDIA video frame\n";
-        Shutdown();
+        Stop();
         return false;
     }
 
@@ -1182,7 +1188,7 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
         {
             cerr << lock_ios()
                  << "ERROR: Could not allocate temporary picture." << endl;
-            Shutdown();
+            Stop();
             return false;
         }
     }
@@ -1232,7 +1238,7 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
             cerr << lock_ios()
                  << "ERROR: Failed to create a VAAPI device. Error code: "
                  << AVerr2str(ret) << endl;
-            Shutdown();
+            Stop();
             return false;
         }
 
@@ -1246,7 +1252,7 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     {
         cerr << lock_ios()
              << "ERROR: Failed to create VAAPI frame context.\n";
-        Shutdown();
+        Stop();
         return false;
     }
     frames_ctx = reinterpret_cast<AVHWFramesContext* >(hw_frames_ref->data);
@@ -1264,7 +1270,7 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
              << "ERROR: Failed to initialize VAAPI frame context."
              << "Error code: " << AVerr2str(ret) << endl;
         av_buffer_unref(&hw_frames_ref);
-        Shutdown();
+        Stop();
         return false;
     }
     ctx->hw_frames_ctx = av_buffer_ref(hw_frames_ref);
@@ -1275,7 +1281,7 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
              << "ERROR: Failed to allocate hw frame buffer. "
              << "Error code: " << AVerr2str(ret) << endl;
         av_buffer_unref(&hw_frames_ref);
-        Shutdown();
+        Stop();
         return false;
     }
     av_buffer_unref(&hw_frames_ref);
@@ -1286,7 +1292,7 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
         cerr << lock_ios()
              << "ERROR: Cannot open VAAPI video encoder codec. Error code: "
              << AVerr2str(ret) << endl;
-        Shutdown();
+        Stop();
         return false;
     }
 
@@ -1297,7 +1303,7 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     {
         cerr << lock_ios()
              << "ERROR: Could not allocate VAAPI video frame\n";
-        Shutdown();
+        Stop();
         return false;
     }
 
@@ -1373,7 +1379,7 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     {
         cerr << lock_ios()
              << "ERROR: Failed to create QSV frame context.\n";
-        Shutdown();
+        Stop();
         return false;
     }
     frames_ctx = reinterpret_cast<AVHWFramesContext* >(hw_frames_ref->data);
@@ -1398,7 +1404,7 @@ bool OutputTS::open_qsv(const AVCodec* codec,
              << "ERROR: Failed to initialize QSV frame context."
              << "Error code: " << AVerr2str(ret) << endl;
         av_buffer_unref(&hw_frames_ref);
-        Shutdown();
+        Stop();
         return false;
     }
     ost->enc->hw_frames_ctx = av_buffer_ref(hw_frames_ref);
@@ -1409,7 +1415,7 @@ bool OutputTS::open_qsv(const AVCodec* codec,
              << "ERROR: Failed to allocate hw frame buffer. "
              << "Error code: " << AVerr2str(ret) << endl;
         av_buffer_unref(&hw_frames_ref);
-        Shutdown();
+        Stop();
         return false;
     }
     av_buffer_unref(&hw_frames_ref);
@@ -1420,7 +1426,7 @@ bool OutputTS::open_qsv(const AVCodec* codec,
         cerr << lock_ios()
              << "ERROR: Cannot open QSV video encoder codec. Error code: "
              << AVerr2str(ret) << endl;
-        Shutdown();
+        Stop();
         return false;
     }
 
@@ -1431,7 +1437,7 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     {
         cerr << lock_ios()
              << "ERROR: Could not allocate QSV video frame\n";
-        Shutdown();
+        Stop();
         return false;
     }
 
@@ -1511,7 +1517,7 @@ AVFrame* OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
     {
         cerr << lock_ios()
              << "ERROR: Failed to allocate hw frame.";
-        Shutdown();
+        Stop();
         return nullptr;
     }
 
@@ -1521,7 +1527,7 @@ AVFrame* OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
         cerr << lock_ios()
              << "ERROR: Failed to get hw buffer: "
              << AV_ts2str(ret) << endl;
-        Shutdown();
+        Stop();
         return nullptr;
     }
 
@@ -1529,7 +1535,7 @@ AVFrame* OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
     {
         cerr << lock_ios()
              << "ERROR: Failed to allocate hw frame CTX.\n";
-        Shutdown();
+        Stop();
         return nullptr;
     }
 
@@ -1539,7 +1545,7 @@ AVFrame* OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
         cerr << lock_ios()
              << "ERROR: failed transferring frame data to surface: "
              << AV_ts2str(ret) << endl;
-        Shutdown();
+        Stop();
         return nullptr;
     }
 
@@ -1578,7 +1584,7 @@ void OutputTS::mux(void)
                 {
                     cerr << lock_ios()
                          << "ERROR: Failed to create audio stream\n";
-                    Shutdown();
+                    Stop();
                     break;
                 }
                 m_audio_stream.timestamp = m_audioIO->TimeStamp();
@@ -1593,7 +1599,7 @@ void OutputTS::mux(void)
             {
                 if (!open_container())
                 {
-                    Shutdown();
+                    Stop();
                     break;
                 }
             }
@@ -1729,7 +1735,7 @@ void OutputTS::encode_video(void)
         {
             cerr << lock_ios()
                  << "ERROR: Unknown encoderType.\n";
-            Shutdown();
+            Stop();
             return;
         }
 
@@ -1747,7 +1753,7 @@ void OutputTS::encode_video(void)
             cerr << lock_ios()
                  << "WARNING: Failed sending a frame to the encoder: "
                  << AVerr2str(ret) << "\n";
-            Shutdown();
+            Stop();
             break;
         }
 
@@ -1762,7 +1768,7 @@ void OutputTS::encode_video(void)
             {
                 cerr << lock_ios()
                      << "WARNING: Failed encoding a frame: AVerr2str(ret)\n";
-                Shutdown();
+                Stop();
                 break;
             }
 

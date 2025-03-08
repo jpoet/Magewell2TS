@@ -33,7 +33,7 @@ class OutputTS
     ~OutputTS(void);
 
     bool operator!(void) const { return !m_running.load(); }
-    void Shutdown(void);
+    void Stop(bool from_above = false);
 
     AVColorSpace getColorSpace(void) const { return m_color_space; }
     AVColorTransferCharacteristic getColorTRC(void) const { return m_color_trc; }

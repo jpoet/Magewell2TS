@@ -119,7 +119,7 @@ class AudioIO
 
     AudioIO(int verbose = 0);
     ~AudioIO(void);
-    void Shutdown(void);
+    void Stop(void);
 
     bool AddBuffer(int num_channels, bool is_lpcm,
                    int bytes_per_sample, int sample_rate,

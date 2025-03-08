@@ -529,7 +529,7 @@ AudioIO::~AudioIO(void)
         m_codec_changed_thread.join();
 }
 
-void AudioIO::Shutdown(void)
+void AudioIO::Stop(void)
 {
     m_running.store(false);
 

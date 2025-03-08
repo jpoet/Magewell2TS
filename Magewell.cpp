@@ -2303,8 +2303,9 @@ bool Magewell::Capture(const string & video_codec, const string & preset,
 
 void Magewell::Stop(void)
 {
-    if (m_verbose > 4)
+    if (m_verbose > 2)
         cerr << lock_ios() << "Magewell::Stop\n";
+    m_out2ts->Stop(true);
     m_running.store(false);
     m_reset_audio.store(true);
 }
