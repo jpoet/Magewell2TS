@@ -1,22 +1,32 @@
 # - Find Magewell SDK
 
-## HACK!!! I could not get find_path to work, so
-set(Magewell_INCLUDE_DIR   "${CMAKE_CURRENT_SOURCE_DIR}/../Include" )
-
-find_path(Magewell_INCLUDE_DIR LibMWCapture/MWCapture.h
-  DOC "The Magewell SDK include directory")
-message(STATUS "Magewell header found at: ${Magewell_INCLUDE_DIR}")
-
-## HACK!!! I could not get find_library to work, so
-set(Magewell_LIB   "${CMAKE_CURRENT_SOURCE_DIR}/../Lib/x64/libMWCapture.a" )
-
-find_library(Magewell_LIB Magewell libMWCapture
-  DOC "The Magewell SDK library"
+SET(Magewell_SEARCH_PATHS
+    ../
+    ../Magewell_Capture_SDK_Linux_3.3.1.1505
+    ../Magewell_Capture_SDK_Linux_3.3.1.1313
 )
-message(STATUS "libMagewell found at: ${Magewell_LIB}")
 
+FIND_PATH(Magewell_INCLUDE_DIR MWFOURCC.h
+	HINTS
+	$ENV{MagewellAPI}
+	PATH_SUFFIXES Include
+	PATHS ${Magewell_SEARCH_PATHS}
+)
+
+# message(STATUS "Magewell header: ${Magewell_INCLUDE_DIR}")
+
+FIND_LIBRARY(Magewell_LIB
+	NAMES libMWCapture.a
+	HINTS
+	$ENV{MagewellAPI}
+	PATH_SUFFIXES Lib/x64
+	PATHS ${Magewell_SEARCH_PATHS}
+)
+
+# make the variables advanced to not shown in CMake GUI
 mark_as_advanced(Magewell_INCLUDE_DIR Magewell_LIB)
 
+# Provide standard CMake package variables
 include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(Magewell REQUIRED_VARS
   Magewell_INCLUDE_DIR
