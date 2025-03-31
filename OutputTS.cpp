@@ -143,6 +143,7 @@ void OutputTS::Shutdown(void)
 }
 
 /* Add an output stream. */
+/* Add an output stream. */
 bool OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
                           const AVCodec* *codec)
 {
@@ -153,29 +154,26 @@ bool OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
     ost->tmp_pkt = av_packet_alloc();
     if (!ost->tmp_pkt)
     {
-        cerr << lock_ios()
-             << "ERROR: Could not allocate AVPacket\n";
+        cerr << "ERROR: Could not allocate AVPacket\n";
         return false;
     }
 
     ost->st = avformat_new_stream(oc, NULL);
     if (!ost->st)
     {
-        cerr << lock_ios()
-             << "ERROR: Could not allocate stream\n";
+        cerr << "ERROR: Could not allocate stream\n";
         return false;
     }
     ost->st->id = oc->nb_streams-1;
     codec_context = avcodec_alloc_context3(*codec);
     if (!codec_context)
     {
-        cerr << lock_ios()
-             << "ERROR: Could not alloc an encoding context\n";
+        cerr << "ERROR: Could not alloc an encoding context\n";
         return false;
     }
     ost->enc = codec_context;
-    ost->next_pts = 0;
 
+    ost->next_pts = 0;
     switch ((*codec)->type)
     {
         case AVMEDIA_TYPE_AUDIO:
@@ -204,21 +202,18 @@ bool OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
           {
               ost->enc->thread_type = FF_THREAD_SLICE;
               if (m_verbose > 1)
-                  cerr << lock_ios()
-                       << " Audio = THREAD SLICE\n";
+                  cerr << " Audio = THREAD SLICE\n";
           }
           else if (ost->enc->codec->capabilities & AV_CODEC_CAP_FRAME_THREADS)
           {
               ost->enc->thread_type = FF_THREAD_FRAME;
               if (m_verbose > 1)
-                  cerr << lock_ios()
-                       << " Audio = THREAD FRAME\n";
+                  cerr << " Audio = THREAD FRAME\n";
           }
 
           if (m_verbose > 1)
           {
-              cerr << lock_ios()
-                   << "Audio time base " << ost->st->time_base.num << "/"
+              cerr << "Audio time base " << ost->st->time_base.num << "/"
                    << ost->st->time_base.den << "\n";
           }
           break;
@@ -258,20 +253,24 @@ bool OutputTS::add_stream(OutputStream* ost, AVFormatContext* oc,
           {
               ost->enc->thread_type = FF_THREAD_SLICE;
               if (m_verbose > 1)
-                  cerr << lock_ios()
-                       << " Video = THREAD SLICE\n";
+                  cerr << " Video = THREAD SLICE\n";
           }
           else if (ost->enc->codec->capabilities & AV_CODEC_CAP_FRAME_THREADS)
           {
               ost->enc->thread_type = FF_THREAD_FRAME;
               if (m_verbose > 1)
-                  cerr << lock_ios()
-                       << " Video = THREAD FRAME\n";
+                  cerr << " Video = THREAD FRAME\n";
           }
 
           if (m_verbose > 1)
           {
-              cerr << lock_ios() << "Output stream< Video: " << ost->enc->width
+              cerr << "Output stream< Video: " << ost->enc->width
+                   << "x" << ost->enc->height
+                   << " time_base: " << ost->st->time_base.num
+                   << "/" << ost->st->time_base.den
+                   << (m_interlaced ? 'i' : 'p')
+                   << "\n";
+          }
           break;
 
         default:

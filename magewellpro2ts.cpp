@@ -68,7 +68,9 @@
 
 #include "OutputTS.h"
 #include "version.h"
+#include "lock_ios.h"
 
+using namespace s6_lock_ios;
 using namespace std;
 
 HCHANNEL          g_channel = nullptr;;
@@ -1811,6 +1813,8 @@ int main(int argc, char* argv[])
     bool        no_audio    = false;
 
     vector<string_view> args(argv + 1, argv + argc);
+
+    std::cerr << mutex_init_own;
 
     {
         struct sigaction action;
