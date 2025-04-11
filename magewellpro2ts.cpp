@@ -83,10 +83,13 @@ int  g_buffer_cnt = 0;
 
 void Shutdown(void)
 {
-    if (g_out2ts)
-        g_out2ts->Shutdown();
-    g_running.store(false);
-    g_reset.store(true);
+    if (g_running.load())
+    {
+        if (g_out2ts)
+            g_out2ts->Shutdown();
+        g_running.store(false);
+        g_reset.store(true);
+    }
 }
 
 void signal_handler(int signum)
