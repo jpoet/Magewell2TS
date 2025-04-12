@@ -133,7 +133,8 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     }
 
     if (!m_no_audio)
-        m_audioIO = new AudioIO(verbose_level);
+        m_audioIO = new AudioIO([=](bool val) { this->DiscardImages(val); },
+                                verbose_level);
 
     m_image_ready_thread = std::thread(&OutputTS::Write, this);
 }
@@ -882,6 +883,7 @@ AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
 
     int bytes = ost->enc->ch_layout.nb_channels *
                 frame->nb_samples * m_audioIO->BytesPerSample();
+#if 1
     if (m_audioIO->Size() < bytes)
     {
         if (m_verbose > 4)
@@ -889,10 +891,11 @@ AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
                  << "Not enough audio data.\n";
         return nullptr;
     }
+#endif
     if (m_audioIO->Read(q, bytes) <= 0)
         return nullptr;
 
-    frame->pts = m_audioIO->TimeStamp();
+    ost->timestamp = frame->pts = m_audioIO->TimeStamp();
     ost->frame->pts = av_rescale_q(frame->pts, m_input_time_base,
                                    ost->enc->time_base);
 
@@ -967,6 +970,7 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
                                     ost->st->time_base,
                                     m_input_time_base);
 
+#if 1
     if (ost->next_timestamp > 0 && pkt->duration &&
         abs(ost->timestamp - ost->next_timestamp) > 150)
     {
@@ -989,12 +993,23 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
         }
     }
     else
+    {
         dur_err_cnt = 0;
+    }
+#endif
 
     ost->next_timestamp = ost->timestamp + duration;
     pkt->pts = av_rescale_q(ost->timestamp,
                             m_input_time_base,
                             ost->st->time_base);
+
+#if 0
+    // input time_base = 1/10000000
+    // stream time_base = 1/90000
+
+    cerr << "\n" << ost->timestamp << " " << pkt->duration << " " << pkt->pts
+         << "\n";
+#endif
 
     ost->prev_audio_pts = pkt->pts;
 
@@ -1034,7 +1049,7 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
  */
 bool OutputTS::write_audio_frame(AVFormatContext* oc, OutputStream* ost)
 {
-#if 1
+#if 0
     if (!m_audioIO->BlockReady())
         return false;
 #endif
@@ -1510,7 +1525,6 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
 void OutputTS::Write(void)
 {
     uint8_t* pImage;
-    uint64_t timestamp;
 
     while (m_running.load() == true)
     {
@@ -1537,6 +1551,8 @@ void OutputTS::Write(void)
                     Shutdown();
                     break;
                 }
+                m_video_stream.timestamp = -1;
+                m_audio_stream.timestamp = -1;
             }
             else
             {
@@ -1552,20 +1568,6 @@ void OutputTS::Write(void)
         }
 
         {
-            if (m_audioIO)
-            {
-#if 0
-                cerr << lock_ios()
-                     << "Write: video " << m_video_stream.next_pts << "\n"
-                     << "  audio [" << setw(2) << m_audioIO->BufId()
-                     << "] " << m_audio_stream.next_pts << endl;
-#endif
-                while (m_video_stream.next_pts > m_audio_stream.next_pts)
-                    if (!write_audio_frame(m_output_format_context,
-                                           &m_audio_stream))
-                        break;
-            }
-
             {
                 std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
 
@@ -1578,17 +1580,36 @@ void OutputTS::Write(void)
                 }
 
                 pImage    = m_imagequeue.front().image;
-                timestamp = m_imagequeue.front().timestamp;
+                m_video_stream.timestamp = m_imagequeue.front().timestamp;
                 m_imagequeue.pop_front();
+            }
+
+            if (m_audio_stream.enc)
+            {
+#if 0
+                cerr << lock_ios()
+                     << "Write: video " << m_video_stream.next_pts << "\n"
+                     << "  audio [" << setw(2) << m_audioIO->BufId()
+                     << "] " << m_audio_stream.next_pts << endl;
+#endif
+
+                while (m_audio_stream.timestamp <= m_video_stream.timestamp)
+                {
+                    if (!write_audio_frame(m_output_format_context,
+                                           &m_audio_stream))
+                    {
+                        break;
+                    }
+                }
             }
 
             if (m_encoderType == EncoderType::NV)
                 nv_encode(m_output_format_context, &m_video_stream,
-                          pImage, timestamp);
+                          pImage, m_video_stream.timestamp);
             else if (m_encoderType == EncoderType::QSV ||
                      m_encoderType == EncoderType::VAAPI)
                 qsv_vaapi_encode(m_output_format_context, &m_video_stream,
-                                 pImage, timestamp);
+                                 pImage, m_video_stream.timestamp);
             else
             {
                 cerr << lock_ios() << "ERROR: Unknown encoderType.\n";
@@ -1613,8 +1634,13 @@ bool OutputTS::AddVideoFrame(uint8_t* pImage, uint32_t imageSize,
 {
     const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
 
-    m_imagequeue.push_back(imagepkt_t{timestamp, pImage});
-    m_image_ready.notify_one();
+    if (m_discard_images)
+        f_image_buffer_available(pImage);
+    else
+    {
+        m_imagequeue.push_back(imagepkt_t{timestamp, pImage});
+        m_image_ready.notify_one();
+    }
 
     return true;
 }

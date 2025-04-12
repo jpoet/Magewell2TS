@@ -14,6 +14,7 @@ extern "C" {
 #include <condition_variable>
 #include <thread>
 #include <atomic>
+#include <functional>
 
 class AudioIO;
 
@@ -28,7 +29,7 @@ class AudioBuffer
                 AudioIO* parent, int verbose, int id);
     AudioBuffer(const AudioBuffer & rhs) { *this = rhs; }
     ~AudioBuffer(void);
-    void Clear(void);
+    void PurgeQueue(void);
 
     bool RescanSPDIF(void);
     void OwnBuffer(void);
@@ -116,7 +117,9 @@ class AudioIO
     friend AudioBuffer;
 
   public:
-    AudioIO(int verbose = 0);
+    using DiscardImageCallback = std::function<void (bool)>;
+
+    AudioIO(DiscardImageCallback discard, int verbose = 0);
     ~AudioIO(void) { m_running.store(false); }
     void Shutdown(void);
 
@@ -143,6 +146,7 @@ class AudioIO
     int     BytesPerSample(void) const { return m_bytes_per_sample; }
     bool    Bitstream(void) { return !m_lpcm; }
 
+    void    PurgeQueue(void);
     void    Reset(const std::string & where);
     bool    CodecChanged(void);
 
@@ -166,8 +170,10 @@ class AudioIO
     bool             m_codec_initialized {false};
 
     int              m_buf_id           {0};
-    int              m_verbose          {1};
     std::atomic<bool> m_running         {true};
+
+    DiscardImageCallback f_discard_images;
+    int              m_verbose          {1};
 };
 
 #endif

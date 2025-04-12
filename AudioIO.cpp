@@ -75,7 +75,7 @@ AudioBuffer::~AudioBuffer(void)
     m_EoF.store(true);
 }
 
-void AudioBuffer::Clear(void)
+void AudioBuffer::PurgeQueue(void)
 {
     const unique_lock<mutex> lock(m_write_mutex);
     m_audio_queue.clear();
@@ -156,7 +156,7 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
             return 0;
     }
 
-#if 1 // More reliable detection in OutputTS::write_bitstream_frame ?
+#if 0 // More reliable detection in OutputTS::write_bitstream_frame ?
     static size_t m_missaligned_pkts = 0;
 
     if ((len % m_frame_size) % 32 != 0)
@@ -506,8 +506,9 @@ bool AudioBuffer::DetectCodec(void)
 /************************************************
  * AudioIO
  ************************************************/
-AudioIO::AudioIO(int verbose)
-    : m_verbose(verbose)
+AudioIO::AudioIO(DiscardImageCallback discard, int verbose)
+    : f_discard_images(discard)
+    , m_verbose(verbose)
 {
 }
 
@@ -690,6 +691,14 @@ const AVChannelLayout* AudioIO::ChannelLayout(void) const
     return m_buffer_q.begin()->ChannelLayout();
 }
 
+void AudioIO::PurgeQueue(void)
+{
+    const lock_guard<mutex> lock(m_buffer_mutex);
+    if (m_buffer_q.empty())
+        return;
+    return m_buffer_q.begin()->PurgeQueue();
+}
+
 void AudioIO::Reset(const string & where)
 {
     if (m_verbose > 2)
@@ -719,6 +728,7 @@ bool AudioIO::CodecChanged(void)
     buffer_que_t::iterator Ibuf = m_buffer_q.begin();
     if (!(*Ibuf).LPCM())
     {
+        f_discard_images(true);
     }
 
     if (!(*Ibuf).DetectCodec())
@@ -730,8 +740,11 @@ bool AudioIO::CodecChanged(void)
         m_codec_name.clear();
         return true;
     }
+
     if (!(*Ibuf).LPCM())
     {
+        (*Ibuf).PurgeQueue();
+        f_discard_images(false);
     }
 
     if (m_codec_name != (*Ibuf).CodecName())
