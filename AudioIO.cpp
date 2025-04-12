@@ -161,7 +161,7 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
 
     if ((len % m_frame_size) % 32 != 0)
     {
-        if (m_missaligned_pkts > 1)
+        if (m_missaligned_pkts > 3)
         {
             cerr << lock_ios() << "[" << m_id << "] " << m_missaligned_pkts
                  << " out of sync, resetting: "

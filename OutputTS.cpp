@@ -1601,7 +1601,10 @@ void OutputTS::Write(void)
 
 void OutputTS::ClearImageQueue(void)
 {
-    const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
+    const unique_lock<mutex> lock(m_imagequeue_mutex);
+    imageque_t::iterator Iq;
+    for (Iq = m_imagequeue.begin(); Iq != m_imagequeue.end(); ++Iq)
+        f_image_buffer_available((*Iq).image);
     m_imagequeue.clear();
 }
 
