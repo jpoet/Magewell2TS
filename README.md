@@ -133,9 +133,9 @@ sudo make install
 ## Running
 The application provides help via --help or -h:
 ```bash
-magewellpro2ts -h
-magewellpro2ts --list
-magewellpro2ts -i 1 -m -c hevc_qsv -d renderD129 | mpv -
+magewell2ts -h
+magewell2ts --list
+magewell2ts -i 1 -m -c hevc_qsv -d renderD129 | mpv -
 ```
 
 ----
@@ -153,7 +153,7 @@ CODEC=hevc_qsv -q 22
 # The recorder command to execute.  %URL% is optional, and
 # will be replaced with the channel's "URL" as defined in the
 # [TUNER/channels] (channel conf) configuration file
-command="/usr/local/bin/magewellpro2ts -i %INPUT% -s 100 -m -c %CODEC%"
+command="/usr/local/bin/magewell2ts -i %INPUT% -s 100 -m -c %CODEC%"
 
 # cleanup="/home/mythtv/mythtvguide/adb-1-finished.sh"
 cleanup="%TUNER% --reset"
@@ -201,10 +201,10 @@ Environment=HOME=/home/mythtv
 LimitCORE=infinity
 User=mythtv
 PermissionsStartOnly=true
-ExecStartPre=/usr/local/bin/magewellpro2ts --wait-for 4 -i 1 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStartPre=/usr/local/bin/magewellpro2ts --wait-for 4 -i 2 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStartPre=/usr/local/bin/magewellpro2ts --wait-for 4 -i 3 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStartPre=/usr/local/bin/magewellpro2ts --wait-for 4 -i 4 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 1 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 2 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 3 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 4 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
 
 ExecStart=/usr/local/bin/mythbackend -q --syslog none --logpath /var/log/mythtv -v channel,record
 RestartSec=5
