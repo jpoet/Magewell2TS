@@ -8,6 +8,7 @@ extern "C" {
 
 #include <string>
 #include <deque>
+#include <vector>
 #include <utility>
 #include <mutex>
 #include <condition_variable>
@@ -19,15 +20,16 @@ class AudioIO;
 class AudioBuffer
 {
   public:
-    AudioBuffer(uint8_t* Pbegin, uint8_t* Pend,
-                int num_channels, bool is_lpcm,
+    using AudioFrame = std::vector<uint8_t>;
+
+    AudioBuffer(int num_channels, bool is_lpcm,
                 int bytes_per_sample, int sample_rate,
                 int samples_per_frame, int frame_size,
-                int64_t* timestamps,
                 AudioIO* parent, int verbose, int id);
     AudioBuffer(const AudioBuffer & rhs) { *this = rhs; }
     ~AudioBuffer(void);
     void Clear(void);
+
     bool RescanSPDIF(void);
     void OwnBuffer(void);
     void setEoF(void) { m_EoF.store(true); }
@@ -40,21 +42,20 @@ class AudioBuffer
     AudioBuffer& operator=(const AudioBuffer & rhs);
     bool operator==(const AudioBuffer & rhs);
 
-    int Add(uint8_t* Pframe, int len, int64_t timestamp);
-    int Read(uint8_t* dest, int len);
+    bool Add(AudioFrame & buf, int64_t timestamp);
+    int Read(uint8_t* dest, uint32_t len);
     AVPacket* ReadSPDIF(void);
 
-    int64_t Seek(int64_t offset, int whence);
-    void set_mark(void);
-    void return_to_mark(void);
-
     int  Id(void) const { return m_id; }
-    bool Empty(void) const { return m_read == m_write; }
-    int  Size(void) const;
-    int  Tell(void) const { return m_frame_cnt; }
+    bool Empty(void) const { return m_audio_queue.empty(); }
+    int  Size(void) const { return m_audio_queue.size() * m_frame_size; }
+
+    void SetReady(bool val) { m_initialized = val; }
+    bool IsReady(void) const { return m_initialized; }
+    bool Flushed(void) const { return m_flushed; }
 
     std::string CodecName(void) const { return m_codec_name; }
-    AVChannelLayout ChannelLayout(void) const { return m_channel_layout; }
+    const AVChannelLayout* ChannelLayout(void) const { return &m_channel_layout; }
     bool LPCM(void) const { return m_lpcm; }
     int  SampleRate(void) const { return m_sample_rate; }
     int  BytesPerSample(void) const { return m_bytes_per_sample; }
@@ -66,23 +67,18 @@ class AudioBuffer
   private:
     bool open_spdif_context(void);
     bool open_spdif(void);
-    int64_t get_timestamp(uint8_t* P) const;
+    void initialized(void);
+
+    using frame_t = struct {
+        AudioFrame  frame;
+        int64_t timestamp = {-1LL};
+    };
+    using frameque_t = std::deque<frame_t>;
+    frameque_t m_audio_queue;
+    frameque_t m_probed_queue;
 
     std::atomic<bool> m_EoF  {false};
-    uint32_t m_loop_cnt      {0};
-    uint8_t* m_begin         {nullptr};
-    uint8_t* m_end           {nullptr};
-    uint8_t* m_write         {nullptr};
-    uint8_t* m_read          {nullptr};
-    uint8_t* m_prev_frame    {nullptr};
-    bool     m_write_wrapped {false};
     AVChannelLayout  m_channel_layout;
-
-    int64_t* m_timestamps  {nullptr};
-    int      m_frame_cnt   {0};
-    bool     m_own_buffer  {false};
-
-    int              m_mark;
 
     AVFormatContext* m_spdif_format_context {nullptr};
     AVIOContext*     m_spdif_avio_context   {nullptr};
@@ -100,13 +96,19 @@ class AudioBuffer
     int              m_block_size           {-1};
 
     AudioIO*         m_parent               {nullptr};
+    bool             m_initialized          {false};
+    bool             m_flushed              {false};
+    bool             m_probing              {true};
 
     std::mutex       m_write_mutex;
+    std::condition_variable m_new_buffer;
+    std::condition_variable m_data_avail;
 
     int              m_id               {-1};
     int              m_verbose          {0};
-    int              m_total            {0};
-    int              m_report_next      {0};
+    int              m_total_write      {0};
+    int              m_total_read       {0};
+    size_t           m_pkts_read        {0};
 };
 
 class AudioIO
@@ -118,13 +120,11 @@ class AudioIO
     ~AudioIO(void) { m_running.store(false); }
     void Shutdown(void);
 
-    bool AddBuffer(uint8_t* Pbegin, uint8_t* Pend,
-                   int num_channels, bool is_lpcm,
+    bool AddBuffer(int num_channels, bool is_lpcm,
                    int bytes_per_sample, int sample_rate,
-                   int samples_per_frame, int frame_size,
-                   int64_t* timestamps);
+                   int samples_per_frame, int frame_size);
     bool      RescanSPDIF(void);
-    int       Add(uint8_t* Pframe, int len, int64_t timestamp);
+    bool      Add(AudioBuffer::AudioFrame & buf, int64_t timestamp);
     int64_t   Seek(int64_t offset, int whence);
     int       Read(uint8_t* dest, int32_t len);
     AVPacket* ReadSPDIF(void);
@@ -138,7 +138,7 @@ class AudioIO
     int64_t TimeStamp(void) const { return m_timestamp; }
 
     std::string CodecName(void) const { return m_codec_name; }
-    AVChannelLayout ChannelLayout(void) const { return m_channel_layout; }
+    const AVChannelLayout* ChannelLayout(void) const;
     int     SampleRate(void) const { return m_sample_rate; }
     int     BytesPerSample(void) const { return m_bytes_per_sample; }
 
@@ -152,7 +152,9 @@ class AudioIO
     buffer_que_t     m_buffer_q;
 
     std::string      m_codec_name;
+#if 0
     AVChannelLayout  m_channel_layout;
+#endif
     int              m_sample_rate      {-1};
     int              m_bytes_per_sample {0};
 

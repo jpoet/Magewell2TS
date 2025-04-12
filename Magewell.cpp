@@ -731,14 +731,10 @@ bool Magewell::capture_audio(void)
     int err_cnt = 0;
     int frame_cnt = 0;
 
-    uint8_t* capture_buf     = nullptr;
-    int      frame_idx       = 0;
-    int      buf_idx         = 0;
-    const int audio_buf_sz   = 1024;
+    int      idx;
     int      frame_size      = 0;
-    int      capture_buf_size = 0;
 
-    int64_t* audio_timestamps = nullptr;
+    AudioBuffer::AudioFrame  audio_frame;
 
     ULONGLONG notify_status = 0;
     MWCAP_AUDIO_CAPTURE_FRAME macf;
@@ -841,7 +837,7 @@ bool Magewell::capture_audio(void)
             valid_channels = audio_signal_status.wChannelValid;
 
             cur_channels = 0;
-            for (int idx = 0; idx < (MWCAP_AUDIO_MAX_NUM_CHANNELS / 2); ++idx)
+            for (idx = 0; idx < (MWCAP_AUDIO_MAX_NUM_CHANNELS / 2); ++idx)
             {
                 cur_channels +=
                     (valid_channels & (0x01 << idx)) ? 2 : 0;
@@ -864,33 +860,15 @@ bool Magewell::capture_audio(void)
 
             // NOTE: capture_buf/audio_timestamps will be freed by AudioIO class
 
-            frame_idx = 0;
-            buf_idx = 0;
             frame_size = MWCAP_AUDIO_SAMPLES_PER_FRAME
                          * cur_channels * bytes_per_sample;
 
-            capture_buf_size = audio_buf_sz * frame_size;
+            audio_frame.resize(frame_size, '\0');
 
-            capture_buf = new uint8_t[capture_buf_size];
-            if (nullptr == capture_buf)
-            {
-                cerr << "ERROR: audio capture_buf alloc failed\n";
-                break;
-            }
-
-            audio_timestamps = new int64_t[audio_buf_sz];
-            if (nullptr == audio_timestamps)
-            {
-                cerr << "ERROR: audio timestamp buf alloc failed\n";
-                break;
-            }
-
-            m_out2ts->setAudioParams(capture_buf, capture_buf_size,
-                                     cur_channels, lpcm,
-                                     bytes_per_sample,
-                                     sample_rate,
+            m_out2ts->setAudioParams(cur_channels, lpcm,
+                                     bytes_per_sample, sample_rate,
                                      MWCAP_AUDIO_SAMPLES_PER_FRAME,
-                                     frame_size, audio_timestamps);
+                                     frame_size);
 
             m_reset_audio.store(false);
         }
@@ -947,6 +925,7 @@ bool Magewell::capture_audio(void)
               to 2channel 16bit
               L1R1L5R5(2byte)
             */
+#if 0
             for (int j = 0; j < (cur_channels/2); ++j)
             {
                 for (int i = 0 ; i < MWCAP_AUDIO_SAMPLES_PER_FRAME; ++i)
@@ -960,29 +939,32 @@ bool Magewell::capture_audio(void)
                                  >> (32 - audio_signal_status.cBitsPerSample);
                     DWORD right = macf.adwSamples[read_pos2]
                                   >> (32 - audio_signal_status.cBitsPerSample);
-#if 0
-                    if (capture_buf_size < frame_idx + write_pos + bytes_per_sample * 2)
-                        cerr << "\n==========+++++++++>> BAD NEWS: overwrote end of audio capture_buf.\n"
-                             << endl;
-#endif
-                    memcpy(&capture_buf[frame_idx + write_pos], &left, bytes_per_sample);
-                    memcpy(&capture_buf[frame_idx + write_pos + bytes_per_sample],
-                           &right, bytes_per_sample);
+
+                    copy(&left, &left + bytes_per_sample,
+                         capture_buf.begin() + write_pos);
+                    copy(&right, &right + bytes_per_sample,
+                         capture_buf.begin() + write_pos + bytes_per_sample);
                 }
             }
-
-#if 0
-            cerr << " FRAME_IDX " << frame_idx
-                 << " @ " << (uint64_t)(&capture_buf[frame_idx]) << endl;
-#endif
-            audio_timestamps[buf_idx] = macf.llTimestamp;
-            if (m_out2ts->addAudio(&capture_buf[frame_idx], frame_size,
-                                 macf.llTimestamp))
+#else
+            DWORD*   capture_buf = macf.adwSamples;
+            uint8_t* dest = audio_frame.data();
+//            WORD     temp;
+            for (idx = 0 ; idx < MWCAP_AUDIO_SAMPLES_PER_FRAME; ++idx)
             {
-                if (++buf_idx == audio_buf_sz)
-                    buf_idx = 0;
-                frame_idx = frame_size * buf_idx;
+                WORD temp = capture_buf[0] >>
+                            (32 - audio_signal_status.cBitsPerSample);
+                memcpy(dest, &temp, bytes_per_sample);
+                dest += bytes_per_sample;
+
+                temp = capture_buf[MWCAP_AUDIO_MAX_NUM_CHANNELS / 2] >>
+                       (32 - audio_signal_status.cBitsPerSample);
+                memcpy(dest, &temp, bytes_per_sample);
+                dest += bytes_per_sample;
+                capture_buf += MWCAP_AUDIO_MAX_NUM_CHANNELS;
             }
+#endif
+            m_out2ts->addAudio(audio_frame, macf.llTimestamp);
         }
     }
 
@@ -1011,7 +993,9 @@ void Magewell::pro_image_buffer_available(uint8_t* pbImage)
 {
     unique_lock<mutex> lock(m_image_buffer_mutex);
 
+#if 0
     --m_image_buffers_inflight;
+#endif
 
     if (m_avail_image_buffers.size() > m_image_buffers_desired)
     {
@@ -1043,8 +1027,8 @@ void Magewell::free_image_buffers(void)
     unique_lock<mutex> lock(m_image_buffer_mutex);
 
     // Wait for avail image buffers to return from Output thread.
-    m_image_returned.wait_for(lock, chrono::milliseconds(m_frame_ms),
-                              [this]{return m_image_buffers_inflight == 0;});
+    while (m_image_buffers_inflight > 0 && m_running.load())
+        m_image_returned.wait_for(lock, chrono::milliseconds(m_frame_ms));
 
     imageset_t::iterator Iimage;
     for (Iimage = m_image_buffers.begin();

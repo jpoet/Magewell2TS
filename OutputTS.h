@@ -30,15 +30,13 @@ class OutputTS
     void Shutdown(bool from_above = false);
 
     EncoderType encoderType(void) const { return m_encoderType; }
-    bool setAudioParams(uint8_t* capture_buf, size_t capture_buf_size,
-                        int num_channels, bool is_lpcm,
+    bool setAudioParams(int num_channels, bool is_lpcm,
                         int bytes_per_sample, int sample_rate,
-                        int samples_per_frame, int frame_size,
-                        int64_t* timestamps);
+                        int samples_per_frame, int frame_size);
     bool setVideoParams(int width, int height, bool interlaced,
                         AVRational time_base, double frame_duration,
                         AVRational frame_rate);
-    bool addAudio(uint8_t* buf, size_t len, int64_t timestamp);
+    bool addAudio(AudioBuffer::AudioFrame & buf, int64_t timestamp);
     void ClearImageQueue(void);
     void Write(void);
     bool AddVideoFrame(uint8_t*  pImage,
@@ -84,6 +82,7 @@ class OutputTS
     bool open_video(void);
     bool open_container(void);
     void close_container(void);
+    void close_encoder(OutputStream* ost);
 
     bool write_frame(AVFormatContext* fmt_ctx, AVCodecContext* c,
                      AVFrame* frame, OutputStream* ost);
@@ -115,7 +114,7 @@ class OutputTS
 
     EncoderType     m_encoderType  { UNKNOWN };
 
-    AudioIO         m_audioIO;
+    AudioIO*        m_audioIO;
 
     const AVOutputFormat* m_fmt   {nullptr};
     AVFormatContext* m_output_format_context {nullptr};
@@ -151,10 +150,10 @@ class OutputTS
     std::mutex              m_imagepkt_mutex;
     std::mutex              m_imagequeue_mutex;
     std::condition_variable m_image_ready;
+    std::condition_variable m_image_queue_empty;
 
     std::atomic<bool>       m_running      {true};
-    bool                    m_init_needed  {true};
-    bool                    m_audio_ready  {false};
+    std::atomic<bool>       m_init_needed  {true};
     std::mutex              m_ready_mutex;
     std::condition_variable m_ready_cond;
 };
