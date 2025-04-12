@@ -138,14 +138,13 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     m_image_ready_thread = std::thread(&OutputTS::Write, this);
 }
 
-void OutputTS::Shutdown(bool from_above)
+void OutputTS::Shutdown(void)
 {
-    m_running.store(false);
-
-    m_audioIO->Shutdown();
-
-    if (!from_above)
+    if (m_running.exchange(false))
+    {
         f_shutdown();
+        m_audioIO->Shutdown();
+    }
 }
 
 #if 0

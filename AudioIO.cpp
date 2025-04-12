@@ -513,10 +513,8 @@ AudioIO::AudioIO(int verbose)
 
 void AudioIO::Shutdown(void)
 {
-    if (m_running.load())
+    if (m_running.exchange(false))
     {
-        m_running.store(false);
-
         const std::unique_lock<std::mutex> lock(m_buffer_mutex);
 
         buffer_que_t::iterator Ibuf;

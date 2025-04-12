@@ -1611,12 +1611,11 @@ bool Magewell::Capture(const string & video_codec, const string & preset,
 
 void Magewell::Shutdown(void)
 {
-    if (m_running.load())
+    if (m_running.exchange(false))
     {
         if (m_verbose > 2)
             cerr << lock_ios() << "Magewell::Shutdown\n";
-        m_out2ts->Shutdown(true);
+        m_out2ts->Shutdown();
         m_reset_audio.store(true);
-        m_running.store(false);
     }
 }

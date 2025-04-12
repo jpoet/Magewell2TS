@@ -27,7 +27,7 @@ class OutputTS
              MagCallback image_buffer_avail);
     ~OutputTS(void);
 
-    void Shutdown(bool from_above = false);
+    void Shutdown(void);
 
     EncoderType encoderType(void) const { return m_encoderType; }
     bool setAudioParams(int num_channels, bool is_lpcm,
