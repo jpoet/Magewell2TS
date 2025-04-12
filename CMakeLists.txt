@@ -21,14 +21,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 add_compile_options(-Wall -Wreturn-type)
 
 # set the project name
-project(magewellpro2ts VERSION 0.1)
+project(magewell2ts VERSION 2.2)
 
 configure_file(version.h.in version.h)
 
 # add the executable
-add_executable(magewellpro2ts magewellpro2ts.cpp AudioIO.cpp OutputTS.cpp lock_ios.cpp)
+add_executable(magewell2ts magewell2ts.cpp Magewell.cpp AudioIO.cpp OutputTS.cpp lock_ios.cpp)
 
-# set_target_properties(magewellpro2ts PROPERTIES
+# set_target_properties(magewell2ts PROPERTIES
 #   LINK_SEARCH_START_STATIC ON
 #   LINK_SEARCH_END_STATIC ON
 # )
@@ -41,7 +41,7 @@ if(NOT V4L2_FOUND)
   message(FATAL_ERROR "libv4l required. e.g. `sudo dnf install -y libv4l-devel`")
 endif()
 
-target_include_directories(magewellpro2ts PUBLIC
+target_include_directories(magewell2ts PUBLIC
                            "${PROJECT_BINARY_DIR}"
 			   "${Magewell_INCLUDE_DIR}"
                            )
@@ -105,7 +105,7 @@ endif()
 
 set(CMAKE_VERBOSE_MAKEFILE on)
 
-target_link_libraries(magewellpro2ts PRIVATE
+target_link_libraries(magewell2ts PRIVATE
   Magewell::Magewell
   ${V4L2_LIBRARIES}
   ${UDEV_LIBRARY}
@@ -114,7 +114,7 @@ target_link_libraries(magewellpro2ts PRIVATE
   PkgConfig::LIBAV
 )
 
-install(TARGETS magewellpro2ts DESTINATION /usr/local/bin)
+install(TARGETS magewell2ts DESTINATION /usr/local/bin)
 
 ADD_CUSTOM_TARGET(debug
   COMMAND ${CMAKE_COMMAND} -DCMAKE_BUILD_TYPE=Debug ${CMAKE_SOURCE_DIR}

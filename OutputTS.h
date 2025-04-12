@@ -16,16 +16,18 @@ class OutputTS
 {
   public:
     using MagCallback = std::function<void (uint8_t*)>;
+    using ShutdownCallback = std::function<void (void)>;
 
     enum EncoderType { UNKNOWN, NV, VAAPI, QSV };
 
     OutputTS(int verbose, const std::string & video_codec_name,
              const std::string & preset, int quality, int look_ahead,
              bool no_audio, const std::string & device,
+             ShutdownCallback shutdown,
              MagCallback image_buffer_avail);
     ~OutputTS(void);
 
-    void Shutdown(void);
+    void Shutdown(bool from_above = false);
 
     EncoderType encoderType(void) const { return m_encoderType; }
     bool setAudioParams(uint8_t* capture_buf, size_t capture_buf_size,
@@ -143,7 +145,8 @@ class OutputTS
 
     std::mutex              m_container_mutex;
 
-    MagCallback             m_image_buffer_available;
+    ShutdownCallback        f_shutdown;
+    MagCallback             f_image_buffer_available;
     std::thread             m_image_ready_thread;
     std::mutex              m_imagepkt_mutex;
     std::mutex              m_imagequeue_mutex;

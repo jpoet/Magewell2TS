@@ -714,13 +714,16 @@ AudioIO::AudioIO(int verbose)
 
 void AudioIO::Shutdown(void)
 {
-    m_running.store(false);
+    if (m_running.load())
+    {
+        m_running.store(false);
 
-    const std::unique_lock<std::mutex> lock(m_buffer_mutex);
+        const std::unique_lock<std::mutex> lock(m_buffer_mutex);
 
-    buffer_que_t::iterator Ibuf;
-    for (Ibuf = m_buffer_q.begin(); Ibuf != m_buffer_q.end(); ++Ibuf)
-        (*Ibuf).setEoF();
+        buffer_que_t::iterator Ibuf;
+        for (Ibuf = m_buffer_q.begin(); Ibuf != m_buffer_q.end(); ++Ibuf)
+            (*Ibuf).setEoF();
+    }
 }
 
 bool AudioIO::AddBuffer(uint8_t* Pbegin, uint8_t* Pend,
