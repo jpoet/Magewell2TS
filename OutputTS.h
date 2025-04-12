@@ -53,9 +53,12 @@ class OutputTS
 
         /* pts of the next frame that will be generated */
         int64_t next_pts           {-1};
+        int64_t timestamp          {-1};
+#if 1
+        int64_t next_timestamp     {-1};
+#endif
 
         int samples_count          {0};
-
         AVFrame* frame             {nullptr};
         AVFrame* tmp_frame         {nullptr};
         int64_t  prev_pts          {-1};

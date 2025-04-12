@@ -957,43 +957,55 @@ bool OutputTS::write_pcm_frame(AVFormatContext* oc, OutputStream* ost)
 bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
 {
     AVPacket* pkt = m_audioIO->ReadSPDIF();
+    static int dur_err_cnt = 0;
 
     if (pkt == nullptr)
         return false;
 
-    pkt->pts = av_rescale_q(m_audioIO->TimeStamp(),
-                            m_input_time_base,
-                            ost->st->time_base);
+    ost->timestamp = m_audioIO->TimeStamp();
+    int64_t duration = av_rescale_q(pkt->duration,
+                                    ost->st->time_base,
+                                    m_input_time_base);
 
-    if (pkt->pts - ost->prev_audio_pts > ost->frame->nb_samples * 3)
+    if (ost->next_timestamp > 0 && pkt->duration &&
+        abs(ost->timestamp - ost->next_timestamp) > 150)
     {
-        /* This a bit of hack, but seems to solve the problem.
-           Jumping around in some applications can cause the S/PDIF to
-           get out of sync. For example, This can happen if the
-           audio_capture::audio_buf_sz is too small.
-        */
-        if (++m_slow_audio_cnt > 10)
+        /* When two packets in a row take longer than expected, this
+         * seems to indicate that the bitstream audio is out of
+         * sync. This often happens after seeking within a stream.
+         */
+        if (dur_err_cnt++ > 1)
         {
-            if (m_verbose > 0)
-                cerr << lock_ios()
-                     << "WARNING: S/PDIF audio out of sync, resetting." << endl;
-            m_slow_audio_cnt = 0;
-
-            if (!m_audioIO->RescanSPDIF())
-                Shutdown();
-
+#if 0
+            cerr << lock_ios() << "%%%%%%%%%%% PKT duration " << pkt->duration
+                 << " Scaled " << duration << " TS\n"
+                 << ost->timestamp << " expected\n"
+                 << ost->next_timestamp << "\n";
+#endif
+            m_audioIO->Reset("Invalid audio duration");
+            dur_err_cnt = 0;
+            ost->next_timestamp = -1;
             return false;
         }
     }
     else
-        m_slow_audio_cnt = 0;
+        dur_err_cnt = 0;
+
+    ost->next_timestamp = ost->timestamp + duration;
+    pkt->pts = av_rescale_q(ost->timestamp,
+                            m_input_time_base,
+                            ost->st->time_base);
 
     ost->prev_audio_pts = pkt->pts;
 
     /* Frame size passed from magewell includes all channels */
-    ost->next_pts = m_audioIO->TimeStamp() + ost->frame->nb_samples;
+#if 0
+    ost->next_pts = ost->timestamp + ost->frame->nb_samples;
+#else
+    ost->next_pts = pkt->pts + pkt->duration;
+#endif
 
-    pkt->duration = pkt->pts;
+//    pkt->duration = pkt->pts;
     pkt->dts = pkt->pts;
 
     pkt->stream_index = ost->st->index;

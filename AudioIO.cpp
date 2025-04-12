@@ -156,7 +156,7 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
             return 0;
     }
 
-#if 0 // More reliable detection in OutputTS::write_bitstream_frame ?
+#if 1 // More reliable detection in OutputTS::write_bitstream_frame ?
     static size_t m_missaligned_pkts = 0;
 
     if ((len % m_frame_size) % 32 != 0)
@@ -168,7 +168,7 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
                  << "Requested " << len
                  << " % " << m_frame_size << " = " << len % m_frame_size
                  << endl;
-            reset();
+            SetReady(false);
             return 0;
         }
 #if 0
@@ -688,6 +688,16 @@ const AVChannelLayout* AudioIO::ChannelLayout(void) const
     if (m_buffer_q.empty())
         return nullptr;
     return m_buffer_q.begin()->ChannelLayout();
+}
+
+void AudioIO::Reset(const string & where)
+{
+    if (m_verbose > 2)
+        cerr << lock_ios() << "AudioIO Reset by " << where << endl;
+    const lock_guard<mutex> lock(m_buffer_mutex);
+    if (m_buffer_q.empty())
+        return;
+    return m_buffer_q.begin()->SetReady(false);
 }
 
 bool AudioIO::CodecChanged(void)

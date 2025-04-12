@@ -141,8 +141,9 @@ class AudioIO
     const AVChannelLayout* ChannelLayout(void) const;
     int     SampleRate(void) const { return m_sample_rate; }
     int     BytesPerSample(void) const { return m_bytes_per_sample; }
-
     bool    Bitstream(void) { return !m_lpcm; }
+
+    void    Reset(const std::string & where);
     bool    CodecChanged(void);
 
   private:
