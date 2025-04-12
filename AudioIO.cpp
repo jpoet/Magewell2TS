@@ -733,9 +733,6 @@ bool AudioIO::CodecChanged(void)
         m_codec_name = (*Ibuf).CodecName();
     }
 
-#if 0
-    av_channel_layout_copy(&m_channel_layout, (*Ibuf).ChannelLayout());
-#endif
     m_sample_rate = (*Ibuf).SampleRate();
 
     if (m_bytes_per_sample != (*Ibuf).BytesPerSample())
