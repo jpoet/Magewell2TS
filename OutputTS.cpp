@@ -970,7 +970,7 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
                                     ost->st->time_base,
                                     m_input_time_base);
 
-#if 1
+#if 0
     if (ost->next_timestamp > 0 && pkt->duration &&
         abs(ost->timestamp - ost->next_timestamp) > 150)
     {
@@ -1567,6 +1567,26 @@ void OutputTS::Write(void)
             }
         }
 
+        if (m_audio_stream.enc)
+        {
+#if 0
+            cerr << lock_ios()
+                 << "Write: video " << m_video_stream.next_pts << "\n"
+                 << "  audio [" << setw(2) << m_audioIO->BufId()
+                 << "] " << m_audio_stream.next_pts << endl;
+#endif
+
+            write_audio_frame(m_output_format_context,
+                              &m_audio_stream);
+        }
+
+#if 1
+        if (m_audio_stream.timestamp == -1)
+            ClearImageQueue();
+#endif
+
+        while (!m_audio_stream.enc ||
+               m_video_stream.timestamp <= m_audio_stream.timestamp)
         {
             {
                 std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
@@ -1575,32 +1595,13 @@ void OutputTS::Write(void)
                 {
                     m_image_queue_empty.notify_one();
                     m_image_ready.wait_for(lock,
-                           std::chrono::milliseconds(m_input_frame_wait_ms));
-                    continue;
+                                           std::chrono::milliseconds(m_input_frame_wait_ms));
+                    break;
                 }
 
                 pImage    = m_imagequeue.front().image;
                 m_video_stream.timestamp = m_imagequeue.front().timestamp;
                 m_imagequeue.pop_front();
-            }
-
-            if (m_audio_stream.enc)
-            {
-#if 0
-                cerr << lock_ios()
-                     << "Write: video " << m_video_stream.next_pts << "\n"
-                     << "  audio [" << setw(2) << m_audioIO->BufId()
-                     << "] " << m_audio_stream.next_pts << endl;
-#endif
-
-                while (m_audio_stream.timestamp <= m_video_stream.timestamp)
-                {
-                    if (!write_audio_frame(m_output_format_context,
-                                           &m_audio_stream))
-                    {
-                        break;
-                    }
-                }
             }
 
             if (m_encoderType == EncoderType::NV)
@@ -1627,6 +1628,13 @@ void OutputTS::ClearImageQueue(void)
     for (Iq = m_imagequeue.begin(); Iq != m_imagequeue.end(); ++Iq)
         f_image_buffer_available((*Iq).image);
     m_imagequeue.clear();
+}
+
+void OutputTS::DiscardImages(bool val)
+{
+    m_discard_images = val;
+    if (val)
+        ClearImageQueue();
 }
 
 bool OutputTS::AddVideoFrame(uint8_t* pImage, uint32_t imageSize,

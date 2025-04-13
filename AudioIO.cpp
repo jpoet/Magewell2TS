@@ -727,9 +727,7 @@ bool AudioIO::CodecChanged(void)
 
     buffer_que_t::iterator Ibuf = m_buffer_q.begin();
     if (!(*Ibuf).LPCM())
-    {
         f_discard_images(true);
-    }
 
     if (!(*Ibuf).DetectCodec())
     {
@@ -742,10 +740,7 @@ bool AudioIO::CodecChanged(void)
     }
 
     if (!(*Ibuf).LPCM())
-    {
-        (*Ibuf).PurgeQueue();
         f_discard_images(false);
-    }
 
     if (m_codec_name != (*Ibuf).CodecName())
     {

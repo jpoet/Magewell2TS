@@ -38,7 +38,7 @@ class OutputTS
                         AVRational frame_rate);
     bool addAudio(AudioBuffer::AudioFrame & buf, int64_t timestamp);
     void ClearImageQueue(void);
-    void DiscardImages(bool val) { m_discard_images = val; }
+    void DiscardImages(bool val);
     void Write(void);
     bool AddVideoFrame(uint8_t*  pImage,
                        uint32_t imageSize, int64_t timestamp);
