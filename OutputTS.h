@@ -12,10 +12,15 @@
 
 #include "AudioIO.h"
 
+// FFmpeg structure for HDR
+extern "C" {
+#include <libavutil/mastering_display_metadata.h>
+}
+
 class OutputTS
 {
   public:
-    using MagCallback = std::function<void (uint8_t*)>;
+    using MagCallback = std::function<void (uint8_t*, void*)>;
     using ShutdownCallback = std::function<void (void)>;
 
     enum EncoderType { UNKNOWN, NV, VAAPI, QSV };
@@ -29,19 +34,31 @@ class OutputTS
 
     void Shutdown(void);
 
+    AVColorSpace getColorSpace(void) const { return m_color_space; }
+    AVColorTransferCharacteristic getColorTRC(void) const { return m_color_trc; }
+    AVColorPrimaries getColorPrimaries(void) const { return m_color_primaries; }
+
+    void setColorSpace(AVColorSpace c) { m_color_space = c; }
+    void setColorTRC(AVColorTransferCharacteristic c) { m_color_trc = c; }
+    void setColorPrimaries(AVColorPrimaries c) { m_color_primaries = c; }
+    bool isHDR(void) const { return m_isHDR; }
+
+    void setLight(AVMasteringDisplayMetadata * display_meta,
+                  AVContentLightMetadata * light_meta);
+
     EncoderType encoderType(void) const { return m_encoderType; }
     bool setAudioParams(int num_channels, bool is_lpcm,
                         int bytes_per_sample, int sample_rate,
                         int samples_per_frame, int frame_size);
     bool setVideoParams(int width, int height, bool interlaced,
                         AVRational time_base, double frame_duration,
-                        AVRational frame_rate);
+                        AVRational frame_rate, bool is_hdr);
     bool addAudio(AudioBuffer::AudioFrame & buf, int64_t timestamp);
     void ClearImageQueue(void);
     void DiscardImages(bool val);
     void Write(void);
-    bool AddVideoFrame(uint8_t*  pImage,
-                       uint32_t imageSize, int64_t timestamp);
+    bool AddVideoFrame(uint8_t*  pImage, void* pEco,
+                       int imageSize, int64_t timestamp);
 
   private:
     // a wrapper around a single output AVStream
@@ -146,6 +163,14 @@ class OutputTS
     AVRational       m_input_time_base        {1, 10000000};
 
     bool             m_interlaced             {false};
+
+    // HDR
+    bool                          m_isHDR             {false};
+    AVColorSpace                  m_color_space       {AVCOL_SPC_NB};
+    AVColorTransferCharacteristic m_color_trc         {AVCOL_TRC_NB};
+    AVColorPrimaries              m_color_primaries   {AVCOL_PRI_NB};
+    AVMasteringDisplayMetadata*   m_display_primaries {nullptr};
+    AVContentLightMetadata*       m_content_light     {nullptr};
 
     std::mutex              m_container_mutex;
 
