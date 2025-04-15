@@ -736,7 +736,7 @@ bool AudioIO::CodecChanged(void)
              << "Failed to detect S/PDIF\n";
 #endif
         m_codec_name.clear();
-        return true;
+        return false;
     }
 
     if (!(*Ibuf).LPCM())

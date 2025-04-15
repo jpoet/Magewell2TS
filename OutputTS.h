@@ -91,6 +91,8 @@ class OutputTS
     using imagepkt_t = struct {
         int64_t  timestamp;
         uint8_t* image;
+        void*    pEco;
+        int      image_size;
     };
     using imageque_t = std::deque<imagepkt_t>;
     imageque_t m_imagequeue;
@@ -126,12 +128,12 @@ class OutputTS
                     AVDictionary* opt_arg);
     bool open_qsv(const AVCodec* codec, OutputStream* ost,
                   AVDictionary* opt_arg);
-    bool nv_encode(AVFormatContext* oc,
-                   OutputStream* ost, uint8_t* pImage,
-                   int64_t timestamp);
-    bool qsv_vaapi_encode(AVFormatContext* oc,
-                      OutputStream* ost, uint8_t*  pImage,
-                      int64_t timestamp);
+    bool nv_encode(AVFormatContext* oc, OutputStream* ost,
+                   uint8_t* pImage, void* pEco,
+                   int image_size, int64_t timestamp);
+    bool qsv_vaapi_encode(AVFormatContext* oc, OutputStream* ost,
+                          uint8_t* pImage, void* pEco,
+                          int image_size, int64_t timestamp);
 
     EncoderType     m_encoderType  { UNKNOWN };
 

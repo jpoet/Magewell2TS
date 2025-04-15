@@ -764,339 +764,6 @@ int EcoEventWait(mw_event_t event, int timeout/*ms*/)
 
 bool Magewell::capture_audio(void)
 {
-    bool      lpcm = false;
-    int       bytes_per_sample = 0;
-    int       even_bytes_per_sample = 0;
-    unsigned int sample_rate = 0;
-    WORD      valid_channels = 0;
-    MWCAP_PTR notify_event = 0;
-    int       eco_event    = 0;
-    HNOTIFY   notify_audio = 0;
-    DWORD     input_count  = 0;
-    int       cur_channels;
-#if 0
-    int       channel_offset;
-#endif
-    MWCAP_AUDIO_SIGNAL_STATUS audio_signal_status;
-    int err_cnt = 0;
-    int frame_cnt = 0;
-
-    int      idx;
-    int      frame_size      = 0;
-
-    AudioBuffer::AudioFrame  audio_frame;
-
-    ULONGLONG notify_status = 0;
-    MWCAP_AUDIO_CAPTURE_FRAME macf;
-
-    notify_event = MWCreateEvent();
-    if (notify_event == 0)
-    {
-        cerr << "ERROR: create notify_event fail\n";
-        goto audio_capture_stoped;
-    }
-
-    MWGetAudioInputSourceArray(m_channel, nullptr, &input_count);
-    if (input_count == 0)
-    {
-        cerr << "ERROR: can't find audio input\n";
-        goto audio_capture_stoped;
-    }
-
-    if (MW_SUCCEEDED != MWStartAudioCapture(m_channel))
-    {
-        cerr << "ERROR: start audio capture fail!\n";
-        goto audio_capture_stoped;
-    }
-
-    if (m_verbose > 1)
-        cerr << "Audio capture starting\n";
-
-    // MWRegisterNotify for eco_event randomly fails, so give it a few tries
-    for (idx = 0; idx < 5; ++idx)
-    {
-        if (m_isEco)
-        {
-            eco_event = eventfd(0, EFD_NONBLOCK);
-            if (notify_event < 0)
-            {
-                cerr << lock_ios() << "ERROR: Failed to create eco event.\n";
-                Shutdown();
-                return false;
-            }
-            notify_audio  = MWRegisterNotify(m_channel, eco_event,
-                                     (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
-                                     (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE  |
-                                     (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET    |
-                                     (DWORD)MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO
-                                             );
-        }
-        else
-        {
-            notify_event = MWCreateEvent();
-            if (notify_event == 0)
-            {
-                cerr << lock_ios() << "ERROR: create notify_event fail\n";
-                Shutdown();
-                return false;
-            }
-            notify_audio  = MWRegisterNotify(m_channel, notify_event,
-                                     (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
-                                     (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE  |
-                                     (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET);
-        }
-
-        if (notify_audio > 0)
-            break;
-
-        cerr << lock_ios()
-             << "WARNING: Register Notify audio failed, will try again.\n";
-        this_thread::sleep_for(chrono::milliseconds(1));
-    }
-
-    if (idx == 5)
-    {
-        Shutdown();
-        return false;
-    }
-
-    while (m_running.load() == true)
-    {
-        if (MW_SUCCEEDED != MWGetAudioSignalStatus(m_channel,
-                                                   &audio_signal_status))
-        {
-            if (err_cnt++ % 50 == 0 && m_verbose > 0)
-                cerr << "WARNING (cnt: " << err_cnt
-                     << ") can't get audio signal status\n";
-            this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
-            continue;
-        }
-
-        if (!audio_signal_status.wChannelValid)
-        {
-            if (++err_cnt % 50 == 0 && m_verbose > 0)
-                cerr << "WARNING (cnt: " << err_cnt
-                     << ") can't get audio, signal is invalid\n";
-
-            this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
-            continue;
-        }
-
-        even_bytes_per_sample = audio_signal_status.cBitsPerSample / 8;
-        if (even_bytes_per_sample > 2)
-            even_bytes_per_sample = 4;
-
-        if (m_reset_audio.load() == true ||
-            lpcm != audio_signal_status.bLPCM ||
-            sample_rate != audio_signal_status.dwSampleRate ||
-            bytes_per_sample != even_bytes_per_sample ||
-            valid_channels != audio_signal_status.wChannelValid)
-        {
-            if (m_verbose > 0 && frame_cnt > 0)
-            {
-                cerr << "WARNING: Audio signal CHANGED after "
-                     << frame_cnt << " frames!\n";
-                if (lpcm != audio_signal_status.bLPCM)
-                    cerr << "PCM changed " << lpcm
-                         << " -> "
-                         << static_cast<bool>(audio_signal_status.bLPCM)
-                         << endl;
-                if (sample_rate != audio_signal_status.dwSampleRate)
-                    cerr << "sample rate changed " << sample_rate
-                         << " -> " << audio_signal_status.dwSampleRate
-                         << endl;
-                if (bytes_per_sample != even_bytes_per_sample)
-                    cerr << "bytes per sample changed "
-                         << bytes_per_sample << " -> "
-                         << even_bytes_per_sample
-                         << endl;
-                if (valid_channels != audio_signal_status.wChannelValid)
-                    cerr << "Valid channels changed "
-                         << valid_channels << " -> "
-                         << audio_signal_status.wChannelValid << endl;
-            }
-
-            lpcm = audio_signal_status.bLPCM;
-            sample_rate = audio_signal_status.dwSampleRate;
-            bytes_per_sample = even_bytes_per_sample;
-            valid_channels = audio_signal_status.wChannelValid;
-
-            cur_channels = 0;
-            for (idx = 0; idx < (MWCAP_AUDIO_MAX_NUM_CHANNELS / 2); ++idx)
-            {
-                cur_channels +=
-                    (valid_channels & (0x01 << idx)) ? 2 : 0;
-            }
-
-            if (0 == cur_channels)
-            {
-                if (err_cnt++ % 25 == 0 && m_verbose > 0)
-                    cerr << "WARNING [" << err_cnt
-                         << "] Invalid audio channel count: "
-                         << cur_channels << endl;
-
-                this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
-                continue;
-            }
-
-#if 0
-            channel_offset = cur_channels / 2;
-#endif
-
-            // NOTE: capture_buf/audio_timestamps will be freed by AudioIO class
-
-            frame_size = MWCAP_AUDIO_SAMPLES_PER_FRAME
-                         * cur_channels * bytes_per_sample;
-
-            audio_frame.resize(frame_size, '\0');
-
-            m_out2ts->setAudioParams(cur_channels, lpcm,
-                                     bytes_per_sample, sample_rate,
-                                     MWCAP_AUDIO_SAMPLES_PER_FRAME,
-                                     frame_size);
-
-            m_reset_audio.store(false);
-        }
-
-        err_cnt = 0;
-        frame_cnt = 0;
-        while (m_reset_audio.load() == false)
-        {
-            if (m_isEco)
-            {
-                if (EcoEventWait(eco_event, 1000) <= 0)
-                {
-                    if (m_verbose > 1)
-                        cerr << lock_ios()
-                             << "Audio wait notify error or timeout\n";
-                    continue;
-                }
-            }
-            else
-            {
-                if (MWWaitEvent(notify_event, 1000) <= 0)
-                {
-                    if (m_verbose > 1)
-                        cerr << lock_ios()
-                             << "Audio wait notify error or timeout\n";
-                    continue;
-                }
-            }
-
-            if (MW_SUCCEEDED != MWGetNotifyStatus(m_channel,
-                                                  notify_audio,
-                                                  &notify_status))
-                continue;
-
-            if (notify_status & MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE)
-            {
-                this_thread::sleep_for(chrono::milliseconds(m_frame_ms * 3));
-                break;
-            }
-
-            if (notify_status & MWCAP_NOTIFY_AUDIO_INPUT_RESET)
-            {
-                if (m_verbose > 0)
-                    cerr << "WARNING: Audio input RESET!\n";
-                this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
-                break;
-            }
-
-            if (notify_status & MWCAP_NOTIFY_HDMI_INFOFRAME_AUDIO)
-            {
-                if (m_verbose > 0)
-                    cerr << "WARNING: Audio HDMI INFOFRAME AUDIO -- unhandled!\n";
-            }
-
-            if (!(notify_status & MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED))
-                continue;
-
-            if (MW_ENODATA == MWCaptureAudioFrame(m_channel, &macf))
-            {
-                this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
-                continue;
-            }
-
-            ++frame_cnt;
-
-            /*
-              L1L2L3L4R1R2R3R4L5L6L7L8R5R6R7R8(4byte)
-              to 2channel 16bit
-              L1R1L5R5(2byte)
-            */
-#if 0
-            for (int j = 0; j < (cur_channels/2); ++j)
-            {
-                for (int i = 0 ; i < MWCAP_AUDIO_SAMPLES_PER_FRAME; ++i)
-                {
-                    int write_pos = (i * cur_channels + j * 2) *
-                                    bytes_per_sample;
-                    int read_pos = (i * MWCAP_AUDIO_MAX_NUM_CHANNELS + j);
-                    int read_pos2 = (i * MWCAP_AUDIO_MAX_NUM_CHANNELS + j +
-                                     MWCAP_AUDIO_MAX_NUM_CHANNELS / 2);
-                    DWORD left = macf.adwSamples[read_pos]
-                                 >> (32 - audio_signal_status.cBitsPerSample);
-                    DWORD right = macf.adwSamples[read_pos2]
-                                  >> (32 - audio_signal_status.cBitsPerSample);
-
-                    copy(&left, &left + bytes_per_sample,
-                         capture_buf.begin() + write_pos);
-                    copy(&right, &right + bytes_per_sample,
-                         capture_buf.begin() + write_pos + bytes_per_sample);
-                }
-            }
-#else
-            DWORD*   capture_buf = macf.adwSamples;
-            uint8_t* dest = audio_frame.data();
-//            WORD     temp;
-            for (idx = 0 ; idx < MWCAP_AUDIO_SAMPLES_PER_FRAME; ++idx)
-            {
-                WORD temp = capture_buf[0] >>
-                            (32 - audio_signal_status.cBitsPerSample);
-                memcpy(dest, &temp, bytes_per_sample);
-                dest += bytes_per_sample;
-
-                temp = capture_buf[MWCAP_AUDIO_MAX_NUM_CHANNELS / 2] >>
-                       (32 - audio_signal_status.cBitsPerSample);
-                memcpy(dest, &temp, bytes_per_sample);
-                dest += bytes_per_sample;
-                capture_buf += MWCAP_AUDIO_MAX_NUM_CHANNELS;
-            }
-#endif
-            m_out2ts->addAudio(audio_frame, macf.llTimestamp);
-        }
-    }
-
-  audio_capture_stoped:
-    cerr << "\nAudio Capture finished.\n" << endl;
-    Shutdown();
-
-    if(notify_audio)
-    {
-        MWUnregisterNotify(m_channel, notify_audio);
-        notify_audio = 0;
-    }
-
-    if (eco_event)
-    {
-        eventfd_write(eco_event, 1);
-        close(eco_event);
-    }
-
-    MWStopAudioCapture(m_channel);
-
-    if(notify_event!= 0)
-    {
-        MWCloseEvent(notify_event);
-        notify_event = 0;
-    }
-
-    return false;
-}
-
-#if 0
-bool Magewell::capture_audio_new(void)
-{
     int       idx;
     bool      lpcm = false;
     int       bytes_per_sample = 0;
@@ -1210,6 +877,7 @@ bool Magewell::capture_audio_new(void)
         even_bytes_per_sample = audio_signal_status.cBitsPerSample / 8;
         if (even_bytes_per_sample > 2)
             even_bytes_per_sample = 4;
+
         {
             // Mutex lock cerr
             ios_lock lock;
@@ -1286,10 +954,6 @@ bool Magewell::capture_audio_new(void)
                 continue;
             }
 
-#if 0
-            channel_offset = cur_channels / 2;
-#endif
-
             frame_size = MWCAP_AUDIO_SAMPLES_PER_FRAME
                          * cur_channels * bytes_per_sample;
 
@@ -1339,9 +1003,9 @@ bool Magewell::capture_audio_new(void)
 
             if (notify_status & MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE)
             {
-#if 0
-                this_thread::sleep_for(chrono::milliseconds(m_frame_ms * 3));
-#endif
+                if (m_verbose > 0)
+                    cerr << lock_ios() << "AUDIO signal changed.\n";
+                this_thread::sleep_for(chrono::milliseconds(m_frame_ms * 5));
                 break;
             }
 
@@ -1378,10 +1042,6 @@ bool Magewell::capture_audio_new(void)
               to 2channel 16bit
               L1R1L5R5(2byte)
             */
-#if 0
-            audio_frame.resize(frame_size, '\0');
-#endif
-
 #if 0
             for (int j = 0; j < (cur_channels/2); ++j)
             {
@@ -1443,7 +1103,7 @@ bool Magewell::capture_audio_new(void)
         close(eco_event);
     }
 
-    MWShutdownAudioCapture(m_channel);
+    MWStopAudioCapture(m_channel);
 
     if (notify_event!= 0)
     {
@@ -1453,7 +1113,6 @@ bool Magewell::capture_audio_new(void)
 
     return true;
 }
-#endif
 
 bool Magewell::update_HDRinfo(void)
 {
@@ -2636,9 +2295,11 @@ bool Magewell::Capture(const string & video_codec, const string & preset,
 
 void Magewell::Shutdown(void)
 {
-    if (m_verbose > 2)
-        cerr << lock_ios() << "Magewell::Shutdown\n";
-    m_out2ts->Shutdown(true);
-    m_running.store(false);
-    m_reset_audio.store(true);
+    if (m_running.exchange(false))
+    {
+        if (m_verbose > 2)
+            cerr << lock_ios() << "Magewell::Shutdown\n";
+        m_out2ts->Shutdown();
+        m_reset_audio.store(true);
+    }
 }
