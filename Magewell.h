@@ -10,6 +10,7 @@
 
 #include <MWFOURCC.h>
 #include <LibMWCapture/MWCapture.h>
+#include "LibMWCapture/MWEcoCapture.h"
 
 #include "OutputTS.h"
 
@@ -22,9 +23,7 @@ class Magewell
 
     using imageset_t = std::set<uint8_t*>;
     using imageque_t = std::deque<uint8_t*>;
-#if 0
     using ecoque_t   = std::set<MWCAP_VIDEO_ECO_CAPTURE_FRAME *>;
-#endif
 
   public:
     Magewell(void);
@@ -47,22 +46,28 @@ class Magewell
     void Shutdown(void);
     void Reset(void) { m_reset_audio.store(true); }
 
-
     bool operator! (void) { return m_fatal; }
 
   private:
     bool describe_input(HCHANNEL channel);
 
-    void pro_image_buffer_available(uint8_t* pbImage);
+    bool update_HDRcolorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status);
+    bool update_HDRframe(void);
+    bool update_HDRinfo(void);
+
+    void pro_image_buffer_available(uint8_t* pbImage, void* pEco);
+    void eco_image_buffer_available(uint8_t* pbImage, void* pEco);
     bool add_pro_image_buffer(void);
+    bool add_eco_image_buffer(void);
     void free_image_buffers(void);
 
-#if 0
     void set_notify(HNOTIFY&  notify,
                     HCHANNEL  hChannel,
                     MWCAP_PTR hNotifyEvent,
                     DWORD     flags);
-#endif
+
+    bool open_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN & eco_params);
+    void close_eco_video(void);
 
     void capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                            HNOTIFY video_notify,
@@ -70,6 +75,11 @@ class Magewell
                            MWCAP_PTR capture_event,
                            int       frame_wrap_idx,
                            DWORD     event_mask,
+                           ULONGLONG ullStatusBits,
+                           bool interlaced);
+    void capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
+                           int eco_event,
+                           HNOTIFY video_notify,
                            ULONGLONG ullStatusBits,
                            bool interlaced);
 
@@ -95,9 +105,7 @@ class Magewell
     size_t       m_image_buffers_inflight {0};
     imageset_t   m_image_buffers;
     imageque_t   m_avail_image_buffers;
-#if 0
     ecoque_t     m_eco_buffers;
-#endif
     std::mutex   m_image_buffer_mutex;
     std::condition_variable m_image_returned;
 
@@ -114,6 +122,7 @@ class Magewell
 
     std::function<bool (void)>  f_open_video;
 
+    bool m_isEco   {false};
     bool m_isHDR   {false};
     bool m_fatal   {false};
     int  m_verbose {1};

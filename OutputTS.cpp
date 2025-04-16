@@ -137,6 +137,9 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
                                 verbose_level);
 
     m_image_ready_thread = std::thread(&OutputTS::Write, this);
+
+    m_display_primaries  = av_mastering_display_metadata_alloc();
+    m_content_light  = av_content_light_metadata_alloc(NULL);
 }
 
 void OutputTS::Shutdown(void)
@@ -145,6 +148,16 @@ void OutputTS::Shutdown(void)
     {
         f_shutdown();
         m_audioIO->Shutdown();
+    }
+}
+
+void OutputTS::setLight(AVMasteringDisplayMetadata * display_meta,
+                        AVContentLightMetadata * light_meta)
+{
+    if (display_meta && light_meta)
+    {
+        *m_display_primaries = *display_meta;
+        *m_content_light = *light_meta;
     }
 }
 
@@ -418,7 +431,25 @@ bool OutputTS::open_video(void)
       AV_PIX_FMT_NV12, AV_PIX_FMT_P010, AV_PIX_FMT_QSV
     */
 
-    m_video_stream.enc->color_range     = AVCOL_RANGE_UNSPECIFIED;
+    if (m_isHDR)
+    {
+        if (m_verbose > 0)
+            cerr << lock_ios()
+                 << "Open video stream with HDR.\n";
+#if 1
+        // Full color range
+        m_video_stream.enc->color_range     = AVCOL_RANGE_JPEG;
+#else
+        // Limited color range
+        m_video_stream.enc->color_range     = AVCOL_RANGE_MPEG;
+#endif
+    }
+    else
+        m_video_stream.enc->color_range     = AVCOL_RANGE_UNSPECIFIED;
+
+    m_video_stream.enc->color_primaries = m_color_primaries;
+    m_video_stream.enc->color_trc       = m_color_trc;
+    m_video_stream.enc->colorspace      = m_color_space;
 
     if (m_encoderType == EncoderType::QSV)
         m_video_stream.enc->pix_fmt = AV_PIX_FMT_QSV;
@@ -615,7 +646,7 @@ bool OutputTS::setAudioParams(int num_channels, bool is_lpcm,
 
 bool OutputTS::setVideoParams(int width, int height, bool interlaced,
                               AVRational time_base, double frame_duration,
-                              AVRational frame_rate)
+                              AVRational frame_rate, bool is_hdr)
 {
     unique_lock<mutex> lock(m_imagequeue_mutex);
 
@@ -631,6 +662,7 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     m_input_time_base = time_base;
     m_input_frame_duration = frame_duration;
     m_input_frame_rate = frame_rate;
+    m_isHDR = is_hdr;
 
     double fps = static_cast<double>(frame_rate.num) / frame_rate.den;
 
@@ -638,9 +670,8 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     {
         cerr << lock_ios()
              << "Video: " << width << "x" << height
-             << " fps: " << fps
-             << (m_interlaced ? 'i' : 'p')
-             << "\n";
+             << (m_interlaced ? 'i' : 'p') << fps
+             << (m_isHDR ? " HDR" : "") << endl;
         if (m_verbose > 2)
             cerr << lock_ios()
                  << "Video Params set\n";
@@ -658,6 +689,9 @@ OutputTS::~OutputTS(void)
 
     if (m_image_ready_thread.joinable())
         m_image_ready_thread.join();
+
+    av_freep(&m_display_primaries);
+    av_freep(&m_content_light);
 
     close_stream(&m_video_stream);
     if (m_video_stream.hw_device_ctx != nullptr)
@@ -1243,7 +1277,10 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     }
     frames_ctx = reinterpret_cast<AVHWFramesContext* >(hw_frames_ref->data);
     frames_ctx->format    = AV_PIX_FMT_VAAPI;
-    frames_ctx->sw_format = AV_PIX_FMT_NV12;
+    if (m_isHDR)
+        frames_ctx->sw_format = AV_PIX_FMT_P010;
+    else
+        frames_ctx->sw_format = AV_PIX_FMT_NV12;
     frames_ctx->width     = m_input_width;
     frames_ctx->height    = m_input_height;
     frames_ctx->initial_pool_size = 20;
@@ -1376,8 +1413,18 @@ bool OutputTS::open_qsv(const AVCodec* codec,
         return false;
     }
     frames_ctx = reinterpret_cast<AVHWFramesContext* >(hw_frames_ref->data);
+
+    if (m_isHDR)
+    {
+        if (m_verbose > 1)
+            cerr << lock_ios()
+                 << "Open QSV stream with HDR.\n";
+        frames_ctx->sw_format = AV_PIX_FMT_P010;
+    }
+    else
+        frames_ctx->sw_format = AV_PIX_FMT_NV12;
+
     frames_ctx->format    = AV_PIX_FMT_QSV;
-    frames_ctx->sw_format = AV_PIX_FMT_NV12;
     frames_ctx->width     = m_input_width;
     frames_ctx->height    = m_input_height;
     frames_ctx->initial_pool_size = 20;
@@ -1429,11 +1476,9 @@ bool OutputTS::open_qsv(const AVCodec* codec,
 
 bool OutputTS::nv_encode(AVFormatContext* oc,
                          OutputStream* ost,
-                         uint8_t* pImage,
-                         int64_t  timestamp)
+                         uint8_t* pImage, void* pEco,
+                         int image_size, int64_t  timestamp)
 {
-    AVCodecContext* ctx = ost->enc;
-
 #if 0
     /* when we pass a frame to the encoder, it may keep a reference to it
      * internally; make sure we do not overwrite it here */
@@ -1446,15 +1491,24 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
 #endif
 
     // YUV 4:2:0
-    size_t size = ctx->width * ctx->height;
-    memcpy(ost->frame->data[0], pImage, size);
+    memcpy(ost->frame->data[0], pImage, image_size);
     memcpy(ost->frame->data[1],
-           pImage + size, size / 4);
-    memcpy(ost->frame->data[2], pImage + size * 5 / 4, size  / 4);
-    f_image_buffer_available(pImage);
+           pImage + image_size, image_size / 4);
+    memcpy(ost->frame->data[2], pImage + image_size * 5 / 4, image_size  / 4);
+    f_image_buffer_available(pImage, pEco);
+
+    if (m_isHDR)
+    {
+        AVMasteringDisplayMetadata* primaries =
+            av_mastering_display_metadata_create_side_data(ost->frame);
+        *primaries = *m_display_primaries;
+        AVContentLightMetadata* light =
+            av_content_light_metadata_create_side_data(ost->frame);
+        *light = *m_content_light;
+    }
 
     ost->frame->pts = av_rescale_q_rnd(timestamp, m_input_time_base,
-                                       ctx->time_base,
+                                       ost->enc->time_base,
                       static_cast<AVRounding>(AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX));
 
     ost->next_pts = timestamp + 1;
@@ -1462,21 +1516,29 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
     return write_frame(oc, ost->enc, ost->frame, ost);
 }
 
-bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
-                                OutputStream* ost, uint8_t*  pImage,
-                                int64_t timestamp)
+bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc, OutputStream* ost,
+                                uint8_t*  pImage, void* pEco,
+                                int image_size, int64_t timestamp)
 {
-    AVCodecContext* enc_ctx = ost->enc;
     static AVFrame* hw_frame = nullptr;
     int    ret;
 
     int64_t pts = av_rescale_q(timestamp, m_input_time_base,
-                               enc_ctx->time_base);
+                               ost->enc->time_base);
 
-    size_t size = enc_ctx->width * enc_ctx->height;
-    memcpy(ost->frame->data[0], pImage, size);
-    memcpy(ost->frame->data[1], pImage + size, size / 2);
-    f_image_buffer_available(pImage);
+    memcpy(ost->frame->data[0], pImage, image_size);
+    memcpy(ost->frame->data[1], pImage + image_size, image_size / 2);
+    f_image_buffer_available(pImage, pEco);
+
+    if (m_isHDR)
+    {
+        AVMasteringDisplayMetadata* primaries =
+            av_mastering_display_metadata_create_side_data(ost->frame);
+        *primaries = *m_display_primaries;
+        AVContentLightMetadata* light =
+            av_content_light_metadata_create_side_data(ost->frame);
+        *light = *m_content_light;
+    }
 
     if (!(hw_frame = av_frame_alloc()))
     {
@@ -1486,7 +1548,7 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
         return false;
     }
 
-    if ((ret = av_hwframe_get_buffer(enc_ctx->hw_frames_ctx,
+    if ((ret = av_hwframe_get_buffer(ost->enc->hw_frames_ctx,
                                      hw_frame, 0)) < 0)
     {
         cerr << lock_ios()
@@ -1517,7 +1579,7 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
     hw_frame->pts = pts;
     ost->next_pts = timestamp + 1;
 
-    ret = write_frame(oc, enc_ctx, hw_frame, ost);
+    ret = write_frame(oc, ost->enc, hw_frame, ost);
     av_frame_free(&hw_frame);
 
     return ret;
@@ -1526,6 +1588,8 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc,
 void OutputTS::Write(void)
 {
     uint8_t* pImage;
+    void*    pEco;
+    int      image_size;
 
     while (m_running.load() == true)
     {
@@ -1601,17 +1665,22 @@ void OutputTS::Write(void)
                 }
 
                 pImage    = m_imagequeue.front().image;
+                pEco      = m_imagequeue.front().pEco;
+                image_size = m_imagequeue.front().image_size;
                 m_video_stream.timestamp = m_imagequeue.front().timestamp;
+
                 m_imagequeue.pop_front();
             }
 
             if (m_encoderType == EncoderType::NV)
                 nv_encode(m_output_format_context, &m_video_stream,
-                          pImage, m_video_stream.timestamp);
+                          pImage, pEco, image_size,
+                          m_video_stream.timestamp);
             else if (m_encoderType == EncoderType::QSV ||
                      m_encoderType == EncoderType::VAAPI)
                 qsv_vaapi_encode(m_output_format_context, &m_video_stream,
-                                 pImage, m_video_stream.timestamp);
+                                 pImage, pEco, image_size,
+                                 m_video_stream.timestamp);
             else
             {
                 cerr << lock_ios() << "ERROR: Unknown encoderType.\n";
@@ -1627,7 +1696,7 @@ void OutputTS::ClearImageQueue(void)
     const unique_lock<mutex> lock(m_imagequeue_mutex);
     imageque_t::iterator Iq;
     for (Iq = m_imagequeue.begin(); Iq != m_imagequeue.end(); ++Iq)
-        f_image_buffer_available((*Iq).image);
+        f_image_buffer_available((*Iq).image, (*Iq).pEco);
     m_imagequeue.clear();
 }
 
@@ -1638,16 +1707,16 @@ void OutputTS::DiscardImages(bool val)
         ClearImageQueue();
 }
 
-bool OutputTS::AddVideoFrame(uint8_t* pImage, uint32_t imageSize,
-                          int64_t timestamp)
+bool OutputTS::AddVideoFrame(uint8_t* pImage, void* pEco,
+                             int imageSize, int64_t timestamp)
 {
     const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
 
     if (m_discard_images)
-        f_image_buffer_available(pImage);
+        f_image_buffer_available(pImage, pEco);
     else
     {
-        m_imagequeue.push_back(imagepkt_t{timestamp, pImage});
+        m_imagequeue.push_back(imagepkt_t{timestamp, pImage, pEco, imageSize});
         m_image_ready.notify_one();
     }
 
