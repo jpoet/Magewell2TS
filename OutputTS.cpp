@@ -960,7 +960,6 @@ bool OutputTS::write_pcm_frame(AVFormatContext* oc, OutputStream* ost)
 bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
 {
     AVPacket* pkt = m_audioIO->ReadSPDIF();
-    static int dur_err_cnt = 0;
 
     if (pkt == nullptr)
         return false;
@@ -971,6 +970,8 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
                                     m_input_time_base);
 
 #if 0
+    static int dur_err_cnt = 0;
+
     if (ost->next_timestamp > 0 && pkt->duration &&
         abs(ost->timestamp - ost->next_timestamp) > 150)
     {
