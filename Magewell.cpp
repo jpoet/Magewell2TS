@@ -1274,21 +1274,7 @@ bool Magewell::update_HDRcolorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status)
             result = true;
         }
     }
-    else if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV709)
-    {
-        if (m_verbose > 1)
-            cerr << lock_ios() << "Color format: YUV709\n";
-        if (m_out2ts->getColorSpace() != AVCOL_SPC_BT709 ||
-            m_out2ts->getColorPrimaries() != AVCOL_PRI_BT709 ||
-            m_out2ts->getColorTRC() != AVCOL_TRC_BT709)
-        {
-            m_out2ts->setColorSpace(AVCOL_SPC_BT709);
-            m_out2ts->setColorPrimaries(AVCOL_PRI_BT709);
-            m_out2ts->setColorTRC(AVCOL_TRC_BT709);
-            result = true;
-        }
-    }
-    else /* if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV2020)*/
+    else if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV2020)
     {
         if (m_verbose > 1)
             cerr << lock_ios() << "Color format: YUV2020\n";
@@ -1322,6 +1308,20 @@ bool Magewell::update_HDRcolorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status)
                   result = true;
               }
               break;
+        }
+    }
+    else /* (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV709) */
+    {
+        if (m_verbose > 1)
+            cerr << lock_ios() << "Color format: YUV709\n";
+        if (m_out2ts->getColorSpace() != AVCOL_SPC_BT709 ||
+            m_out2ts->getColorPrimaries() != AVCOL_PRI_BT709 ||
+            m_out2ts->getColorTRC() != AVCOL_TRC_BT709)
+        {
+            m_out2ts->setColorSpace(AVCOL_SPC_BT709);
+            m_out2ts->setColorPrimaries(AVCOL_PRI_BT709);
+            m_out2ts->setColorTRC(AVCOL_TRC_BT709);
+            result = true;
         }
     }
 
