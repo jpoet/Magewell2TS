@@ -545,12 +545,12 @@ bool AudioIO::AddBuffer(int num_channels, bool is_lpcm,
                                          bytes_per_sample, sample_rate,
                                          samples_per_frame, frame_size,
                                          this, m_verbose, m_buf_id++));
-        Ibuf = m_buffer_q.end() - 1;
+        m_Iback = m_buffer_q.end() - 1;
 
         if (m_verbose > 2)
         {
             cerr << lock_ios()
-                 << "[" << (*Ibuf).Id() << "] "
+                 << "[" << (*m_Iback).Id() << "] "
                  << "AddBuffer(num_channels = " << num_channels << "\n"
                  << "               is_lpcm = "
                  << (is_lpcm ? "true" : "false") << "\n"
@@ -643,8 +643,8 @@ bool AudioIO::Add(AudioBuffer::AudioFrame & buf, int64_t timestamp)
         return 0;
     }
 
+#if 0
     buffer_que_t::iterator Ibuf = m_buffer_q.end() - 1;
-#if 1
     if (static_cast<int32_t>(buf.size()) != (*Ibuf).FrameSize())
     {
         cerr << lock_ios() << "\nWARNING: AudioIO::Add buf size: "
@@ -654,7 +654,7 @@ bool AudioIO::Add(AudioBuffer::AudioFrame & buf, int64_t timestamp)
     }
 #endif
 
-    return (*Ibuf).Add(buf, timestamp);
+    return (*m_Iback).Add(buf, timestamp);
 }
 
 int AudioIO::Read(uint8_t* dest, int len)

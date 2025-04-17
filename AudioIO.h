@@ -155,6 +155,7 @@ class AudioIO
     using buffer_que_t = std::deque<AudioBuffer>;
 
     buffer_que_t     m_buffer_q;
+    buffer_que_t::iterator m_Iback;
 
     std::string      m_codec_name;
 #if 0

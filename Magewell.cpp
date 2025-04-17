@@ -1512,7 +1512,7 @@ bool Magewell::open_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN & eco_params)
             if (ret == MW_INVALID_PARAMS)
                 cerr << lock_ios()
                      << "ERROR: Start Eco Video Capture error: invalid params\n";
-            else if (ret = MW_FAILED)
+            else if (ret == MW_FAILED)
                 cerr << lock_ios()
                      << "ERROR: Start Eco Video Capture error: general failure\n";
             else
