@@ -650,7 +650,7 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
 {
     unique_lock<mutex> lock(m_imagequeue_mutex);
 
-    m_input_frame_wait_ms = frame_duration / 10000;
+    m_input_frame_wait_ms = frame_duration / 10000 * 2;
 
     while (m_running.load() && !m_imagequeue.empty())
         m_image_queue_empty.wait_for(lock,
@@ -1617,7 +1617,10 @@ void OutputTS::Write(void)
                     break;
                 }
                 m_video_stream.timestamp = -1;
-                m_audio_stream.timestamp = -1;
+                if (m_audioIO)
+                    m_audio_stream.timestamp = -1;
+                else
+                    m_audio_stream.timestamp = -2;
             }
             else
             {
@@ -1660,7 +1663,7 @@ void OutputTS::Write(void)
                 {
                     m_image_queue_empty.notify_one();
                     m_image_ready.wait_for(lock,
-                                           std::chrono::milliseconds(m_input_frame_wait_ms));
+                            std::chrono::milliseconds(m_input_frame_wait_ms));
                     break;
                 }
 

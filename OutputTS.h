@@ -137,7 +137,7 @@ class OutputTS
 
     EncoderType     m_encoderType  { UNKNOWN };
 
-    AudioIO*        m_audioIO;
+    AudioIO*        m_audioIO {nullptr};
 
     const AVOutputFormat* m_fmt   {nullptr};
     AVFormatContext* m_output_format_context {nullptr};

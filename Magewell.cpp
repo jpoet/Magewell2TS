@@ -977,7 +977,7 @@ bool Magewell::capture_audio(void)
         {
             if (m_isEco)
             {
-                if (EcoEventWait(eco_event, 1000) <= 0)
+                if (EcoEventWait(eco_event, -1) <= 0)
                 {
                     if (m_verbose > 1)
                         cerr << lock_ios()
@@ -987,7 +987,7 @@ bool Magewell::capture_audio(void)
             }
             else
             {
-                if (MWWaitEvent(notify_event, 1000) <= 0)
+                if (MWWaitEvent(notify_event, -1) <= 0)
                 {
                     if (m_verbose > 1)
                         cerr << lock_ios()
@@ -1512,9 +1512,12 @@ bool Magewell::open_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN & eco_params)
             if (ret == MW_INVALID_PARAMS)
                 cerr << lock_ios()
                      << "ERROR: Start Eco Video Capture error: invalid params\n";
+            else if (ret = MW_FAILED)
+                cerr << lock_ios()
+                     << "ERROR: Start Eco Video Capture error: general failure\n";
             else
                 cerr << lock_ios()
-                     << "ERROR: Start Eco Video Capture error: unknown\n";
+                     << "ERROR: Start Eco Video Capture error: " << ret << "\n";
         }
 
         this_thread::sleep_for(chrono::milliseconds(100));
@@ -1561,7 +1564,7 @@ void Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
 
     while (m_running.load() == true)
     {
-        if (EcoEventWait(eco_event, 1000) <= 0)
+        if (EcoEventWait(eco_event, -1) <= 0)
         {
             if (m_verbose > 1)
                 cerr << lock_ios()
