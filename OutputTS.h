@@ -53,7 +53,7 @@ class OutputTS
     bool setVideoParams(int width, int height, bool interlaced,
                         AVRational time_base, double frame_duration,
                         AVRational frame_rate, bool is_hdr);
-    bool addAudio(AudioBuffer::AudioFrame & buf, int64_t timestamp);
+    bool addAudio(AudioBuffer::AudioFrame *& buf, int64_t timestamp);
     void ClearImageQueue(void);
     void DiscardImages(bool val);
     void Write(void);

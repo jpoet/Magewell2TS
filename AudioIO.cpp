@@ -107,23 +107,12 @@ void AudioBuffer::PrintState(const string & where, bool force) const
     }
 }
 
-bool AudioBuffer::Add(AudioFrame & buf, int64_t timestamp)
+bool AudioBuffer::Add(AudioFrame *& buf, int64_t timestamp)
 {
-#if 1
-    if (static_cast<int32_t>(buf.size()) != m_frame_size)
-    {
-        cerr << lock_ios() << "\n[" << m_id
-             << "] WARNING: AudioBuffer::Add buf size "
-             << buf.size() << " != " << m_frame_size << " frame size\n"
-             << "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n";
-        return false;
-    }
-#endif
-
     {
         const unique_lock<mutex> lock(m_write_mutex);
         {
-            m_total_write += buf.size();
+            m_total_write += buf->size();
             m_audio_queue.push_back( {buf, timestamp} );
         }
     }
@@ -181,10 +170,12 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
         ++m_missaligned_pkts = 0;
 #endif
 
+    AudioFrame* frame;
     uint32_t frm = 0;
     while (frm + m_frame_size <= len)
     {
-        pkt_sz = m_audio_queue.front().frame.size();
+        frame = m_audio_queue.begin()->frame;
+        pkt_sz = frame->size();
 #if 1
         if (pkt_sz > static_cast<size_t>(m_frame_size))
         {
@@ -195,8 +186,7 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
         }
 #endif
 
-        copy(m_audio_queue.front().frame.begin(),
-             m_audio_queue.front().frame.end(), dest);
+        copy(frame->begin(), frame->end(), dest);
 
         dest += pkt_sz;
         frm += pkt_sz;
@@ -204,9 +194,13 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
         if (m_probing)
             m_probed_queue.push_back(m_audio_queue.front());
         else
+        {
             ++m_pkts_read;
+            delete frame;
+        }
 
         m_parent->m_timestamp = m_audio_queue.front().timestamp;
+
         m_audio_queue.pop_front();
         if (m_audio_queue.empty())
             break;
@@ -632,7 +626,7 @@ bool AudioIO::BlockReady(void) const
 }
 
 
-bool AudioIO::Add(AudioBuffer::AudioFrame & buf, int64_t timestamp)
+bool AudioIO::Add(AudioBuffer::AudioFrame *& buf, int64_t timestamp)
 {
     const unique_lock<mutex> lock(m_buffer_mutex);
 

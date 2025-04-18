@@ -43,7 +43,7 @@ class AudioBuffer
     AudioBuffer& operator=(const AudioBuffer & rhs);
     bool operator==(const AudioBuffer & rhs);
 
-    bool Add(AudioFrame & buf, int64_t timestamp);
+    bool Add(AudioFrame *& buf, int64_t timestamp);
     int Read(uint8_t* dest, uint32_t len);
     AVPacket* ReadSPDIF(void);
 
@@ -71,7 +71,7 @@ class AudioBuffer
     void initialized(void);
 
     using frame_t = struct {
-        AudioFrame  frame;
+        AudioFrame* frame;
         int64_t timestamp = {-1LL};
     };
     using frameque_t = std::deque<frame_t>;
@@ -127,7 +127,7 @@ class AudioIO
                    int bytes_per_sample, int sample_rate,
                    int samples_per_frame, int frame_size);
     bool      RescanSPDIF(void);
-    bool      Add(AudioBuffer::AudioFrame & buf, int64_t timestamp);
+    bool      Add(AudioBuffer::AudioFrame *& buf, int64_t timestamp);
     int64_t   Seek(int64_t offset, int whence);
     int       Read(uint8_t* dest, int32_t len);
     AVPacket* ReadSPDIF(void);
