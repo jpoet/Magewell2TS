@@ -127,7 +127,7 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
     size_t   pkt_sz;
 
     unique_lock<mutex> lock(m_write_mutex);
-    if (m_audio_queue.empty())
+    while (m_audio_queue.empty())
     {
         if (m_EoF.load() == true)
         {
@@ -139,36 +139,11 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
             m_flushed = true;
             return AVERROR_EOF;
         }
-
-        m_data_avail.wait_for(lock, chrono::microseconds(500));
-        if (m_audio_queue.empty())
+        if (m_probing)
             return 0;
-    }
 
-#if 0 // More reliable detection in OutputTS::write_bitstream_frame ?
-    static size_t m_missaligned_pkts = 0;
-
-    if ((len % m_frame_size) % 32 != 0)
-    {
-        if (m_missaligned_pkts > 3)
-        {
-            cerr << lock_ios() << "[" << m_id << "] " << m_missaligned_pkts
-                 << " out of sync, resetting: "
-                 << "Requested " << len
-                 << " % " << m_frame_size << " = " << len % m_frame_size
-                 << endl;
-            SetReady(false);
-            return 0;
-        }
-#if 0
-        cerr << lock_ios() << "[" << m_id << "] Missaligned: "
-             << m_missaligned_pkts << endl;
-#endif
-        ++m_missaligned_pkts;
+        m_data_avail.wait_for(lock, chrono::microseconds(100));
     }
-    else
-        ++m_missaligned_pkts = 0;
-#endif
 
     AudioFrame* frame;
     uint32_t frm = 0;
@@ -176,15 +151,6 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
     {
         frame = m_audio_queue.begin()->frame;
         pkt_sz = frame->size();
-#if 1
-        if (pkt_sz > static_cast<size_t>(m_frame_size))
-        {
-            cerr << lock_ios() << "\nWARNING: Invalid audio frame size queued: "
-                 << pkt_sz << " bytes!\n" << "&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&\n";
-            m_audio_queue.pop_front();
-            break;
-        }
-#endif
 
         copy(frame->begin(), frame->end(), dest);
 
@@ -213,12 +179,6 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
 
 AVPacket* AudioBuffer::ReadSPDIF(void)
 {
-    {
-        unique_lock<mutex> lock(m_write_mutex);
-        while (Size() < m_block_size && m_EoF.load() == false)
-            m_data_avail.wait_for(lock, chrono::microseconds(500));
-    }
-
     AVPacket* pkt = av_packet_alloc();
     if (!pkt)
     {
@@ -235,15 +195,7 @@ AVPacket* AudioBuffer::ReadSPDIF(void)
         return nullptr;
     }
 
-    double ret =  av_read_frame(m_spdif_format_context, pkt);
-#if 0
-    cerr << lock_ios()
-         << "ReadSPDIF [" << pkt->stream_index << "] pts: " << pkt->pts
-         << " dts: " << AVerr2str(pkt->dts)
-         << " duration: " << AVerr2str(pkt->duration)
-         << " size: " << pkt->size
-         << endl;
-#endif
+    int ret = av_read_frame(m_spdif_format_context, pkt);
 
     if (ret < 0)
     {
@@ -673,8 +625,7 @@ AVPacket* AudioIO::ReadSPDIF(void)
         return 0;
     }
 
-    buffer_que_t::iterator Ibuf = m_buffer_q.begin();
-    return (*Ibuf).ReadSPDIF();
+    return m_buffer_q.begin()->ReadSPDIF();
 }
 
 const AVChannelLayout* AudioIO::ChannelLayout(void) const

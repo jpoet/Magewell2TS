@@ -7,6 +7,7 @@
 #include <utility>
 #include <mutex>
 #include <condition_variable>
+#include <thread>
 #include <atomic>
 #include <functional>
 
@@ -178,7 +179,7 @@ class OutputTS
 
     ShutdownCallback        f_shutdown;
     MagCallback             f_image_buffer_available;
-    std::thread             m_image_ready_thread;
+    std::thread             m_mux_thread;
     std::mutex              m_imagepkt_mutex;
     std::mutex              m_imagequeue_mutex;
     std::condition_variable m_image_ready;

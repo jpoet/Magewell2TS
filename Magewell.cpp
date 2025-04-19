@@ -1055,6 +1055,7 @@ bool Magewell::capture_audio(void)
                 }
             }
             m_out2ts->addAudio(audio_frame, macf.llTimestamp);
+            std::this_thread::yield();
         }
     }
 
@@ -2255,6 +2256,8 @@ bool Magewell::Capture(const string & video_codec, const string & preset,
     if (!no_audio)
     {
         m_audio_thread = thread(&Magewell::capture_audio, this);
+        pthread_setname_np(m_audio_thread.native_handle(),
+                           "capture_audio");
         this_thread::sleep_for(chrono::milliseconds(1));
     }
 

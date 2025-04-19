@@ -136,7 +136,8 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
         m_audioIO = new AudioIO([=](bool val) { this->DiscardImages(val); },
                                 verbose_level);
 
-    m_image_ready_thread = std::thread(&OutputTS::Write, this);
+    m_mux_thread = std::thread(&OutputTS::Write, this);
+    pthread_setname_np(m_mux_thread.native_handle(), "mux");
 
     m_display_primaries  = av_mastering_display_metadata_alloc();
     m_content_light  = av_content_light_metadata_alloc(NULL);
@@ -653,8 +654,10 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     m_input_frame_wait_ms = frame_duration / 10000 * 2;
 
     while (m_running.load() && !m_imagequeue.empty())
+    {
         m_image_queue_empty.wait_for(lock,
                         std::chrono::milliseconds(m_input_frame_wait_ms));
+    }
 
     m_input_width = width;
     m_input_height = height;
@@ -687,8 +690,8 @@ OutputTS::~OutputTS(void)
 {
     Shutdown();
 
-    if (m_image_ready_thread.joinable())
-        m_image_ready_thread.join();
+    if (m_mux_thread.joinable())
+        m_mux_thread.join();
 
     av_freep(&m_display_primaries);
     av_freep(&m_content_light);
@@ -917,19 +920,23 @@ AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
 
     int bytes = ost->enc->ch_layout.nb_channels *
                 frame->nb_samples * m_audioIO->BytesPerSample();
-#if 1
+
+    // PCM encoder gets very upset if partial data is provided.
     if (m_audioIO->Size() < bytes)
     {
         if (m_verbose > 4)
             cerr << lock_ios()
                  << "Not enough audio data.\n";
+        this_thread::sleep_for(chrono::milliseconds(1));
         return nullptr;
     }
-#endif
+
     if (m_audioIO->Read(q, bytes) <= 0)
         return nullptr;
 
     ost->timestamp = frame->pts = m_audioIO->TimeStamp();
+    ost->next_timestamp = ost->timestamp;
+
     ost->frame->pts = av_rescale_q(frame->pts, m_input_time_base,
                                    ost->enc->time_base);
 
@@ -1002,36 +1009,6 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
     int64_t duration = av_rescale_q(pkt->duration,
                                     ost->st->time_base,
                                     m_input_time_base);
-
-#if 0
-    static int dur_err_cnt = 0;
-
-    if (ost->next_timestamp > 0 && pkt->duration &&
-        abs(ost->timestamp - ost->next_timestamp) > 150)
-    {
-        /* When two packets in a row take longer than expected, this
-         * seems to indicate that the bitstream audio is out of
-         * sync. This often happens after seeking within a stream.
-         */
-        if (dur_err_cnt++ > 1)
-        {
-#if 0
-            cerr << lock_ios() << "%%%%%%%%%%% PKT duration " << pkt->duration
-                 << " Scaled " << duration << " TS\n"
-                 << ost->timestamp << " expected\n"
-                 << ost->next_timestamp << "\n";
-#endif
-            m_audioIO->Reset("Invalid audio duration");
-            dur_err_cnt = 0;
-            ost->next_timestamp = -1;
-            return false;
-        }
-    }
-    else
-    {
-        dur_err_cnt = 0;
-    }
-#endif
 
     ost->next_timestamp = ost->timestamp + duration;
     pkt->pts = av_rescale_q(ost->timestamp,
@@ -1477,7 +1454,7 @@ bool OutputTS::open_qsv(const AVCodec* codec,
 bool OutputTS::nv_encode(AVFormatContext* oc,
                          OutputStream* ost,
                          uint8_t* pImage, void* pEco,
-                         int image_size, int64_t  timestamp)
+                         int image_size, int64_t timestamp)
 {
 #if 0
     /* when we pass a frame to the encoder, it may keep a reference to it
@@ -1617,10 +1594,11 @@ void OutputTS::Write(void)
                     break;
                 }
                 m_video_stream.timestamp = -1;
+                m_video_stream.next_timestamp = -1;
                 if (m_audioIO)
-                    m_audio_stream.timestamp = -1;
+                    m_audio_stream.next_timestamp = -1;
                 else
-                    m_audio_stream.timestamp = -2;
+                    m_audio_stream.next_timestamp = -2;
             }
             else
             {
@@ -1628,7 +1606,11 @@ void OutputTS::Write(void)
                 if (m_video_stream.enc == nullptr)
                     why = " video";
                 if (m_audioIO && m_audio_stream.enc == nullptr)
+                {
+                    if (!why.empty())
+                        why += " &";
                     why += " audio";
+                }
                 if (m_verbose > 1)
                     cerr << lock_ios() << "WARNING: New TS needed but"
                          << why << " encoder is not ready.\n";
@@ -1649,12 +1631,12 @@ void OutputTS::Write(void)
         }
 
 #if 1
-        if (m_audio_stream.timestamp == -1)
+        if (m_audio_stream.next_timestamp == -1)
             ClearImageQueue();
 #endif
 
         while (!m_audio_stream.enc ||
-               m_video_stream.timestamp <= m_audio_stream.timestamp)
+               m_video_stream.timestamp <= m_audio_stream.next_timestamp)
         {
             {
                 std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
@@ -1662,9 +1644,10 @@ void OutputTS::Write(void)
                 if (m_imagequeue.empty())
                 {
                     m_image_queue_empty.notify_one();
-                    m_image_ready.wait_for(lock,
-                            std::chrono::milliseconds(m_input_frame_wait_ms));
-                    break;
+                    if (m_image_ready.wait_for(lock,
+                       std::chrono::milliseconds(m_input_frame_wait_ms))
+                        == cv_status::timeout)
+                        break;
                 }
 
                 pImage    = m_imagequeue.front().image;
