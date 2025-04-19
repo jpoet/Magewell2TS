@@ -1033,14 +1033,14 @@ bool Magewell::capture_audio(void)
             AudioBuffer::AudioFrame* audio_frame = new AudioBuffer::AudioFrame;
             int left_pos, right_pos;
             uint32_t left, right;
+            int half_channels = MWCAP_AUDIO_MAX_NUM_CHANNELS / 2;
 
             for (int chan = 0; chan < (cur_channels/2); ++chan)
             {
                 for (int samp = 0 ; samp < MWCAP_AUDIO_SAMPLES_PER_FRAME; ++samp)
                 {
                     left_pos = (samp * MWCAP_AUDIO_MAX_NUM_CHANNELS + chan);
-                    right_pos = (samp * MWCAP_AUDIO_MAX_NUM_CHANNELS + chan +
-                                 MWCAP_AUDIO_MAX_NUM_CHANNELS / 2);
+                    right_pos = left_pos + half_channels;
                     left = macf.adwSamples[left_pos]
                            >> (32 - audio_signal_status.cBitsPerSample);
                     right = macf.adwSamples[right_pos]
