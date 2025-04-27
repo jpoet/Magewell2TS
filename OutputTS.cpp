@@ -1641,12 +1641,11 @@ void OutputTS::Write(void)
             {
                 std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
 
-                if (m_imagequeue.empty())
+                if (m_imagequeue.empty() || !m_video_stream.enc)
                 {
                     m_image_queue_empty.notify_one();
-                    if (m_image_ready.wait_for(lock,
-                       std::chrono::milliseconds(m_input_frame_wait_ms))
-                        == cv_status::timeout)
+                    m_image_ready.wait_for(lock,
+                        std::chrono::milliseconds(m_input_frame_wait_ms));
                         break;
                 }
 

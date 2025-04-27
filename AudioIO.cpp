@@ -127,7 +127,11 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
     size_t   pkt_sz;
 
     unique_lock<mutex> lock(m_write_mutex);
+#if 1
+    while (Size() < len)
+#else
     while (m_audio_queue.empty())
+#endif
     {
         if (m_EoF.load() == true)
         {
