@@ -109,6 +109,14 @@ void AudioBuffer::PrintState(const string & where, bool force) const
 
 bool AudioBuffer::Add(AudioFrame *& buf, int64_t timestamp)
 {
+#if 0
+    if (buf->size() != m_frame_size)
+    {
+        cerr << lock_ios() << "WARNING: Adding audio buffer with size "
+             << buf->size() << ". expected " << m_frame_size << endl;
+    }
+#endif
+
     {
         const unique_lock<mutex> lock(m_write_mutex);
         {
@@ -127,7 +135,7 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
     size_t   pkt_sz;
 
     unique_lock<mutex> lock(m_write_mutex);
-#if 1
+#if 0
     while (Size() < len)
 #else
     while (m_audio_queue.empty())

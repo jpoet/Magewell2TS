@@ -136,7 +136,7 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
         m_audioIO = new AudioIO([=](bool val) { this->DiscardImages(val); },
                                 verbose_level);
 
-    m_mux_thread = std::thread(&OutputTS::Write, this);
+    m_mux_thread = std::thread(&OutputTS::mux, this);
     pthread_setname_np(m_mux_thread.native_handle(), "mux");
 
     m_display_primaries  = av_mastering_display_metadata_alloc();
@@ -1562,7 +1562,7 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc, OutputStream* ost,
     return ret;
 }
 
-void OutputTS::Write(void)
+void OutputTS::mux(void)
 {
     uint8_t* pImage;
     void*    pEco;
@@ -1705,5 +1705,6 @@ bool OutputTS::AddVideoFrame(uint8_t* pImage, void* pEco,
         m_image_ready.notify_one();
     }
 
+    std::this_thread::yield();
     return true;
 }

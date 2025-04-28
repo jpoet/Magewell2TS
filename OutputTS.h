@@ -57,11 +57,12 @@ class OutputTS
     bool addAudio(AudioBuffer::AudioFrame *& buf, int64_t timestamp);
     void ClearImageQueue(void);
     void DiscardImages(bool val);
-    void Write(void);
     bool AddVideoFrame(uint8_t*  pImage, void* pEco,
                        int imageSize, int64_t timestamp);
 
   private:
+    void mux(void);
+
     // a wrapper around a single output AVStream
     using OutputStream = struct {
         AVBufferRef* hw_device_ctx {nullptr};

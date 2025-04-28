@@ -12,6 +12,10 @@
 #include "Magewell.h"
 #include "lock_ios.h"
 
+#if 0
+#include "fstream"
+#endif
+
 using namespace std;
 using namespace s6_lock_ios;
 
@@ -967,13 +971,18 @@ bool Magewell::capture_audio(void)
             m_reset_audio.store(false);
         }
 
+#if 0
+        std::ofstream debugf("/tmp/debug.eac3", ios::binary);
+        std::ofstream rawf("/tmp/raw.eac3", ios::binary);
+#endif
+
         err_cnt = 0;
         frame_cnt = 0;
         while (m_reset_audio.load() == false)
         {
             if (m_isEco)
             {
-                if (EcoEventWait(eco_event, -1) <= 0)
+                if (EcoEventWait(eco_event, 1000) <= 0)
                 {
                     if (m_verbose > 1)
                         cerr << lock_ios()
@@ -983,7 +992,7 @@ bool Magewell::capture_audio(void)
             }
             else
             {
-                if (MWWaitEvent(notify_event, -1) <= 0)
+                if (MWWaitEvent(notify_event, 1000) <= 0)
                 {
                     if (m_verbose > 1)
                         cerr << lock_ios()
@@ -1054,6 +1063,21 @@ bool Magewell::capture_audio(void)
                          back_inserter(*audio_frame));
                 }
             }
+#if 0
+            for(int idx = 0; idx < MWCAP_AUDIO_SAMPLES_PER_FRAME; ++idx)
+            {
+                uint8_t* bp = reinterpret_cast<uint8_t*>(&macf.adwSamples[idx]);
+                for (int bi = 0; bi < 4; ++bi)
+                    rawf << *(bp++);
+            }
+#endif
+#if 0
+            for(AudioBuffer::AudioFrame::const_iterator i = audio_frame->begin();
+                i != audio_frame->end(); ++i)
+            {
+                debugf << *i;
+            }
+#endif
             m_out2ts->addAudio(audio_frame, macf.llTimestamp);
             std::this_thread::yield();
         }
@@ -1538,7 +1562,7 @@ void Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
 
     while (m_running.load() == true)
     {
-        if (EcoEventWait(eco_event, -1) <= 0)
+        if (EcoEventWait(eco_event, 1000) <= 0)
         {
             if (m_verbose > 1)
                 cerr << lock_ios()
