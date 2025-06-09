@@ -67,6 +67,9 @@ extern "C" {
 using namespace std;
 using namespace s6_lock_ios;
 
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(61, 3, 100)
+#endif
+
 std::string AV_ts2str(int64_t ts)
 {
     char astr[AV_TS_MAX_STRING_SIZE] = { 0 };
