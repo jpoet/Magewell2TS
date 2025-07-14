@@ -74,27 +74,40 @@ cd ~/src/Magewell/
 gtar -xzvf ~/Download/Magewell_Capture_SDK_Linux_3.3.1.1313.tar.gz
 ```
 
-In the Magewell SDK directory, grab the source for this application:
+Along side the Magewell SDK directory, grab the source for this application:
 ```bash
-cd ~/src/Magewell/Magewell_Capture_SDK_Linux_3.3.1.131
+cd ~/src/Magewell/
 git clone https://github.com/jpoet/Magewell2TS.git
 ```
 If you place the Magewell2TS source somewhere else, you will need to edit Magewell2TS/helpers/FindMagewell.cmake and teach it how to find the Magewell SDK.
 
 ### Dependencies
-Fedora:
+#### Fedora:
 ```bash
 sudo dnf install -y make gcc gcc-c++ libstdc++-devel libv4l-devel patch kernel-devel alsa-lib-devel v4l-utils-devel-tools systemd-devel
 ```
-Ubuntu:
+#### Ubuntu:
 ```bash
-sudo apt-get install build-essential libv4l-dev cmake libudev-dev nvidia-cuda-toolkit
+sudo apt-get install build-essential libv4l-dev cmake libudev-dev libavfilter-dev libavdevice-dev libasound2-dev pkgconf
 ```
+For nVidia you may also need:
+```
+sudo apt-get install nvidia-cuda-toolkit
+```
+For Intel you may also need:
+```
+sudo apt-get install intel-media-va-driver-non-free libmfx1 intel-opencl-icd libmfx-gen1.2
+```
+
 
 ### Intel
 For Intel QSV you will also need oneVPL libs. For example:
 ```
 sudo dnf install oneVPL-devel intel-media-driver
+```
+or
+```
+apt-get install libvpl-dev
 ```
 See [https://www.intel.com/content/www/us/en/developer/articles/guide/onevpl-installation-guide.html](https://www.intel.com/content/www/us/en/developer/articles/guide/onevpl-installation-guide.html) for more information.
 
@@ -106,19 +119,19 @@ sudo dnf install akmod-nvidia xorg-x11-drv-nvidia-cuda xorg-x11-drv-nvidia-cuda-
 ```
 
 ### FFmpeg
-FFmpeg is also required. If you want bitstream eac3 to work, then a minimum of version 6.1 shoudl be used.
+FFmpeg is also required. If you want bitstream eac3 to work, then a minimum of version 6.1 should be used, with at least 7.1 being prefered
 ```
-sudo dnf install ffmpeg-devel
+sudo dnf install ffmpeg-devel 
 ```
 or
 ```
-apt-get install ffmpeg-dev
+apt-get install ffmpeg-dev libavcodec-dev
 ```
 
 
 ## Building the application
 ```bash
-cd ~/src/Magewell/Magewell_Capture_SDK_Linux_3.3.1.131/Magewell2TS
+cd ~/src/Magewell/Magewell2TS
 ```
 Use CMake to compile and install:
 ```bash
