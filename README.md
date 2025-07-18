@@ -24,6 +24,12 @@ The Magewell PRO capture cards capture raw audio and video. The video (at least)
 The Magewell driver can be found here:
 [https://www.magewell.com/downloads/pro-capture#/driver/linux-x86](https://www.magewell.com/downloads/pro-capture#/driver/linux-x86)
 
+or, perhaps:
+
+[http://www.magewell.com/files/support/ProCaptureForLinux_1.3.4420.tar.gz](http://www.magewell.com/files/support/ProCaptureForLinux_1.3.4420.tar.gz)
+
+[http://www.magewell.com/files/support/EcoCaptureForLinux_1.4.260.zip](http://www.magewell.com/files/support/EcoCaptureForLinux_1.4.260.zip)
+
 Install the driver:
 ----
 ```bash
