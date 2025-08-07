@@ -948,8 +948,6 @@ bool Magewell::capture_audio(void)
     int      idx;
     int      frame_size      = 0;
 
-    AudioBuffer::AudioFrame  audio_frame;
-
     ULONGLONG notify_status = 0;
     MWCAP_AUDIO_CAPTURE_FRAME macf;
 
@@ -1145,8 +1143,6 @@ bool Magewell::capture_audio(void)
             frame_size = MWCAP_AUDIO_SAMPLES_PER_FRAME
                          * cur_channels * bytes_per_sample;
 
-            audio_frame.resize(frame_size, '\0');
-
             m_out2ts->setAudioParams(cur_channels, lpcm,
                                      bytes_per_sample, sample_rate,
                                      MWCAP_AUDIO_SAMPLES_PER_FRAME,
@@ -1203,49 +1199,34 @@ bool Magewell::capture_audio(void)
             ++frame_cnt;
 
             /*
-              L1L2L3L4R1R2R3R4L5L6L7L8R5R6R7R8(4byte)
+              L1L2L3L4 R1R2R3R4 L5L6L7L8 R5R6R7R8(4byte)
               to 2channel 16bit
               L1R1L5R5(2byte)
             */
-#if 0
-            for (int j = 0; j < (cur_channels/2); ++j)
-            {
-                for (int i = 0 ; i < MWCAP_AUDIO_SAMPLES_PER_FRAME; ++i)
-                {
-                    int write_pos = (i * cur_channels + j * 2) *
-                                    bytes_per_sample;
-                    int read_pos = (i * MWCAP_AUDIO_MAX_NUM_CHANNELS + j);
-                    int read_pos2 = (i * MWCAP_AUDIO_MAX_NUM_CHANNELS + j +
-                                     MWCAP_AUDIO_MAX_NUM_CHANNELS / 2);
-                    DWORD left = macf.adwSamples[read_pos]
-                                 >> (32 - audio_signal_status.cBitsPerSample);
-                    DWORD right = macf.adwSamples[read_pos2]
-                                  >> (32 - audio_signal_status.cBitsPerSample);
+            AudioBuffer::AudioFrame* audio_frame = new AudioBuffer::AudioFrame;
+            int left_pos, right_pos;
+            uint32_t left, right;
+            int half_channels = MWCAP_AUDIO_MAX_NUM_CHANNELS / 2;
 
-                    copy(&left, &left + bytes_per_sample,
-                         capture_buf.begin() + write_pos);
-                    copy(&right, &right + bytes_per_sample,
-                         capture_buf.begin() + write_pos + bytes_per_sample);
+            for (int chan = 0; chan < (cur_channels/2); ++chan)
+            {
+                for (int samp = 0 ; samp < MWCAP_AUDIO_SAMPLES_PER_FRAME; ++samp)
+                {
+                    left_pos = (samp * MWCAP_AUDIO_MAX_NUM_CHANNELS + chan);
+                    right_pos = left_pos + half_channels;
+                    left = macf.adwSamples[left_pos]
+                           >> (32 - audio_signal_status.cBitsPerSample);
+                    right = macf.adwSamples[right_pos]
+                            >> (32 - audio_signal_status.cBitsPerSample);
+
+                    copy(reinterpret_cast<uint8_t*>(&left),
+                         reinterpret_cast<uint8_t*>(&left) + bytes_per_sample,
+                         back_inserter(*audio_frame));
+                    copy(reinterpret_cast<uint8_t*>(&right),
+                         reinterpret_cast<uint8_t*>(&right) + bytes_per_sample,
+                         back_inserter(*audio_frame));
                 }
             }
-#else
-            DWORD*   capture_buf = macf.adwSamples;
-            uint8_t* dest = audio_frame.data();
-//            WORD     temp;
-            for (idx = 0 ; idx < MWCAP_AUDIO_SAMPLES_PER_FRAME; ++idx)
-            {
-                WORD temp = capture_buf[0] >>
-                            (32 - audio_signal_status.cBitsPerSample);
-                memcpy(dest, &temp, bytes_per_sample);
-                dest += bytes_per_sample;
-
-                temp = capture_buf[MWCAP_AUDIO_MAX_NUM_CHANNELS / 2] >>
-                       (32 - audio_signal_status.cBitsPerSample);
-                memcpy(dest, &temp, bytes_per_sample);
-                dest += bytes_per_sample;
-                capture_buf += MWCAP_AUDIO_MAX_NUM_CHANNELS;
-            }
-#endif
             m_out2ts->addAudio(audio_frame, macf.llTimestamp);
         }
     }

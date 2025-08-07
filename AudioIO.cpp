@@ -107,23 +107,12 @@ void AudioBuffer::PrintState(const string & where, bool force) const
     }
 }
 
-bool AudioBuffer::Add(AudioFrame & buf, int64_t timestamp)
+bool AudioBuffer::Add(AudioFrame *& buf, int64_t timestamp)
 {
-#if 1
-    if (static_cast<int32_t>(buf.size()) != m_frame_size)
-    {
-        cerr << lock_ios() << "\n[" << m_id
-             << "] WARNING: AudioBuffer::Add buf size "
-             << buf.size() << " != " << m_frame_size << " frame size\n"
-             << "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n";
-        return false;
-    }
-#endif
-
     {
         const unique_lock<mutex> lock(m_write_mutex);
         {
-            m_total_write += buf.size();
+            m_total_write += buf->size();
             m_audio_queue.push_back( {buf, timestamp} );
         }
     }
@@ -138,7 +127,8 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
     size_t   pkt_sz;
 
     unique_lock<mutex> lock(m_write_mutex);
-    if (m_audio_queue.empty())
+
+    while (m_audio_queue.empty())
     {
         if (m_EoF.load() == true)
         {
@@ -150,53 +140,20 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
             m_flushed = true;
             return AVERROR_EOF;
         }
-
-        m_data_avail.wait_for(lock, chrono::microseconds(500));
-        if (m_audio_queue.empty())
+        if (m_probing)
             return 0;
+
+        m_data_avail.wait_for(lock, chrono::microseconds(100));
     }
 
-#if 0 // More reliable detection in OutputTS::write_bitstream_frame ?
-    static size_t m_missaligned_pkts = 0;
-
-    if ((len % m_frame_size) % 32 != 0)
-    {
-        if (m_missaligned_pkts > 3)
-        {
-            cerr << lock_ios() << "[" << m_id << "] " << m_missaligned_pkts
-                 << " out of sync, resetting: "
-                 << "Requested " << len
-                 << " % " << m_frame_size << " = " << len % m_frame_size
-                 << endl;
-            SetReady(false);
-            return 0;
-        }
-#if 0
-        cerr << lock_ios() << "[" << m_id << "] Missaligned: "
-             << m_missaligned_pkts << endl;
-#endif
-        ++m_missaligned_pkts;
-    }
-    else
-        ++m_missaligned_pkts = 0;
-#endif
-
+    AudioFrame* frame;
     uint32_t frm = 0;
     while (frm + m_frame_size <= len)
     {
-        pkt_sz = m_audio_queue.front().frame.size();
-#if 1
-        if (pkt_sz > static_cast<size_t>(m_frame_size))
-        {
-            cerr << lock_ios() << "\nWARNING: Invalid audio frame size queued: "
-                 << pkt_sz << " bytes!\n" << "&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&\n";
-            m_audio_queue.pop_front();
-            break;
-        }
-#endif
+        frame = m_audio_queue.begin()->frame;
+        pkt_sz = frame->size();
 
-        copy(m_audio_queue.front().frame.begin(),
-             m_audio_queue.front().frame.end(), dest);
+        copy(frame->begin(), frame->end(), dest);
 
         dest += pkt_sz;
         frm += pkt_sz;
@@ -204,9 +161,13 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
         if (m_probing)
             m_probed_queue.push_back(m_audio_queue.front());
         else
+        {
             ++m_pkts_read;
+            delete frame;
+        }
 
         m_parent->m_timestamp = m_audio_queue.front().timestamp;
+
         m_audio_queue.pop_front();
         if (m_audio_queue.empty())
             break;
@@ -219,12 +180,6 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
 
 AVPacket* AudioBuffer::ReadSPDIF(void)
 {
-    {
-        unique_lock<mutex> lock(m_write_mutex);
-        while (Size() < m_block_size && m_EoF.load() == false)
-            m_data_avail.wait_for(lock, chrono::microseconds(500));
-    }
-
     AVPacket* pkt = av_packet_alloc();
     if (!pkt)
     {
@@ -241,15 +196,7 @@ AVPacket* AudioBuffer::ReadSPDIF(void)
         return nullptr;
     }
 
-    double ret =  av_read_frame(m_spdif_format_context, pkt);
-#if 0
-    cerr << lock_ios()
-         << "ReadSPDIF [" << pkt->stream_index << "] pts: " << pkt->pts
-         << " dts: " << AVerr2str(pkt->dts)
-         << " duration: " << AVerr2str(pkt->duration)
-         << " size: " << pkt->size
-         << endl;
-#endif
+    int ret = av_read_frame(m_spdif_format_context, pkt);
 
     if (ret < 0)
     {
@@ -545,12 +492,12 @@ bool AudioIO::AddBuffer(int num_channels, bool is_lpcm,
                                          bytes_per_sample, sample_rate,
                                          samples_per_frame, frame_size,
                                          this, m_verbose, m_buf_id++));
-        Ibuf = m_buffer_q.end() - 1;
+        m_Iback = m_buffer_q.end() - 1;
 
         if (m_verbose > 2)
         {
             cerr << lock_ios()
-                 << "[" << (*Ibuf).Id() << "] "
+                 << "[" << (*m_Iback).Id() << "] "
                  << "AddBuffer(num_channels = " << num_channels << "\n"
                  << "               is_lpcm = "
                  << (is_lpcm ? "true" : "false") << "\n"
@@ -632,7 +579,7 @@ bool AudioIO::BlockReady(void) const
 }
 
 
-bool AudioIO::Add(AudioBuffer::AudioFrame & buf, int64_t timestamp)
+bool AudioIO::Add(AudioBuffer::AudioFrame *& buf, int64_t timestamp)
 {
     const unique_lock<mutex> lock(m_buffer_mutex);
 
@@ -643,18 +590,7 @@ bool AudioIO::Add(AudioBuffer::AudioFrame & buf, int64_t timestamp)
         return 0;
     }
 
-    buffer_que_t::iterator Ibuf = m_buffer_q.end() - 1;
-#if 1
-    if (static_cast<int32_t>(buf.size()) != (*Ibuf).FrameSize())
-    {
-        cerr << lock_ios() << "\nWARNING: AudioIO::Add buf size: "
-             << buf.size() << " expected " << (*Ibuf).FrameSize() << "\n"
-             << "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n";
-        return false;
-    }
-#endif
-
-    return (*Ibuf).Add(buf, timestamp);
+    return (*m_Iback).Add(buf, timestamp);
 }
 
 int AudioIO::Read(uint8_t* dest, int len)
@@ -679,8 +615,7 @@ AVPacket* AudioIO::ReadSPDIF(void)
         return 0;
     }
 
-    buffer_que_t::iterator Ibuf = m_buffer_q.begin();
-    return (*Ibuf).ReadSPDIF();
+    return m_buffer_q.begin()->ReadSPDIF();
 }
 
 const AVChannelLayout* AudioIO::ChannelLayout(void) const
@@ -736,7 +671,7 @@ bool AudioIO::CodecChanged(void)
              << "Failed to detect S/PDIF\n";
 #endif
         m_codec_name.clear();
-        return true;
+        return false;
     }
 
     if (!(*Ibuf).LPCM())

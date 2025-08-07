@@ -670,7 +670,7 @@ OutputTS::~OutputTS(void)
     close_container();
 }
 
-bool OutputTS::addAudio(AudioBuffer::AudioFrame & buf, int64_t timestamp)
+bool OutputTS::addAudio(AudioBuffer::AudioFrame *& buf, int64_t timestamp)
 {
     return m_audioIO->Add(buf, timestamp);
 }
