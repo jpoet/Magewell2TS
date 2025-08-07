@@ -713,6 +713,220 @@ bool Magewell::WriteEDID(const string & filepath)
     return true;
 }
 
+
+void Magewell::audio_pcm_channel_layout(uint8_t channel_allocation)
+{
+    if (m_verbose < 2)
+        return;
+
+    ios_lock lock;
+    cerr << lock_ios(lock);
+    cerr << "Audio PCM channel layout: ";
+
+    // CEA-861-E Table 28
+    switch (channel_allocation)
+    {
+        case 0x00:
+          cerr << "FL FR\n";
+          break;
+        case 0x01:
+          // 4 channels in, but 'FC' is null
+          cerr << "FL FR LFE -\n";
+          break;
+        case 0x02:
+          // 4 channsls in, but 'LFE' is null
+          cerr << "FR - FC\n";
+          break;
+        case 0x03:
+          cerr << "FR LFE FC\n";
+          break;
+        case 0x04:
+          // 6 channels in, 3 valid
+          cerr << "FR - - RC - -\n";
+          break;
+        case 0x05:
+          // 6 channels in, 4 valid
+          cerr << "FR LFE - RC -\n";
+          break;
+        case 0x06:
+          // 6 channels in, 4 valid
+          cerr << "FR - FC RC -\n";
+          break;
+        case 0x07:
+          // 6 channels in, 5 valid
+          cerr << "FR LFE FC RC -\n";
+          break;
+        case 0x08:
+          // 6 channels in, 4 valid
+          cerr << "FR - - RL RR\n";
+          break;
+        case 0x09:
+          // 6 channels in, 5 valid
+          cerr << "FR LFE - RL RR\n";
+          break;
+        case 0x0A:
+          // 6 channels in, 5 valid
+          cerr << "FR - FC RL RR\n";
+          break;
+        case 0x0B:
+          // 6 channels
+          cerr << "FR LFE FC, BL BR\n";
+          break;
+        case 0x0C:
+          // 8 channels in, 5 valid
+          cerr << "FR - - RL RR RC -\n";
+          break;
+        case 0x0D:
+          // 8 channels in, 6 valid
+          cerr << "FR LFE - RL RR RC -\n";
+          break;
+        case 0x0E:
+          // 8 channels in, 6 valid
+          cerr << "FR - FC RL RR RC -\n";
+          break;
+        case 0x0F:
+          // 8 channels in, 7 valid
+          cerr << "FR LFE FC RL RR RC - (Dolby: L R LFE C Lrs Rrs Cs)\n";
+          break;
+        case 0x10:
+          // 8 channels in, 6 valid
+          cerr << "FR - - RL RR RLC RRC (Dolby: L R Lrs Rrs Lcs Rcs)\n";
+          break;
+        case 0x11:
+          // 8 channels in, 7 valid
+          cerr << "FR LFE - RL RR RLC RRC (Dolby: L R LFE Lrs Rrs Lcs Rcs)\n";
+          break;
+        case 0x12:
+          // 8 channels in, 7 valid
+          cerr << "FR - FC RL RR RLC RRC (Dolby: L R C Lrs Rrs Lcs Rcs)\n";
+          break;
+        case 0x13:
+          // 8 channels
+          cerr << "FR LFE FC RL RR RLC RRC (Dolby: L R LFE C Lrs Rrs Lcs Rcs)\n";
+          break;
+        case 0x14:
+          // 8 channels, 4 valid
+          cerr << "FR - - - - FLC FRC (Dolby: L R Lc Rc)\n";
+          break;
+        case 0x15:
+          // 8 channels, 5 valid
+          cerr << "FR LFE - - - FLC FRC (Dolby: L R LFE Lc Rc)\n";
+          break;
+        case 0x16:
+          // 8 channels, 5 valid
+          cerr << "FR - FC - - FLC FRC (Dolby: L R C Lc Rc)\n";
+          break;
+        case 0x17:
+          // 8 channels, 6 valid
+          cerr << "FR LFE FC - - FLC FRC (Dolby: L R LFE C Lc Rc)\n";
+          break;
+        case 0x18:
+          // 8 channels, 5 valid
+          cerr << "FR -- -- RC -- FLC FRC (Dolby: L R Cs Lc Rc)\n";
+          break;
+        case 0x19:
+          // 8 channels, 6 valid
+          cerr << "FR LFE - RC - FLC FRC (Dolby: L R LFE Cs Lc Rc)\n";
+          break;
+        case 0x1A:
+          // 8 channels, 6 valid
+          cerr << "FR - FC RC - FLC FRC (Dolby: L R C Cs Lc Rc)\n";
+          break;
+        case 0X1B:
+          // 8 channels, 7 valid
+          cerr << "FR LFE FC RC -- FLC FRC (Dolby: L R LFE C Cs Lc Rc)\n";
+          break;
+        case 0x1C:
+          // 8 channels, 6 valid
+          cerr << "FR -- -- RL RR FLC FRC (Dolby: L R Lrs Rrs Lc Rc)\n";
+          break;
+        case 0x1D:
+          // 8 channels, 7 valid
+          cerr << "FR LFE -- RL RR FLC FRC (Dolby: L R LFE Lrs Rrs Lc Rc)\n";
+          break;
+        case 0x1E:
+          // 8 channels, 7 valid
+          cerr << "FR -- FC RL RR FLC FRC (Dolby: L R C Lrs Rrs Lc Rc)\n";
+          break;
+        case 0x1F:
+          // 8 channels
+          cerr << "FR LFE FC RL RR FLC FRC (Dolby: L R LFE C Lrs Rrs Lc Rc)\n";
+          break;
+        case 0x20:
+          // 8 channels, 6 valid
+          cerr << "FR -- FC RL RR FCH -- (Dolby: L R C Lrs Rrs hc)\n";
+          break;
+        case 0x21:
+          // 8 channels 7 valid
+          cerr << "FR LFE FC RL RR FCH -- (Dolby: L R LFE C Lrs Rrs hc)\n";
+          break;
+        case 0x22:
+          // 8 channels, 6 valid
+          cerr << "FR -- FC RL RR -- TC (Dolby: L R C Lrs Rrs, T)\n";
+          break;
+        case 0x23:
+          // 8 channels, 7 valid
+          cerr << "FR LFE FC RL RR -- TC (Dolby: L R LFE C Lrs Rrs)\n";
+          break;
+        case 0x24:
+          // 8 channels, 6 valid
+          cerr << "FR -- -- RL RR FLH FRH (Dolby: L R Lrs Rrs HL HR)\n";
+          break;
+        case 0x25:
+          // 8 channels, 7 valid
+          cerr << "FR LFE -- RL RR FLH FRH (Dolby: L R LFE Lrs Rrs Hl HR)\n";
+          break;
+        case 0x26:
+          // 8 channels, 6 valid
+          cerr << "FR -- -- RL RR FLW FRW (Dolby: L R Lrs Rrs Lw Rw)\n";
+          break;
+        case 0x27:
+          // 8 channels, 7 valid
+          cerr << "FR LFE -- RL RR FLW FRW (Dolby: L R LFE Lrs Rrs Lw Rw)\n";
+          break;
+        case 0x28:
+          // 8 channels, 7 valid
+          cerr << "FR -- FC RL RR RC TC (Dolby: L R C Lrs Rrs Rc T)\n";
+          break;
+        case 0x29:
+          // 8 channels
+          cerr << "FR LFE FC RL RR RC TC (Dolby: L R LFE C Lrs Rrs Rc T)\n";
+          break;
+        case 0x2A:
+          // 8 channels, 7 valid
+          cerr << "FR -- FC RL RR RC FCH (Dolby: L R C Lrs Rrs Rc Hc)\n";
+          break;
+        case 0x2B:
+          // 8 channels
+          cerr << "FR LFE FC RL RR RC FCH (Dolby: L R LFE C Lrs Rrs Rc Hc)\n";
+          break;
+        case 0x2C:
+          // 8 channels, 7 valid
+          cerr << "FR -- FC RL RR FCH TC (Dolby: L R C Lrs Rrs Hc T)\n";
+          break;
+        case 0x2D:
+          // 8 channels
+          cerr << "FR LFE FC RL RR FCH TC (Dolby: L R LFE C Lrs Rrs Hc T)\n";
+          break;
+        case 0x2E:
+          // 8 channels, 7 valid
+          cerr << "FR -- FC RL RR FLH FRH (Dolby: L R C Lrs Rrs HL HR)\n";
+          break;
+        case 0x2F:
+          // 8 channels
+          cerr << "FR LFE FC RL RR FLH FRH  (Dolby: L R LFE C Lrs Rrs HL HR)\n";
+          break;
+        case 0x30:
+          // 8 channels, 7 valid
+          cerr << "FR -- FC RL RR FLW FRW (Dolby: L R C Lrs Rrs Lw Rw)\n";
+          break;
+        case 0x31:
+          // 8 channels
+          cerr << "FR LFE FC RL RR FLW FRW (Dolby: L R LFE C Lrs Rrs Lw Rw)\n";
+          break;
+    }
+}
+
 bool Magewell::capture_audio(void)
 {
     bool      lpcm = false;
@@ -826,15 +1040,17 @@ bool Magewell::capture_audio(void)
                          << even_bytes_per_sample
                          << endl;
                 if (valid_channels != audio_signal_status.wChannelValid)
+                {
                     cerr << "Valid channels changed "
                          << valid_channels << " -> "
                          << audio_signal_status.wChannelValid << endl;
+                }
             }
 
+            valid_channels = audio_signal_status.wChannelValid;
             lpcm = audio_signal_status.bLPCM;
             sample_rate = audio_signal_status.dwSampleRate;
             bytes_per_sample = even_bytes_per_sample;
-            valid_channels = audio_signal_status.wChannelValid;
 
             cur_channels = 0;
             for (idx = 0; idx < (MWCAP_AUDIO_MAX_NUM_CHANNELS / 2); ++idx)
@@ -842,6 +1058,34 @@ bool Magewell::capture_audio(void)
                 cur_channels +=
                     (valid_channels & (0x01 << idx)) ? 2 : 0;
             }
+
+#if 0
+            // https://ia903006.us.archive.org/11/items/CEA-861-E/CEA-861-E.pdf
+            if (cur_channels == 2)
+            {
+                if (m_verbose > 0)
+                    cerr << "Audio channels: FL FR" << endl;
+            }
+            else if (cur_channels == 4)
+            {
+                if (m_verbose > 0)
+                    cerr << "Audio channels: FL FR FC LFE" << endl;
+            }
+            else if (cur_channels == 6)
+            {
+                if (m_verbose > 0)
+                    cerr << "Audio channels: FL FR FC LFE BL BR" << endl;
+            }
+            else if (cur_channels == 8)
+            {
+                if (m_verbose > 0)
+                    cerr << "Audio channels: FL FR FC LFE BL BR SL SR" << endl;
+            }
+            else
+            {
+                cerr << "Invalid audio channel count: " << cur_channels << endl;
+            }
+#endif
 
             if (0 == cur_channels)
             {
@@ -852,6 +1096,44 @@ bool Magewell::capture_audio(void)
 
                 this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
                 continue;
+            }
+
+            if (lpcm)
+            {
+#if 0
+                double lfe_level = 1.0;
+#endif
+                DWORD valid_flag = 0;
+                MWCAP_INPUT_SPECIFIC_STATUS input_status;
+                HDMI_AUDIO_INFOFRAME_PAYLOAD audio_infoframe;
+
+                if (MW_SUCCEEDED ==  MWGetInputSpecificStatus(m_channel, &input_status))
+                {
+                    if (input_status.bValid &&
+                        input_status.dwVideoInputType == MWCAP_VIDEO_INPUT_TYPE_HDMI)
+                    {
+                        if (MW_SUCCEEDED ==  MWGetHDMIInfoFrameValidFlag(m_channel,
+                                                                         &valid_flag))
+                        {
+                            if (valid_flag & MWCAP_HDMI_INFOFRAME_MASK_AUDIO)
+                            {
+                                HDMI_INFOFRAME_PACKET pkt;
+                                MWGetHDMIInfoFramePacket(m_channel,
+                                                         MWCAP_HDMI_INFOFRAME_ID_AUDIO,
+                                                         &pkt);
+                                audio_infoframe = pkt.audioInfoFramePayload;
+                                audio_pcm_channel_layout(audio_infoframe.byChannelAllocation);
+#if 0
+                                lfe_level = audio_infoframe.byLFEPlaybackLevel == 0x2
+                                            ? pow(10.0, -10.0 / 20.0) : 1.0;
+#endif
+                            }
+                            else
+                                audio_infoframe = {};
+                        }
+                    }
+                }
+
             }
 
 #if 0

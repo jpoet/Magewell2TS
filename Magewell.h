@@ -53,6 +53,7 @@ class Magewell
   private:
     bool describe_input(HCHANNEL channel);
 
+    void audio_pcm_channel_layout(uint8_t channel_allocation);
     void pro_image_buffer_available(uint8_t* pbImage);
     bool add_pro_image_buffer(void);
     void free_image_buffers(void);
