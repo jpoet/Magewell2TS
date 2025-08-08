@@ -1035,7 +1035,7 @@ bool Magewell::capture_audio(void)
             ++frame_cnt;
 
             /*
-              L1L2L3L4 R1R2R3R4 L5L6L7L8 R5R6R7R8(4byte)
+              L1L2L3L4 R1R2R3R4 L5L6L7L8 R5R6R7R8 (32bits per channel)
               to 2channel 16bit
               L1R1L5R5(2byte)
             */
