@@ -146,6 +146,8 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
         m_data_avail.wait_for(lock, chrono::microseconds(100));
     }
 
+    m_timestamp = m_audio_queue.front().timestamp;
+
     AudioFrame* frame;
     uint32_t frm = 0;
     while (frm + m_frame_size <= len)
@@ -165,8 +167,6 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
             ++m_pkts_read;
             delete frame;
         }
-
-        m_parent->m_timestamp = m_audio_queue.front().timestamp;
 
         m_audio_queue.pop_front();
         if (m_audio_queue.empty())
@@ -196,7 +196,20 @@ AVPacket* AudioBuffer::ReadSPDIF(void)
         return nullptr;
     }
 
+    while (m_audio_queue.empty())
+    {
+        if (m_EoF.load() == true)
+            break;
+        unique_lock<mutex> lock(m_write_mutex);
+        m_data_avail.wait_for(lock, chrono::microseconds(100));
+    }
+
+    int64_t ts = m_audio_queue.front().timestamp;
     int ret = av_read_frame(m_spdif_format_context, pkt);
+    if (m_parent->m_timestamp == ts)
+        m_parent->m_timestamp = m_timestamp;
+    else
+        m_parent->m_timestamp = ts;
 
     if (ret < 0)
     {
@@ -357,6 +370,22 @@ bool AudioBuffer::open_spdif(void)
 
         AVStream* audio_stream =
             m_spdif_format_context->streams[audio_stream_idx];
+        av_channel_layout_copy(&m_channel_layout,
+                               &audio_stream->codecpar->ch_layout);
+
+        if (m_channel_layout.nb_channels > 6)
+            // HACK!  FFmpeg complains:
+            /* Specified channel layout '7.1' is not supported by the
+             * eac3 encoder
+             */
+            m_channel_layout = AV_CHANNEL_LAYOUT_5POINT1;
+
+        m_sample_rate = audio_stream->codecpar->sample_rate;
+        if (m_verbose > 1)
+            cerr << "Bistream sample rate: " << m_sample_rate << "\n"
+                 << "          frame size: "
+                 << audio_stream->codecpar->frame_size
+                 << endl;
 
         if (m_verbose > 0)
         {
@@ -391,7 +420,6 @@ bool AudioBuffer::open_spdif(void)
     }
 
     m_codec_name = m_spdif_codec->name;
-    m_channel_layout = AV_CHANNEL_LAYOUT_5POINT1;
 
 #if 0
     cerr << lock_ios() << "Probed S/PDIF with "
