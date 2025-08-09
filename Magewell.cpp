@@ -817,7 +817,7 @@ bool Magewell::capture_audio(void)
             }
             notify_audio  = MWRegisterNotify(m_channel, eco_event,
                                      (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
-                                     (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE  |
+//                                     (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE  |
                                      (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET
                                              );
         }
@@ -982,7 +982,7 @@ bool Magewell::capture_audio(void)
         {
             if (m_isEco)
             {
-                if (EcoEventWait(eco_event, 1000) <= 0)
+                if (EcoEventWait(eco_event, -1) <= 0)
                 {
                     if (m_verbose > 1)
                         cerr << lock_ios()
@@ -1006,12 +1006,15 @@ bool Magewell::capture_audio(void)
                                                   &notify_status))
                 continue;
 
-            if (notify_status & MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE)
+            if (!m_isEco)
             {
-                if (m_verbose > 0)
-                    cerr << lock_ios() << "AUDIO signal changed.\n";
-                this_thread::sleep_for(chrono::milliseconds(m_frame_ms * 5));
-                break;
+                if (notify_status & MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE)
+                {
+                    if (m_verbose > 0)
+                        cerr << lock_ios() << "AUDIO signal changed.\n";
+                    this_thread::sleep_for(chrono::milliseconds(m_frame_ms * 5));
+                    break;
+                }
             }
 
             if (notify_status & MWCAP_NOTIFY_AUDIO_INPUT_RESET)
@@ -1024,11 +1027,14 @@ bool Magewell::capture_audio(void)
             }
 
             if (!(notify_status & MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED))
+            {
+                cerr << "\n.";
                 continue;
+            }
 
             if (MW_ENODATA == MWCaptureAudioFrame(m_channel, &macf))
             {
-                this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
+//                this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
                 continue;
             }
 
@@ -1040,16 +1046,21 @@ bool Magewell::capture_audio(void)
               L1R1L5R5(2byte)
             */
             AudioBuffer::AudioFrame* audio_frame = new AudioBuffer::AudioFrame;
+
             int left_pos, right_pos;
             uint32_t left, right;
             int half_channels = MWCAP_AUDIO_MAX_NUM_CHANNELS / 2;
             int shift = audio_signal_status.cBitsPerSample > 16 ? 0 : 16;
 
+            int in_size = MWCAP_AUDIO_SAMPLES_PER_FRAME *
+                          MWCAP_AUDIO_MAX_NUM_CHANNELS;
+
             for (int chan = 0; chan < (cur_channels/2); ++chan)
             {
-                for (int samp = 0 ; samp < MWCAP_AUDIO_SAMPLES_PER_FRAME; ++samp)
+                for (int sample = 0 ; sample < in_size;
+                     sample += MWCAP_AUDIO_MAX_NUM_CHANNELS)
                 {
-                    left_pos = (samp * MWCAP_AUDIO_MAX_NUM_CHANNELS + chan);
+                    left_pos = sample + chan;
                     right_pos = left_pos + half_channels;
                     left = macf.adwSamples[left_pos] >> shift;
                     right = macf.adwSamples[right_pos] >> shift;
@@ -1062,6 +1073,7 @@ bool Magewell::capture_audio(void)
                          back_inserter(*audio_frame));
                 }
             }
+
 #if 0
             for(int idx = 0; idx < MWCAP_AUDIO_SAMPLES_PER_FRAME; ++idx)
             {
@@ -1077,6 +1089,7 @@ bool Magewell::capture_audio(void)
                 debugf << *i;
             }
 #endif
+
             m_out2ts->addAudio(audio_frame, macf.llTimestamp);
             std::this_thread::yield();
         }
