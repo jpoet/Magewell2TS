@@ -146,7 +146,7 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
         m_data_avail.wait_for(lock, chrono::microseconds(100));
     }
 
-    m_timestamp = m_audio_queue.front().timestamp;
+    int64_t ts = m_audio_queue.begin()->timestamp;
 
     AudioFrame* frame;
     uint32_t frm = 0;
@@ -168,12 +168,16 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
             delete frame;
         }
 
+        if (ts == m_parent->m_timestamp)
+            ts = m_audio_queue.begin()->timestamp;
+
         m_audio_queue.pop_front();
         if (m_audio_queue.empty())
             break;
     }
 
     m_total_read += frm;
+    m_parent->m_timestamp = ts;
 
     return frm;
 }
@@ -196,20 +200,7 @@ AVPacket* AudioBuffer::ReadSPDIF(void)
         return nullptr;
     }
 
-    while (m_audio_queue.empty())
-    {
-        if (m_EoF.load() == true)
-            break;
-        unique_lock<mutex> lock(m_write_mutex);
-        m_data_avail.wait_for(lock, chrono::microseconds(100));
-    }
-
-    int64_t ts = m_audio_queue.front().timestamp;
     int ret = av_read_frame(m_spdif_format_context, pkt);
-    if (m_parent->m_timestamp == ts)
-        m_parent->m_timestamp = m_timestamp;
-    else
-        m_parent->m_timestamp = ts;
 
     if (ret < 0)
     {

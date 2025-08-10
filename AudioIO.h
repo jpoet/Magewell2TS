@@ -86,8 +86,6 @@ class AudioBuffer
     const AVCodec*   m_spdif_codec          {nullptr};
     AVCodecID        m_spdif_codec_id;
 
-    int64_t          m_timestamp            {-1};
-
     bool             m_lpcm                 {true};
     std::string      m_codec_name;
     int              m_num_channels         {-1};
