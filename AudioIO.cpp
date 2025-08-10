@@ -181,10 +181,12 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
         ++m_missaligned_pkts = 0;
 #endif
 
+    int64_t ts = m_audio_queue.begin()->timestamp;
+
     uint32_t frm = 0;
     while (frm + m_frame_size <= len)
     {
-        pkt_sz = m_audio_queue.front().frame.size();
+        pkt_sz = m_audio_queue.begin()->frame.size();
 #if 1
         if (pkt_sz > static_cast<size_t>(m_frame_size))
         {
@@ -195,8 +197,8 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
         }
 #endif
 
-        copy(m_audio_queue.front().frame.begin(),
-             m_audio_queue.front().frame.end(), dest);
+        copy(m_audio_queue.begin()->frame.begin(),
+             m_audio_queue.begin()->frame.end(), dest);
 
         dest += pkt_sz;
         frm += pkt_sz;
@@ -206,13 +208,16 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
         else
             ++m_pkts_read;
 
-        m_parent->m_timestamp = m_audio_queue.front().timestamp;
+        if (ts == m_parent->m_timestamp)
+            ts = m_audio_queue.begin()->timestamp;
+
         m_audio_queue.pop_front();
         if (m_audio_queue.empty())
             break;
     }
 
     m_total_read += frm;
+    m_parent->m_timestamp = ts;
 
     return frm;
 }
