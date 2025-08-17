@@ -67,9 +67,6 @@ extern "C" {
 using namespace std;
 using namespace s6_lock_ios;
 
-#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(61, 3, 100)
-#endif
-
 std::string AV_ts2str(int64_t ts)
 {
     char astr[AV_TS_MAX_STRING_SIZE] = { 0 };
@@ -239,9 +236,14 @@ bool OutputTS::open_audio(void)
     }
     m_audio_stream.next_pts = 0;
 
-    m_audio_stream.enc->sample_fmt  = audio_codec->sample_fmts ?
-                            audio_codec->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
-    m_audio_stream.enc->bit_rate    = 192000;
+    m_audio_stream.enc->bit_rate = 192000;
+
+
+// #if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(61, 0, 0)
+#if LIBAVCODEC_VERSION_MAJOR < 61
+    m_audio_stream.enc->sample_fmt = audio_codec->sample_fmts ?
+                         audio_codec->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
+
     if (audio_codec->supported_samplerates)
     {
         m_audio_stream.enc->sample_rate = audio_codec->supported_samplerates[0];
@@ -259,6 +261,78 @@ bool OutputTS::open_audio(void)
 
     av_channel_layout_copy(&m_audio_stream.enc->ch_layout,
                            m_audioIO->ChannelLayout());
+#else
+    int count = 0;
+
+    enum AVSampleFormat *sample_fmts = nullptr;
+    avcodec_get_supported_config(m_audio_stream.enc,
+                                 audio_codec,
+                                 AV_CODEC_CONFIG_SAMPLE_FORMAT,
+                                 0,
+                                 const_cast<const void**>(reinterpret_cast<void**>(&sample_fmts)),
+                                 &count);
+    if (!sample_fmts)
+        m_audio_stream.enc->sample_fmt = AV_SAMPLE_FMT_FLTP;
+    else
+        m_audio_stream.enc->sample_fmt = sample_fmts[0];
+
+
+    const int *sample_rates;
+    avcodec_get_supported_config(m_audio_stream.enc,
+                                 NULL,
+                                 AV_CODEC_CONFIG_SAMPLE_RATE,
+                                 0,
+                                 reinterpret_cast<const void**>(&sample_rates),
+                                 &count);
+
+    if (!sample_rates)
+        m_audio_stream.enc->sample_rate = 48000;
+    else
+    {
+        m_audio_stream.enc->sample_rate = sample_rates[0];
+        for (idx = 0; idx < count; ++idx)
+        {
+            if (sample_rates[idx] == m_audioIO->SampleRate())
+            {
+                m_audio_stream.enc->sample_rate = m_audioIO->SampleRate();
+                break;
+            }
+        }
+    }
+
+    const AVChannelLayout *ch_layouts;
+    av_channel_layout_copy(&m_audio_stream.enc->ch_layout,
+                           m_audioIO->ChannelLayout());
+    avcodec_get_supported_config(m_audio_stream.enc,
+                                 NULL,
+                                 AV_CODEC_CONFIG_CHANNEL_LAYOUT,
+                                 0,
+                                 reinterpret_cast<const void**>(&ch_layouts),
+                                 &count);
+    if (ch_layouts)
+    {
+        for (idx = 0; idx < count; ++idx)
+        {
+            if (!av_channel_layout_compare(&m_audio_stream.enc->ch_layout,
+                                           &ch_layouts[idx]))
+                break;
+        }
+        if (idx == count)
+        {
+            char buf[512];
+            av_channel_layout_describe(&m_audio_stream.enc->ch_layout, buf, sizeof(buf));
+            cerr << lock_ios();
+            cerr << "Channel layout " << buf << " is not supportr by the "
+                 << m_audio_stream.enc->codec->name << " encoder.\n";
+            cerr << m_audio_stream.enc->codec->name << " encoder supports:\n";
+            for (idx = 0; idx < count; ++idx)
+            {
+                av_channel_layout_describe(&ch_layouts[idx], buf, sizeof(buf));
+                cerr << "    " << buf << '\n';
+            }
+        }
+    }
+#endif
 
     if (m_audio_stream.enc->codec->capabilities & AV_CODEC_CAP_SLICE_THREADS)
     {
