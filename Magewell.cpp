@@ -12,6 +12,14 @@
 #include "Magewell.h"
 #include "lock_ios.h"
 
+
+//#define DUMP_RAW_AUDIO_ALLBITS
+//#define DUMP_RAW_AUDIOst
+
+#if defined(DUMP_RAW_AUDIO) || defined(DUMP_RAW_AUDIO_ALLBITS)
+#include <fstream>
+#endif
+
 using namespace std;
 using namespace s6_lock_ios;
 
@@ -786,6 +794,16 @@ bool Magewell::capture_audio(void)
     ULONGLONG notify_status = 0;
     MWCAP_AUDIO_CAPTURE_FRAME macf;
 
+#ifdef DUMP_RAW_AUDIO_ALLBITS
+    ofstream fraw_all;
+    fraw_all.open("raw-audio-allbits.bin", ofstream::binary);
+#endif
+#ifdef DUMP_RAW_AUDIO
+    ofstream fraw;
+    fraw.open("raw-audio.bin", ofstream::binary);
+#endif
+
+
     MWGetAudioInputSourceArray(m_channel, nullptr, &input_count);
     if (input_count == 0)
     {
@@ -1031,6 +1049,21 @@ bool Magewell::capture_audio(void)
 
             ++frame_cnt;
 
+#ifdef DUMP_RAW_AUDIO_ALLBITS
+            /*
+              Audio sample data. Each sample is 32-bit width, and
+              high bit effective. The priority of the path is:
+              Left0, Left1, Left2, Left3, right0, right1, right2,
+              right3.
+            */
+            for (int idx = 0;
+                 idx < MWCAP_AUDIO_SAMPLES_PER_FRAME * MWCAP_AUDIO_MAX_NUM_CHANNELS;
+                 ++idx)
+            {
+                fraw_all.write(reinterpret_cast<char*>(&macf.adwSamples[idx]), sizeof(DWORD));
+            }
+#endif
+
             /*
               L1L2L3L4 R1R2R3R4 L5L6L7L8 R5R6R7R8 (32bits per channel)
               to 2channel 16bit
@@ -1064,6 +1097,18 @@ bool Magewell::capture_audio(void)
                          back_inserter(*audio_frame));
                 }
             }
+#ifdef DUMP_RAW_AUDIO
+            /*
+              Bitstream Audio: Each sample is 16-bits for L1 and 16-bits for R1
+              16-bit PCM: Each sample is 16-bits for each valid channel: L1R1L2R2, etc...
+              24-bit PCM: Each sample is 32-bits for each valid channel: L1R1L2R2, etc...
+            */
+            AudioBuffer::AudioFrame::const_iterator Itr;
+            for (Itr = audio_frame->begin(); Itr != audio_frame->end(); ++Itr)
+            {
+                fraw.write(reinterpret_cast<const char*>(&(*Itr)), sizeof(uint8_t));
+            }
+#endif
 
             m_out2ts->addAudio(audio_frame, macf.llTimestamp);
             std::this_thread::yield();
