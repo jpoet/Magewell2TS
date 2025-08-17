@@ -7,6 +7,12 @@
 #include <iomanip>
 #include <csignal>
 
+//#define DUMP_FFMPEG_BITSTREAM
+#ifdef DUMP_FFMPEG_BITSTREAM
+#include <fstream>
+#endif
+
+
 using namespace std;
 using namespace s6_lock_ios;
 
@@ -212,6 +218,12 @@ AVPacket* AudioBuffer::ReadSPDIF(void)
                  << AVerr2str(ret) << endl;
         return nullptr;
     }
+
+#ifdef DUMP_FFMPEG_BITSTREAM
+    static ofstream fraw("ffmpeg-bitstream.bin", ofstream::binary);
+
+    fraw.write(reinterpret_cast<const char*>(pkt->data), pkt->size);
+#endif
 
     return pkt;
 }
