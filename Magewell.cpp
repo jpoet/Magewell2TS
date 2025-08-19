@@ -770,7 +770,6 @@ int EcoEventWait(mw_event_t event, int timeout/*ms*/)
 
 bool Magewell::capture_audio(void)
 {
-    int       idx;
     bool      lpcm = false;
     int       bytes_per_sample = 0;
     int       even_bytes_per_sample = 0;
@@ -815,51 +814,34 @@ bool Magewell::capture_audio(void)
         goto audio_capture_stoped;
     }
 
-    // MWRegisterNotify for eco_event randomly fails, so give it a few tries
-    for (idx = 0; idx < 5; ++idx)
+    if (m_isEco)
     {
-        if (m_isEco)
+        eco_event = eventfd(0, EFD_NONBLOCK);
+        if (eco_event < 0)
         {
-            eco_event = eventfd(0, EFD_NONBLOCK);
-            if (notify_event < 0)
-            {
-                cerr << lock_ios() << "ERROR: Failed to create eco event.\n";
-                Shutdown();
-                return false;
-            }
-            notify_audio  = MWRegisterNotify(m_channel, eco_event,
-                                     (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
+            cerr << lock_ios() << "ERROR: Failed to create eco event.\n";
+            Shutdown();
+            return false;
+        }
+        notify_audio  = MWRegisterNotify(m_channel, eco_event,
+                                         (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
 //                                     (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE  |
-                                     (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET
-                                             );
-        }
-        else
-        {
-            notify_event = MWCreateEvent();
-            if (notify_event == 0)
-            {
-                cerr << lock_ios() << "ERROR: create notify_event fail\n";
-                Shutdown();
-                return false;
-            }
-            notify_audio  = MWRegisterNotify(m_channel, notify_event,
-                                     (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
-                                     (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE  |
-                                     (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET);
-        }
-
-        if (notify_audio > 0)
-            break;
-
-        cerr << lock_ios()
-             << "WARNING: Register Notify audio failed, will try again.\n";
-        this_thread::sleep_for(chrono::milliseconds(1));
+                                         (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET
+                                         );
     }
-
-    if (idx == 5)
+    else
     {
-        Shutdown();
-        return false;
+        notify_event = MWCreateEvent();
+        if (notify_event == 0)
+        {
+            cerr << lock_ios() << "ERROR: create notify_event fail\n";
+            Shutdown();
+            return false;
+        }
+        notify_audio  = MWRegisterNotify(m_channel, notify_event,
+                                         (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
+                                         (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE  |
+                                         (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET);
     }
 
     if (m_verbose > 1)
