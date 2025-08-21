@@ -9,8 +9,8 @@
 #include <sys/eventfd.h>
 #include <unistd.h>
 
-#include "Magewell.h"
 #include "lock_ios.h"
+#include "Magewell.h"
 
 
 //#define DUMP_RAW_AUDIO_ALLBITS
@@ -310,9 +310,7 @@ bool Magewell::describe_input(HCHANNEL hChannel)
 
     if (status.dwVideoInputType == MWCAP_VIDEO_INPUT_TYPE_HDMI)
     {
-        cerr << ", HDCP: " << (status.hdmiStatus.bHDCP ? "Yes"
-                               : "No")
-
+        cerr << ", HDCP: " << (status.hdmiStatus.bHDCP ? "Yes" : "No")
              << ", Mode: "
              << static_cast<int>(status.hdmiStatus.bHDMIMode)
              << ", Bit Depth: "
@@ -2012,8 +2010,10 @@ bool Magewell::capture_video(void)
         {
             color_changed = update_HDRcolorspace(videoSignalStatus);
 
-            if (m_out2ts->encoderType() == OutputTS::QSV ||
-                m_out2ts->encoderType() == OutputTS::VAAPI)
+            if (m_p010)
+                eco_params.dwFOURCC = MWFOURCC_P010;
+            else if (m_out2ts->encoderType() == OutputTS::QSV ||
+                     m_out2ts->encoderType() == OutputTS::VAAPI)
                 eco_params.dwFOURCC = MWFOURCC_NV12;
             else if (m_out2ts->encoderType() == OutputTS::NV)
                 eco_params.dwFOURCC = MWFOURCC_I420;
@@ -2280,15 +2280,17 @@ bool Magewell::capture_video(void)
 
 bool Magewell::Capture(const string & video_codec, const string & preset,
                        int quality, int look_ahead, bool no_audio,
-                       const string & gpu_device)
+                       bool p010, const string & gpu_device)
 {
+    m_p010 = p010;
+
     if (m_verbose > 1)
         describe_input(m_channel);
 
     if (m_isEco)
     {
         m_out2ts = new OutputTS(m_verbose, video_codec, preset, quality,
-                                look_ahead, no_audio, gpu_device,
+                                look_ahead, no_audio, p010, gpu_device,
                                 [=](void) { this->Shutdown(); },
                                 [=](uint8_t* ib, void* eb)
                                 { this->eco_image_buffer_available(ib, eb); });
@@ -2296,7 +2298,7 @@ bool Magewell::Capture(const string & video_codec, const string & preset,
     else
     {
         m_out2ts = new OutputTS(m_verbose, video_codec, preset, quality,
-                                look_ahead, no_audio, gpu_device,
+                                look_ahead, no_audio, p010, gpu_device,
                                 [=](void) { this->Shutdown(); },
                                 [=](uint8_t* ib, void* eb)
                                 { this->pro_image_buffer_available(ib, eb); });

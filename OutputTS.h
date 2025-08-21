@@ -28,7 +28,7 @@ class OutputTS
 
     OutputTS(int verbose, const std::string & video_codec_name,
              const std::string & preset, int quality, int look_ahead,
-             bool no_audio, const std::string & device,
+             bool no_audio, bool p010, const std::string & device,
              ShutdownCallback shutdown,
              MagCallback image_buffer_avail);
     ~OutputTS(void);
@@ -168,6 +168,7 @@ class OutputTS
 
     bool             m_interlaced             {false};
 
+    bool                          m_p010              {false};
     // HDR
     bool                          m_isHDR             {false};
     AVColorSpace                  m_color_space       {AVCOL_SPC_NB};

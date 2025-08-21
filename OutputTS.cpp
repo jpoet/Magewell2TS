@@ -105,7 +105,7 @@ static void log_packet(string where, const AVFormatContext* fmt_ctx,
 
 OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
                    const string & preset, int quality, int look_ahead,
-                   bool no_audio, const string & device,
+                   bool no_audio, bool p010, const string & device,
                    ShutdownCallback shutdown,
                    MagCallback image_buffer_avail)
     : m_verbose(verbose_level)
@@ -115,6 +115,7 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     , m_preset(preset)
     , m_quality(quality)
     , m_look_ahead(look_ahead)
+    , m_p010(p010)
     , f_shutdown(shutdown)
     , f_image_buffer_available(image_buffer_avail)
 {
@@ -1331,7 +1332,7 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     }
     frames_ctx = reinterpret_cast<AVHWFramesContext* >(hw_frames_ref->data);
     frames_ctx->format    = AV_PIX_FMT_VAAPI;
-    if (m_isHDR)
+    if (m_isHDR || m_p010)
         frames_ctx->sw_format = AV_PIX_FMT_P010;
     else
         frames_ctx->sw_format = AV_PIX_FMT_NV12;
@@ -1468,13 +1469,8 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     }
     frames_ctx = reinterpret_cast<AVHWFramesContext* >(hw_frames_ref->data);
 
-    if (m_isHDR)
-    {
-        if (m_verbose > 1)
-            cerr << lock_ios()
-                 << "Open QSV stream with HDR.\n";
+    if (m_isHDR || m_p010)
         frames_ctx->sw_format = AV_PIX_FMT_P010;
-    }
     else
         frames_ctx->sw_format = AV_PIX_FMT_NV12;
 

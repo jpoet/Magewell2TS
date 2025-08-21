@@ -99,6 +99,7 @@ void show_help(string_view app)
          << "--lookahead (-a)   : How many frames to 'look ahead' [35]\n"
          << "--quality (-q)     : quality setting [25]\n"
          << "--preset (-p)      : encoder preset\n"
+         << "--p010             : Force p010 (10bit) video format.\n"
          << "--write-edid (-w)  : Write EDID info from file to input\n"
          << "--wait-for         : Wait for given number of inputs to be initialized. 10 second timeout\n";
 
@@ -158,6 +159,7 @@ int main(int argc, char* argv[])
     int         quality     = 25;
     int         look_ahead  = -1;
     bool        no_audio    = false;
+    bool        p010        = false;
 
     std::cerr << mutex_init_own;
 
@@ -240,6 +242,10 @@ int main(int argc, char* argv[])
         {
             no_audio = true;
         }
+        else if (*iter == "--p010")
+        {
+            p010 = true;
+        }
         else if (*iter == "-d" || *iter == "--device")
         {
             device = *(++iter);
@@ -305,7 +311,7 @@ int main(int argc, char* argv[])
     if (do_capture)
     {
         if (!g_mw.Capture(video_codec, preset, quality, look_ahead,
-                          no_audio, device))
+                          no_audio, p010, device))
             return -2;
     }
 

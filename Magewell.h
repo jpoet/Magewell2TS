@@ -41,7 +41,7 @@ class Magewell
     bool WriteEDID(const std::string & filepath);
 
     bool Capture(const std::string & video_codec, const std::string & preset,
-                 int quality, int look_ahead, bool no_audio,
+                 int quality, int look_ahead, bool no_audio, bool p010,
                  const std::string & gpu_device);
     void Shutdown(void);
     void Reset(void) { m_reset_audio.store(true); }
@@ -124,6 +124,7 @@ class Magewell
 
     bool m_isEco   {false};
     bool m_isHDR   {false};
+    bool m_p010    {false};
     bool m_fatal   {false};
     int  m_verbose {1};
 };
