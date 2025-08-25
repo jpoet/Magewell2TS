@@ -90,7 +90,7 @@ If you place the Magewell2TS source somewhere else, you will need to edit Magewe
 ### Dependencies
 #### Fedora:
 ```bash
-sudo dnf install -y make gcc gcc-c++ libstdc++-devel libv4l-devel patch kernel-devel alsa-lib-devel v4l-utils-devel-tools systemd-devel
+sudo dnf install -y make cmake gcc gcc-c++ libstdc++-devel libv4l-devel patch kernel-devel alsa-lib-devel v4l-utils-devel-tools systemd-devel
 ```
 #### Ubuntu:
 ```bash
@@ -109,7 +109,7 @@ sudo apt-get install intel-media-va-driver-non-free libmfx1 intel-opencl-icd lib
 ### Intel
 For Intel QSV you will also need oneVPL libs. For example:
 ```
-sudo dnf install oneVPL-devel intel-media-driver
+sudo dnf install libvpl-devel intel-media-driver
 ```
 or
 ```
