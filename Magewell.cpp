@@ -825,7 +825,7 @@ bool Magewell::capture_audio(void)
         }
         notify_audio  = MWRegisterNotify(m_channel, eco_event,
                                          (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
-//                                     (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE  |
+                                         (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE  |
                                          (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET
                                          );
     }
@@ -995,13 +995,14 @@ bool Magewell::capture_audio(void)
                                                   &notify_status))
                 continue;
 
-            if (!m_isEco)
+
             {
+                // TODO: Sometime spurous, what to do?
                 if (notify_status & MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE)
                 {
                     if (m_verbose > 0)
                         cerr << lock_ios() << "AUDIO signal changed.\n";
-                    this_thread::sleep_for(chrono::milliseconds(m_frame_ms * 5));
+                    this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
                     break;
                 }
             }
