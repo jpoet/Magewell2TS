@@ -1778,6 +1778,5 @@ bool OutputTS::AddVideoFrame(uint8_t* pImage, void* pEco,
         m_image_ready.notify_one();
     }
 
-    std::this_thread::yield();
     return true;
 }

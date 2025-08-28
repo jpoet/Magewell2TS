@@ -984,7 +984,7 @@ bool Magewell::capture_audio(void)
             }
             else
             {
-                if (MWWaitEvent(notify_event, 1000) <= 0)
+                if (MWWaitEvent(notify_event, -1) <= 0)
                 {
                     if (m_verbose > 1)
                         cerr << lock_ios()
@@ -1116,7 +1116,6 @@ bool Magewell::capture_audio(void)
 #endif
 
             m_out2ts->addAudio(audio_frame, macf.llTimestamp);
-            std::this_thread::yield();
         }
     }
 
@@ -1599,7 +1598,7 @@ void Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
 
     while (m_running.load() == true)
     {
-        if (EcoEventWait(eco_event, 1000) <= 0)
+        if (EcoEventWait(eco_event, -1) <= 0)
         {
             if (m_verbose > 1)
                 cerr << lock_ios()
@@ -1834,7 +1833,7 @@ void Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                eco_params.cx,
                eco_params.cy);
 
-        if (MWWaitEvent(capture_event, 1000) <= 0)
+        if (MWWaitEvent(capture_event, -1) <= 0)
         {
             if (m_verbose > 0)
                 cerr << lock_ios()
