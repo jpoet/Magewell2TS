@@ -787,6 +787,7 @@ bool Magewell::capture_audio(void)
 
     int      frame_size      = 0;
     bool     params_changed  = false;
+    bool     lr16bit         = false;
 
     ULONGLONG notify_status = 0;
     MWCAP_AUDIO_CAPTURE_FRAME macf;
@@ -950,6 +951,8 @@ bool Magewell::capture_audio(void)
                 continue;
             }
 
+            lr16bit = (cur_channels == 2 && bytes_per_sample == 2);
+
             frame_size = MWCAP_AUDIO_SAMPLES_PER_FRAME
                          * cur_channels * bytes_per_sample;
 
@@ -1041,43 +1044,64 @@ bool Magewell::capture_audio(void)
                  idx < MWCAP_AUDIO_SAMPLES_PER_FRAME * MWCAP_AUDIO_MAX_NUM_CHANNELS;
                  ++idx)
             {
-                fraw_all.write(reinterpret_cast<char*>(&macf.adwSamples[idx]), sizeof(DWORD));
+                fraw_all.write(reinterpret_cast<char*>(&macf.adwSamples[idx]),
+                               sizeof(DWORD));
             }
 #endif
 
-            /*
-              L1L2L3L4 R1R2R3R4 L5L6L7L8 R5R6R7R8 (32bits per channel)
-              to 2channel 16bit
-              L1R1L5R5(2byte)
-            */
             AudioBuffer::AudioFrame* audio_frame = new AudioBuffer::AudioFrame;
-
-            int left_pos, right_pos;
-            uint32_t left, right;
-            int half_channels = MWCAP_AUDIO_MAX_NUM_CHANNELS / 2;
-            int shift = audio_signal_status.cBitsPerSample > 16 ? 0 : 16;
-
-            int in_size = MWCAP_AUDIO_SAMPLES_PER_FRAME *
-                          MWCAP_AUDIO_MAX_NUM_CHANNELS;
-
-            for (int chan = 0; chan < (cur_channels/2); ++chan)
+            if (lr16bit)
             {
-                for (int sample = 0 ; sample < in_size;
-                     sample += MWCAP_AUDIO_MAX_NUM_CHANNELS)
+                // Optimized for bitstream and 2-channel, 16bit PCM
+                uint8_t* byteP = reinterpret_cast<uint8_t*>(macf.adwSamples);
+                uint8_t* endP = byteP +
+                                ((MWCAP_AUDIO_SAMPLES_PER_FRAME *
+                                  MWCAP_AUDIO_MAX_NUM_CHANNELS) * 4);
+                byteP += 2; // shift 16 bits
+                while (byteP < endP)
                 {
-                    left_pos = sample + chan;
-                    right_pos = left_pos + half_channels;
-                    left = macf.adwSamples[left_pos] >> shift;
-                    right = macf.adwSamples[right_pos] >> shift;
-
-                    copy(reinterpret_cast<uint8_t*>(&left),
-                         reinterpret_cast<uint8_t*>(&left) + bytes_per_sample,
-                         back_inserter(*audio_frame));
-                    copy(reinterpret_cast<uint8_t*>(&right),
-                         reinterpret_cast<uint8_t*>(&right) + bytes_per_sample,
-                         back_inserter(*audio_frame));
+                    audio_frame->push_back(*byteP);
+                    ++byteP;
+                    audio_frame->push_back(*byteP);
+                    byteP += 15;
                 }
             }
+            else
+            {
+                /*
+                  L1L2L3L4 R1R2R3R4 L5L6L7L8 R5R6R7R8 (32bits per channel)
+                  to 2channel 16bit
+                  L1R1L5R5(2byte)
+                */
+
+                int left_pos, right_pos;
+                uint32_t left, right;
+                int half_channels = MWCAP_AUDIO_MAX_NUM_CHANNELS / 2;
+                int shift = audio_signal_status.cBitsPerSample > 16 ? 0 : 16;
+
+                int in_size = MWCAP_AUDIO_SAMPLES_PER_FRAME *
+                              MWCAP_AUDIO_MAX_NUM_CHANNELS;
+
+                for (int chan = 0; chan < (cur_channels/2); ++chan)
+                {
+                    for (int sample = 0 ; sample < in_size;
+                         sample += MWCAP_AUDIO_MAX_NUM_CHANNELS)
+                    {
+                        left_pos = sample + chan;
+                        right_pos = left_pos + half_channels;
+                        left = macf.adwSamples[left_pos] >> shift;
+                        right = macf.adwSamples[right_pos] >> shift;
+
+                        copy(reinterpret_cast<uint8_t*>(&left),
+                             reinterpret_cast<uint8_t*>(&left) + bytes_per_sample,
+                             back_inserter(*audio_frame));
+                        copy(reinterpret_cast<uint8_t*>(&right),
+                             reinterpret_cast<uint8_t*>(&right) + bytes_per_sample,
+                             back_inserter(*audio_frame));
+                    }
+                }
+            }
+
 #ifdef DUMP_RAW_AUDIO
             /*
               Bitstream Audio: Each sample is 16-bits for L1 and 16-bits for R1
