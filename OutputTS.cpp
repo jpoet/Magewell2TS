@@ -1258,16 +1258,6 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
         }
     }
 
-    /* copy the stream parameters to the muxer */
-    ret = avcodec_parameters_from_context(ost->st->codecpar, ctx);
-    if (ret < 0)
-    {
-        cerr << lock_ios()
-             << "ERROR: Could not copy the stream parameters." << endl;
-        Shutdown();
-        return false;
-    }
-
     return true;
 }
 
@@ -1378,16 +1368,6 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     {
         cerr << lock_ios()
              << "ERROR: Could not allocate VAAPI video frame\n";
-        Shutdown();
-        return false;
-    }
-
-    /* copy the stream parameters to the muxer */
-    ret = avcodec_parameters_from_context(ost->st->codecpar, ctx);
-    if (ret < 0)
-    {
-        cerr << lock_ios()
-             << "ERROR: Could not copy the VAAPI stream parameters." << endl;
         Shutdown();
         return false;
     }
