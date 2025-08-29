@@ -398,7 +398,24 @@ bool Magewell::describe_input(HCHANNEL hChannel)
              << ", Sample Rate: "
              << aStatus.dwSampleRate
              << "\n";
+
+#if 0
+        MWCAP_AUDIO_VOLUME volume;
+        _MWCAP_AUDIO_NODE node = MWCAP_AUDIO_EMBEDDED_CAPTURE;
+        MWGetAudioVolume(m_channel, node, &volume);
+
+        ios_lock lock;
+        cerr << lock_ios(lock);
+
+        cerr << "    Volume min:" << volume.sVolumeMin
+             << " max:" << volume.sVolumeMax
+             << " step:" << volume.sVolumeStep
+             << " current:" << volume.asVolume[0]
+             << "|" << volume.asVolume[1]
+             << "\n";
+#endif
     }
+
 
     return true;
 }
@@ -587,9 +604,12 @@ bool Magewell::SetVolume(int volume_level)
 
     MWGetAudioVolume(m_channel, node, &volume);
 
+    float scale = (volume.sVolumeMax - volume.sVolumeMin) / 100;
+    int scaled_volume = volume_level * scale;
+
     for(int i=0; i<MWCAP_MAX_NUM_AUDIO_CHANNEL; ++i)
     {
-        volume.asVolume[i] = volume_level;
+        volume.asVolume[i] = scaled_volume + volume.sVolumeMin;
     }
 
     MWSetAudioVolume(m_channel, node, &volume);
