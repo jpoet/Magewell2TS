@@ -206,10 +206,10 @@ Environment=HOME=/home/mythtv
 LimitCORE=infinity
 User=mythtv
 PermissionsStartOnly=true
-ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 1 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 2 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 3 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 4 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 1 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 2 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 3 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 4 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
 
 ExecStart=/usr/local/bin/mythbackend -q --syslog none --logpath /var/log/mythtv -v channel,record
 RestartSec=5
@@ -218,7 +218,7 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 ```
-That will load the eac3 EDID and set the volume level to 100.
+That will load the eac3 EDID.
 
 
 ## Multi GPU systems

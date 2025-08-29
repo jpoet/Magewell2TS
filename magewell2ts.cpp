@@ -87,13 +87,11 @@ void show_help(string_view app)
 
     cerr << "--board (-b)       : board id, if you have more than one [0]\n"
          << "--device (-d)      : vaapi/qsv device (e.g. renderD129) [renderD128]\n"
-         << "--get-volume (-g)  : Display volume settings for each channel of input\n"
          << "--input (-i)       : input idx, *required*. Starts at 1\n"
          << "--list (-l)        : List capture card inputs\n"
          << "--mux (-m)         : capture audio and video and mux into TS [false]\n"
          << "--no-audio (-n)    : Only capture video. [false]\n"
          << "--read-edid (-r)   : Read EDID info for input to file\n"
-         << "--set-volume (-s)  : Set volume for all channels of the input\n"
          << "--verbose (-v)     : message verbose level. 0=completely quiet [1]\n"
          << "--video-codec (-c) : Video codec name (e.g. hevc_qsv, h264_nvenc) [hevc_nvenc]\n"
          << "--lookahead (-a)   : How many frames to 'look ahead' [35]\n"
@@ -111,11 +109,11 @@ void show_help(string_view app)
          << "\tWrite EDID to input 3 and capture audio and video:\n"
          << "\t" << app << " -i 3 -w ProCaptureHDMI-EAC3.bin -m\n"
          << "\n"
-         << "\tSet Volume of input 1 to max and capture to TS:\n"
-         << "\t" << app << " -i 1 -s 100 -m\n"
+         << "\tUse the iHD vaapi driver to encode h.264 video and pipe it to mpv:\n"
+         << "\t" << app << " -i 1 -m -n -c h264_vaapi | mpv -\n"
          << "\n"
-         << "\tUse the iHD vaapi driver to encode h264 video and pipe it to mpv:\n"
-         << "\t" << app << " ./magewell2ts -i 1 -m -n -c h264_qsv | mpv -\n";
+         << "\tUse Intel quick-sync to encode h.265 video and pipe it to mpv:\n"
+         << "\t" << app << " -b 1 -i 1 -m -n -c hevc_qsv | mpv -\n";
 
     cerr << "\nNOTE: setting EDID does not survive a reboot.\n";
 }
