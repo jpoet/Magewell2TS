@@ -120,7 +120,8 @@ For Intel GPU and onvVPL:
 ```bash
 sudo apt-get install intel-media-va-driver-non-free libmfx1 intel-opencl-icd libmfx-gen1.2 libvpl-dev onevpl-tools
 ```
-Note: some onevpl packages are being renamed to libvpl
+Note: some onevpl packages are being renamed to libvpl.
+
 Verify that oneVPL is installed correctly:
 ```
 vpl-inspect
@@ -266,3 +267,7 @@ The Intel Arc GPUs may need a new version of the linux firmware
 ```bash
 git clone git://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git
 ```
+
+If you want to update the firmware on the Arc itself, this might help: [https://forum.level1techs.com/t/remember-to-update-your-intel-arc-firmware-on-linux/208736](https://forum.level1techs.com/t/remember-to-update-your-intel-arc-firmware-on-linux/208736)
+
+
