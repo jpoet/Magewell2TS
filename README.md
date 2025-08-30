@@ -95,8 +95,13 @@ sudo dnf install ffmpeg-devel
 ```
 For Intel GPU and oneVPL:
 ```bash
-sudo dnf install libvpl-devel intel-media-driver
+sudo dnf install libvpl-devel intel-media-driver libvpl-tools
 ```
+Verify that oneVPL is installed correctly:
+```
+vpl-inspect
+```
+
 For nVidia GPU you will want to have the closed source driver installed as well as cuda libs. For example:
 ```bash
 sudo dnf install https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm https://download1.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm`
@@ -113,7 +118,12 @@ apt-get install ffmpeg-dev
 ```
 For Intel GPU and onvVPL:
 ```bash
-sudo apt-get install intel-media-va-driver-non-free libmfx1 intel-opencl-icd libmfx-gen1.2 libvpl-dev
+sudo apt-get install intel-media-va-driver-non-free libmfx1 intel-opencl-icd libmfx-gen1.2 libvpl-dev onevpl-tools
+```
+Note: some onevpl packages are being renamed to libvpl
+Verify that oneVPL is installed correctly:
+```
+vpl-inspect
 ```
 For nVidia GPU:
 ```
