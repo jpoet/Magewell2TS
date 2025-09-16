@@ -1806,6 +1806,7 @@ void Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         }
         else
         {
+#if 0
             if (frame_idx == videoBufferInfo.iNewestBufferedFullFrame)
             {
                 if (m_verbose > 0)
@@ -1816,8 +1817,10 @@ void Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 pro_image_buffer_available(pbImage, nullptr);
                 continue;
             }
+#endif
             if (++frame_idx == frame_wrap_idx)
                 frame_idx = 0;
+#if 0
             if (frame_idx != videoBufferInfo.iNewestBufferedFullFrame)
             {
                 if (m_verbose > 0)
@@ -1830,6 +1833,7 @@ void Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 }
                 frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
             }
+#endif
         }
         if (MWGetVideoFrameInfo(m_channel, frame_idx,
                                 &videoFrameInfo) != MW_SUCCEEDED)
