@@ -8,44 +8,41 @@ This application reads audio and video from a Magewell PRO capture card and muxe
 
 If bitstream audio is detected it will be muxed directly into the resulting Transport Stream. LPCM audio will be encoded as AC3 and then muxed.
 
-Both AC3 and EAC3 are supported if the source device outputs them as a bitstream.
+Both AC3 and EAC3 (5.1) are supported if the source device outputs them as a bitstream. EAC3 7.1 is not supported because FFmpeg does not understand >6 channels of audio in EAC3.
 
-More than two channels of LPCM are not currently supported. Adding such support should be easy but I do not have a source device to test with.
+More than two channels of LPCM are not currently supported. Adding such support is possible but I do not have a source device to test with.
 
 The Magewell driver provides V4L2 and ALSA interfaces to the card. This application by-passes those interfaces and talks directly to it via the Magewell API. A big advantage to this is you don't have to figure out which /dev/videoX or ALSA "device" is needed to make it work. The other advantage is that a raw bitstream can be captured. Unfortunately, the Magewell API depends on ALSA so we have to link it even though it is not used.
  
 ----
 ## Caveats
 
-The Magewell PRO capture cards capture raw audio and video. The video (at least) needs compressed and it is up to the Linux PC to do that. The only practical way of accomplishing this is with GPU assist. Intel QSV and nVidia nvenc are supported.
+The Magewell PRO capture cards capture raw audio and video. The video (at least) needs compressed and it is up to the Linux PC to do that. The only practical way of accomplishing this is with GPU assist. Intel QSV and nVidia nvenc are supported. I don't test with nVidia very often, so there may be times when that is broken -- please let me know.
 
 ***
 ## Magewell driver
 The Magewell driver can be found here:
 [https://www.magewell.com/downloads/pro-capture#/driver/linux-x86](https://www.magewell.com/downloads/pro-capture#/driver/linux-x86)
 
-or, perhaps:
+The drivers listed on the official Magewell download page are for Ubuntu kernels and may or may not work with other distributions like Fedora. However, I have found Magewell to be very responsive with driver requests for Fedora when the official driver doesn't work. They usually give me a new Fedora driver within 24 hours of opening a ticket, but it will sometimes take 48 hours.
 
-[http://www.magewell.com/files/support/ProCaptureForLinux_1.3.4420.tar.gz](http://www.magewell.com/files/support/ProCaptureForLinux_1.3.4420.tar.gz)
 
-[http://www.magewell.com/files/support/EcoCaptureForLinux_1.4.260.zip](http://www.magewell.com/files/support/EcoCaptureForLinux_1.4.260.zip)
-
-Install the driver:
-----
+### Install the driver:
 ```bash
 mkdir -p ~/src/Magewell
 cd ~/src/Magewell
-gtar -xzvf ~/Downloads/ProCaptureForLinux_4390.tar.gz
-cd ProCaptureForLinux_4236/
+gtar -xzvf ~/Downloads/ProCaptureForLinux_4425.tar.gz
+cd ProCaptureForLinux_4425/
 sudo ./install.sh
 ```
+
 With newer kernels, it may be necessary to add "ibt=off" to the kernel parameters:
 ```
-sudo grubby --update-kernel=All --args="ibt=off"
+sudo grubby --update-kernel=ALL --args="ibt=off"
 sudo grub2-mkconfig -o /boot/grub2/grub.cfg
 ```
 
-
+----
 ### Testing the Magewell driver using ALSA and V4L
 
 Find ALSA audio input:
@@ -77,9 +74,9 @@ Download the Linux version. Then unpacket it
 ```bash
 mkdir -p ~/src/Magewell/
 cd ~/src/Magewell/
-gtar -xzvf ~/Download/Magewell_Capture_SDK_Linux_3.3.1.1313.tar.gz
-```
+gtar -xzvf ~/Download/Magewell_Capture_SDK_Linux_3.3.1.1505.tar.gz
 
+```
 Along side the Magewell SDK directory, grab the source for this application:
 ```bash
 cd ~/src/Magewell/
@@ -90,49 +87,54 @@ If you place the Magewell2TS source somewhere else, you will need to edit Magewe
 ### Dependencies
 #### Fedora:
 ```bash
-sudo dnf install -y make cmake gcc gcc-c++ libstdc++-devel libv4l-devel patch kernel-devel alsa-lib-devel v4l-utils-devel-tools systemd-devel
+sudo dnf install -y cmake gcc gcc-c++ libstdc++-devel libv4l-devel patch kernel-devel alsa-lib-devel libv4l-devel systemd-devel 
 ```
-#### Ubuntu:
+FFmpeg
 ```bash
-sudo apt-get install build-essential libv4l-dev cmake libudev-dev libavfilter-dev libavdevice-dev libasound2-dev pkgconf
+sudo dnf install ffmpeg-devel
 ```
-For nVidia you may also need:
+For Intel GPU and oneVPL:
+```bash
+sudo dnf install libvpl-devel intel-media-driver libvpl-tools
 ```
-sudo apt-get install nvidia-cuda-toolkit
+Verify that oneVPL is installed correctly:
 ```
-For Intel you may also need:
-```
-sudo apt-get install intel-media-va-driver-non-free libmfx1 intel-opencl-icd libmfx-gen1.2
+vpl-inspect
 ```
 
-
-### Intel
-For Intel QSV you will also need oneVPL libs. For example:
-```
-sudo dnf install libvpl-devel intel-media-driver
-```
-or
-```
-apt-get install libvpl-dev
-```
-See [https://www.intel.com/content/www/us/en/developer/articles/guide/onevpl-installation-guide.html](https://www.intel.com/content/www/us/en/developer/articles/guide/onevpl-installation-guide.html) for more information.
-
-### Nvidia
-For nVidia you will want to have the closed source driver installed as well as cuda libs. For example:
-```
+For nVidia GPU you will want to have the closed source driver installed as well as cuda libs. For example:
+```bash
 sudo dnf install https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm https://download1.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm`
 sudo dnf install akmod-nvidia xorg-x11-drv-nvidia-cuda xorg-x11-drv-nvidia-cuda-libs vdpauinfo
 ```
 
-### FFmpeg
-FFmpeg is also required. If you want bitstream eac3 to work, then a minimum of version 6.1 should be used, with at least 7.1 being prefered
+#### Ubuntu:
+```bash
+sudo apt-get install build-essential libv4l-dev cmake libudev-dev nvidia-cuda-toolkit
 ```
-sudo dnf install ffmpeg-devel 
+FFmpeg
+```bash
+apt-get install ffmpeg-dev
 ```
-or
+For Intel GPU and onvVPL:
+```bash
+sudo apt-get install intel-media-va-driver-non-free libmfx1 intel-opencl-icd libmfx-gen1.2 libvpl-dev onevpl-tools
 ```
-apt-get install ffmpeg-dev libavcodec-dev
+
+Verify that oneVPL is installed correctly:
 ```
+vpl-inspect
+```
+For nVidia GPU:
+```
+sudo apt-get install nvidia-cuda-toolkit
+```
+
+
+If you have trouble with oneVPL, check out [https://www.intel.com/content/www/us/en/developer/articles/guide/onevpl-installation-guide.html](https://www.intel.com/content/www/us/en/developer/articles/guide/onevpl-installation-guide.html) for more information.
+
+
+If you want bitstream audio to work, then a minimum of FFmpeg 6.1 is needed. At least 7.1 is prefered. You may need to build FFmpeg from source if your distribution does not provide recent enough packages.
 
 
 ## Building the application
@@ -162,23 +164,21 @@ magewell2ts -i 1 -m -c hevc_qsv -d renderD129 | mpv -
 The easiest way to use this with MythTV is to create an "External Recorder" configuration file. Something like (/home/mythtv/etc/magewell-2.conf):
 ```
 [VARIABLES]
+BOARD=1
 INPUT=1
-DEVICE=roku1
-TUNER=/usr/local/bin/roku-control.py --device %DEVICE%
-
-CODEC=hevc_qsv -q 22
+DEVICE=onn2
+TUNER=/usr/local/bin/adb-control --device %DEVICE%
+CODEC=hevc_qsv --device renderD129 -q 22 --lookahead 50 -p010
+#CODEC=hevc_nvenc -q 22
 
 [RECORDER]
 # The recorder command to execute.  %URL% is optional, and
 # will be replaced with the channel's "URL" as defined in the
 # [TUNER/channels] (channel conf) configuration file
-command="/usr/local/bin/magewell2ts -i %INPUT% -s 100 -m -c %CODEC%"
+command="/usr/local/bin/magewell2ts -b %BOARD% -i %INPUT% -m -c %CODEC%"
 
-# cleanup="/home/mythtv/mythtvguide/adb-1-finished.sh"
 cleanup="%TUNER% --reset"
-
-# Used in logging events, %ARG% are replaced from the channel info
-desc="%DEVICE%-%INPUT%"
+desc="%DEVICE%-%BOARD%-%INPUT%"
 
 [TUNER]
 # An optional CONF file which provides channel details.  If it does not
@@ -189,16 +189,12 @@ desc="%DEVICE%-%INPUT%"
 # channel. A %URL% parameter will be substituted with the "URL" as
 # defined in the [TUNER/channels] configuration file
 
-command="%TUNER% --sourceid %SOURCEID% --channum %CHANNUM% --recordid %RECORDID%"
-# newepisodecommand="%TUNER% --touch %CHANNUM% &"
-#ondatastart="%TUNER% --device %DEVICE% --wait 2 --keys down"
-
-timeout=30000
+command=%TUNER% --sourceid %SOURCEID% --channum %CHANNUM% --recordid %RECORDID%
 ```
 
 Then configure a MythTV External Recorder capture card with an appropriate command such as:
 ```bash
-/usr/local/bin/mythexternrecorder --conf /home/myth/etc/magewell-1.conf
+/usr/local/bin/mythexternrecorder --conf /home/myth/etc/magewell-1-1.conf
 ```
 
 ----
@@ -220,20 +216,19 @@ Environment=HOME=/home/mythtv
 LimitCORE=infinity
 User=mythtv
 PermissionsStartOnly=true
-ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 1 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 2 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 3 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 4 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 1 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 2 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 3 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 4 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
 
 ExecStart=/usr/local/bin/mythbackend -q --syslog none --logpath /var/log/mythtv -v channel,record
 RestartSec=5
 Restart=on-failure
 
-
 [Install]
 WantedBy=multi-user.target
 ```
-That will load the eac3 EDID and set the volume level to 100.
+That will load the eac3 EDID.
 
 
 ## Multi GPU systems
@@ -271,3 +266,7 @@ The Intel Arc GPUs may need a new version of the linux firmware
 ```bash
 git clone git://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git
 ```
+
+If you want to update the firmware on the Arc itself, this might help: [https://forum.level1techs.com/t/remember-to-update-your-intel-arc-firmware-on-linux/208736](https://forum.level1techs.com/t/remember-to-update-your-intel-arc-firmware-on-linux/208736)
+
+
