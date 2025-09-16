@@ -2,9 +2,9 @@
 
 [//]: # (Install retext from your distribution then ./README.md will look prettier.)
  
-# Magewell PRO capture to Transport Stream
+# Magewell PRO/ECO capture to Transport Stream
 
-This application reads audio and video from a Magewell PRO capture card and muxes them into a Transport Stream.
+This application reads audio and video from a Magewell PRO or ECO PCIe capture card and muxes them into a Transport Stream.
 
 If bitstream audio is detected it will be muxed directly into the resulting Transport Stream. LPCM audio will be encoded as AC3 and then muxed.
 
@@ -17,12 +17,15 @@ The Magewell driver provides V4L2 and ALSA interfaces to the card. This applicat
 ----
 ## Caveats
 
-The Magewell PRO capture cards capture raw audio and video. The video (at least) needs compressed and it is up to the Linux PC to do that. The only practical way of accomplishing this is with GPU assist. Intel QSV and nVidia nvenc are supported. I don't test with nVidia very often, so there may be times when that is broken -- please let me know.
+The Magewell PRO and ECO capture cards capture raw audio and video. The video (at least) needs compressed and it is up to the Linux PC to do that. The only practical way of accomplishing this is with GPU assist. Intel QSV and nVidia nvenc are supported. I don't test with nVidia very often, so there may be times when that is broken -- please let me know.
 
 ***
 ## Magewell driver
-The Magewell driver can be found here:
+The Magewell PRO driver can be found here:
 [https://www.magewell.com/downloads/pro-capture#/driver/linux-x86](https://www.magewell.com/downloads/pro-capture#/driver/linux-x86)
+
+The Magewell ECO driver can be found here:
+[https://www.magewell.com/downloads/eco-capture#/driver/linux-x86](https://www.magewell.com/downloads/eco-capture#/driver/linux-x86)
 
 The drivers listed on the official Magewell download page are for Ubuntu kernels and may or may not work with other distributions like Fedora. However, I have found Magewell to be very responsive with driver requests for Fedora when the official driver doesn't work. They usually give me a new Fedora driver within 24 hours of opening a ticket, but it will sometimes take 48 hours.
 
