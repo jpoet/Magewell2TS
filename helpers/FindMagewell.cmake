@@ -1,9 +1,10 @@
 # - Find Magewell SDK
 
 SET(Magewell_SEARCH_PATHS
-    ../
-    ../Magewell_Capture_SDK_Linux_3.3.1.1505
-    ../Magewell_Capture_SDK_Linux_3.3.1.1313
+  ../Magewell_Capture_SDK_Linux
+  ../Magewell_Capture_SDK_Linux_3.3.1.1505
+  ../Magewell_Capture_SDK_Linux_3.3.1.1313
+  ../
 )
 
 FIND_PATH(Magewell_INCLUDE_DIR MWFOURCC.h
@@ -13,7 +14,7 @@ FIND_PATH(Magewell_INCLUDE_DIR MWFOURCC.h
 	PATHS ${Magewell_SEARCH_PATHS}
 )
 
-# message(STATUS "Magewell header: ${Magewell_INCLUDE_DIR}")
+message(STATUS "Magewell header: ${Magewell_INCLUDE_DIR}")
 
 FIND_LIBRARY(Magewell_LIB
 	NAMES libMWCapture.a

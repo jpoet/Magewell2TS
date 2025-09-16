@@ -38,7 +38,7 @@ sudo ./install.sh
 
 With newer kernels, it may be necessary to add "ibt=off" to the kernel parameters:
 ```
-sudo grubby --update-kernel=All --args="ibt=off"
+sudo grubby --update-kernel=ALL --args="ibt=off"
 sudo grub2-mkconfig -o /boot/grub2/grub.cfg
 ```
 
@@ -87,7 +87,7 @@ If you place the Magewell2TS source somewhere else, you will need to edit Magewe
 ### Dependencies
 #### Fedora:
 ```bash
-sudo dnf install -y make gcc gcc-c++ libstdc++-devel libv4l-devel patch kernel-devel alsa-lib-devel v4l-utils-devel-tools systemd-devel
+sudo dnf install -y cmake gcc gcc-c++ libstdc++-devel libv4l-devel patch kernel-devel alsa-lib-devel libv4l-devel systemd-devel 
 ```
 FFmpeg
 ```bash
@@ -120,7 +120,6 @@ For Intel GPU and onvVPL:
 ```bash
 sudo apt-get install intel-media-va-driver-non-free libmfx1 intel-opencl-icd libmfx-gen1.2 libvpl-dev onevpl-tools
 ```
-Note: some onevpl packages are being renamed to libvpl.
 
 Verify that oneVPL is installed correctly:
 ```

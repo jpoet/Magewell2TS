@@ -14,7 +14,7 @@
 
 
 //#define DUMP_RAW_AUDIO_ALLBITS
-//#define DUMP_RAW_AUDIOst
+//#define DUMP_RAW_AUDIO
 
 #if defined(DUMP_RAW_AUDIO) || defined(DUMP_RAW_AUDIO_ALLBITS)
 #include <fstream>
@@ -883,10 +883,11 @@ bool Magewell::capture_audio(void)
 
         if (!audio_signal_status.wChannelValid)
         {
-            if (++err_cnt % 50 == 0 && m_verbose > 0)
+            if (++err_cnt % 500 == 0)
+                return false;
+            if (err_cnt % 50 == 0 && m_verbose > 0)
                 cerr << lock_ios() << "WARNING (cnt: " << err_cnt
                      << ") can't get audio, signal is invalid\n";
-
             this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
             continue;
         }
