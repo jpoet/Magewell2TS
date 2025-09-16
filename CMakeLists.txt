@@ -21,7 +21,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 add_compile_options(-Wall -Wreturn-type)
 
 # set the project name
-project(magewell2ts VERSION 2.2)
+project(magewell2ts VERSION 3.0)
 
 configure_file(version.h.in version.h)
 
