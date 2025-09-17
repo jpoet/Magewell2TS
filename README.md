@@ -45,6 +45,9 @@ sudo grubby --update-kernel=ALL --args="ibt=off"
 sudo grub2-mkconfig -o /boot/grub2/grub.cfg
 ```
 
+On Fedora it might be useful to lock in a "long term" kernel:
+[https://copr.fedorainfracloud.org/coprs/kwizart/kernel-longterm-6.12](https://copr.fedorainfracloud.org/coprs/kwizart/kernel-longterm-6.12)
+
 ----
 ### Testing the Magewell driver using ALSA and V4L
 

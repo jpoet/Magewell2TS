@@ -874,18 +874,16 @@ bool Magewell::capture_audio(void)
         if (MW_SUCCEEDED != MWGetAudioSignalStatus(m_channel,
                                                    &audio_signal_status))
         {
-            if (err_cnt++ % 50 == 0 && m_verbose > 0)
+            if (++err_cnt % 50 == 0 && m_verbose > 0)
                 cerr << lock_ios() << "WARNING (cnt: " << err_cnt
                      << ") can't get audio signal status\n";
             this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
             continue;
         }
 
-        if (!audio_signal_status.wChannelValid)
+        if (!audio_signal_status.bChannelStatusValid)
         {
-            if (++err_cnt % 500 == 0)
-                return false;
-            if (err_cnt % 50 == 0 && m_verbose > 0)
+            if (++err_cnt % 100 == 0 && m_verbose > 0)
                 cerr << lock_ios() << "WARNING (cnt: " << err_cnt
                      << ") can't get audio, signal is invalid\n";
             this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
@@ -1026,8 +1024,8 @@ bool Magewell::capture_audio(void)
                 {
                     if (m_verbose > 0)
                         cerr << lock_ios() << "AUDIO signal changed.\n";
-                    this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
-                    break;
+//                    this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
+//                    break;
                 }
             }
 
