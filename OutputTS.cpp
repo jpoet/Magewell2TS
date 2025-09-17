@@ -239,9 +239,7 @@ bool OutputTS::open_audio(void)
 
     m_audio_stream.enc->bit_rate = 192000;
 
-
-// #if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(61, 0, 0)
-#if LIBAVCODEC_VERSION_MAJOR < 61
+#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(61, 13, 100)
     m_audio_stream.enc->sample_fmt = audio_codec->sample_fmts ?
                          audio_codec->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
 
