@@ -1415,6 +1415,9 @@ bool OutputTS::open_qsv(const AVCodec* codec,
 
         av_opt_set(ost->enc->priv_data, "skip_frame", "insert_dummy", 0);
     }
+
+    av_opt_set_int(ost->enc->priv_data, "idr_interval", 0, 0);
+
     if (ost->hw_device_ctx == nullptr)
     {
         // Make sure env doesn't prevent QSV init.
