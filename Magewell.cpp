@@ -1024,8 +1024,8 @@ bool Magewell::capture_audio(void)
                 {
                     if (m_verbose > 0)
                         cerr << lock_ios() << "AUDIO signal changed.\n";
-//                    this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
-//                    break;
+                    this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
+                    break;
                 }
             }
 
