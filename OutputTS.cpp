@@ -1526,7 +1526,7 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
     }
 #endif
 
-    if (m_p010)
+    if (m_p010 || m_isHDR)
     {
         memcpy(ost->frame->data[0], pImage, image_size);
         memcpy(ost->frame->data[1], pImage + image_size,
