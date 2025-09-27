@@ -503,11 +503,6 @@ bool OutputTS::open_video(void)
     m_video_stream.enc->gop_size      = 12; /* emit one intra frame every twelve frames at most */
 #endif
 
-    /*
-      For av1_qsv, pix_fmt options are:
-      AV_PIX_FMT_NV12, AV_PIX_FMT_P010, AV_PIX_FMT_QSV
-    */
-
     if (m_isHDR)
     {
         if (m_verbose > 0)
@@ -527,13 +522,6 @@ bool OutputTS::open_video(void)
     m_video_stream.enc->color_primaries = m_color_primaries;
     m_video_stream.enc->color_trc       = m_color_trc;
     m_video_stream.enc->colorspace      = m_color_space;
-
-    if (m_encoderType == EncoderType::QSV)
-        m_video_stream.enc->pix_fmt = AV_PIX_FMT_QSV;
-    else if (m_encoderType == EncoderType::VAAPI)
-        m_video_stream.enc->pix_fmt = AV_PIX_FMT_VAAPI;
-    else
-        m_video_stream.enc->pix_fmt = AV_PIX_FMT_YUV420P;
 
     if (m_video_stream.enc->codec->capabilities & AV_CODEC_CAP_SLICE_THREADS)
     {
@@ -1217,6 +1205,11 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
     av_opt_set_int(ctx->priv_data, "bf", 0, 0);
     av_opt_set_int(ctx->priv_data, "b_ref_mode", 0, 0);
 
+    if (m_isHDR || m_p010)
+        ctx->pix_fmt = AV_PIX_FMT_P010LE;
+    else
+        ctx->pix_fmt = AV_PIX_FMT_YUV420P;
+
     /* open the codec */
     ret = avcodec_open2(ctx, codec, &opt);
     av_dict_free(&opt);
@@ -1239,10 +1232,11 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
         return false;
     }
 
+    ost->tmp_frame = NULL;
+#if 0
     /* If the output format is not YUV420P, then a temporary YUV420P
      * picture is needed too. It is then converted to the required
      * output format. */
-    ost->tmp_frame = NULL;
     if (ctx->pix_fmt != AV_PIX_FMT_YUV420P)
     {
         ost->tmp_frame = alloc_picture(AV_PIX_FMT_YUV420P,
@@ -1255,6 +1249,7 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
             return false;
         }
     }
+#endif
 
     return true;
 }
@@ -1319,11 +1314,15 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
         return false;
     }
     frames_ctx = reinterpret_cast<AVHWFramesContext* >(hw_frames_ref->data);
-    frames_ctx->format    = AV_PIX_FMT_VAAPI;
+
     if (m_isHDR || m_p010)
         frames_ctx->sw_format = AV_PIX_FMT_P010;
     else
         frames_ctx->sw_format = AV_PIX_FMT_NV12;
+
+    frames_ctx->format    = AV_PIX_FMT_VAAPI;
+    ost->enc->pix_fmt     = AV_PIX_FMT_VAAPI;
+
     frames_ctx->width     = m_input_width;
     frames_ctx->height    = m_input_height;
     frames_ctx->initial_pool_size = 20;
@@ -1450,12 +1449,18 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     }
     frames_ctx = reinterpret_cast<AVHWFramesContext* >(hw_frames_ref->data);
 
+    /*
+      For av1_qsv, pix_fmt options are:
+      AV_PIX_FMT_NV12, AV_PIX_FMT_P010, AV_PIX_FMT_QSV
+    */
     if (m_isHDR || m_p010)
         frames_ctx->sw_format = AV_PIX_FMT_P010;
     else
         frames_ctx->sw_format = AV_PIX_FMT_NV12;
 
     frames_ctx->format    = AV_PIX_FMT_QSV;
+    ost->enc->pix_fmt     = AV_PIX_FMT_QSV;
+
     frames_ctx->width     = m_input_width;
     frames_ctx->height    = m_input_height;
     frames_ctx->initial_pool_size = 20;
@@ -1521,11 +1526,21 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
     }
 #endif
 
-    // YUV 4:2:0
-    memcpy(ost->frame->data[0], pImage, image_size);
-    memcpy(ost->frame->data[1],
-           pImage + image_size, image_size / 4);
-    memcpy(ost->frame->data[2], pImage + image_size * 5 / 4, image_size  / 4);
+    if (m_p010)
+    {
+        memcpy(ost->frame->data[0], pImage, image_size);
+        memcpy(ost->frame->data[1], pImage + image_size,
+               image_size / 2);
+    }
+    else
+    {
+        // YUV 4:2:0
+        memcpy(ost->frame->data[0], pImage, image_size);
+        memcpy(ost->frame->data[1],
+               pImage + image_size, image_size / 4);
+        memcpy(ost->frame->data[2], pImage + image_size * 5 / 4,
+               image_size / 4);
+    }
     f_image_buffer_available(pImage, pEco);
 
     if (m_isHDR)
@@ -1558,7 +1573,8 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc, OutputStream* ost,
                                ost->enc->time_base);
 
     memcpy(ost->frame->data[0], pImage, image_size);
-    memcpy(ost->frame->data[1], pImage + image_size, image_size / 2);
+    memcpy(ost->frame->data[1], pImage + image_size,
+           image_size / 2);
     f_image_buffer_available(pImage, pEco);
 
     if (m_isHDR)
