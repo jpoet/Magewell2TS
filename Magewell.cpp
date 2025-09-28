@@ -1038,10 +1038,7 @@ bool Magewell::capture_audio(void)
             }
 
             if (!(notify_status & MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED))
-            {
-                cerr << "\n.";
                 continue;
-            }
 
             if (MW_ENODATA == MWCaptureAudioFrame(m_channel, &macf))
             {
@@ -1205,9 +1202,6 @@ bool Magewell::update_HDRinfo(void)
 
     memcpy(&m_HDRinfo_prev, &m_HDRinfo,
            sizeof(HDMI_HDR_INFOFRAME_PAYLOAD));
-
-    if (m_verbose > 0)
-        cerr << lock_ios() << "HDR changed.\n";
 
     AVMasteringDisplayMetadata* meta = av_mastering_display_metadata_alloc();
 
@@ -1658,7 +1652,14 @@ void Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
 #endif
         if (m_image_buffer_avail < 2)
         {
-            add_eco_image_buffer();
+            if (m_image_buffers_inflight > 25)
+            {
+                if (m_verbose > 0)
+                    cerr << "Dropping frame.\n";
+                continue;
+            }
+            else
+                add_eco_image_buffer();
             if (m_verbose > 2)
                 cerr << lock_ios()
                      << "WARNING: video encoder is "
