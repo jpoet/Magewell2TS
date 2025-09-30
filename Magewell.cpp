@@ -1655,7 +1655,7 @@ void Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             if (m_image_buffers_inflight > 25)
             {
                 if (m_verbose > 0)
-                    cerr << "Dropping frame.\n";
+                    cerr << "Dropping Eco frame.\n";
                 continue;
             }
             else

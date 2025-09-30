@@ -55,6 +55,7 @@ class OutputTS
                         AVRational time_base, double frame_duration,
                         AVRational frame_rate, bool is_hdr);
     bool addAudio(AudioBuffer::AudioFrame *& buf, int64_t timestamp);
+    void ClearVideoPool(void);
     void ClearImageQueue(void);
     void DiscardImages(bool val);
     bool AddVideoFrame(uint8_t*  pImage, void* pEco,
@@ -62,6 +63,7 @@ class OutputTS
 
   private:
     void mux(void);
+    void copy_to_frame(void);
 
     // a wrapper around a single output AVStream
     using OutputStream = struct {
@@ -77,6 +79,18 @@ class OutputTS
 #if 1
         int64_t next_timestamp     {-1};
 #endif
+
+        using FramePool = struct {
+            AVFrame* frame     {nullptr};
+            int64_t  timestamp {-1};
+        };
+
+        FramePool* frames          {nullptr};
+
+        int frames_idx_in          {-1};
+        int frames_idx_out         {-1};
+        int frames_total           {20};
+        int frames_used            {0};
 
         int samples_count          {0};
         AVFrame* frame             {nullptr};
@@ -113,8 +127,8 @@ class OutputTS
                      AVFrame* frame, OutputStream* ost);
     // Audio output
     static AVFrame* alloc_audio_frame(enum AVSampleFormat sample_fmt,
-                                      const AVChannelLayout* channel_layout,
-                                      int sample_rate, int nb_samples);
+                                  const AVChannelLayout* channel_layout,
+                                  int sample_rate, int nb_samples);
     AVFrame* get_pcm_audio_frame(OutputStream* ost);
 
     bool write_pcm_frame(AVFormatContext* oc, OutputStream* ost);
@@ -130,12 +144,8 @@ class OutputTS
                     AVDictionary* opt_arg);
     bool open_qsv(const AVCodec* codec, OutputStream* ost,
                   AVDictionary* opt_arg);
-    bool nv_encode(AVFormatContext* oc, OutputStream* ost,
-                   uint8_t* pImage, void* pEco,
-                   int image_size, int64_t timestamp);
-    bool qsv_vaapi_encode(AVFormatContext* oc, OutputStream* ost,
-                          uint8_t* pImage, void* pEco,
-                          int image_size, int64_t timestamp);
+    bool nv_encode(void);
+    bool qsv_vaapi_encode(void);
 
     EncoderType     m_encoderType  { UNKNOWN };
 
@@ -182,9 +192,13 @@ class OutputTS
     ShutdownCallback        f_shutdown;
     MagCallback             f_image_buffer_available;
     std::thread             m_mux_thread;
-    std::mutex              m_imagepkt_mutex;
+    std::thread             m_copy_thread;
+
     std::mutex              m_imagequeue_mutex;
     std::condition_variable m_image_ready;
+    std::mutex              m_videopool_mutex;
+    std::condition_variable m_video_ready;
+
     std::condition_variable m_image_queue_empty;
 
     std::atomic<bool>       m_running      {true};

@@ -140,6 +140,9 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     m_mux_thread = std::thread(&OutputTS::mux, this);
     pthread_setname_np(m_mux_thread.native_handle(), "mux");
 
+    m_copy_thread = std::thread(&OutputTS::copy_to_frame, this);
+    pthread_setname_np(m_copy_thread.native_handle(), "copy");
+
     m_display_primaries  = av_mastering_display_metadata_alloc();
     m_content_light  = av_content_light_metadata_alloc(NULL);
 }
@@ -551,6 +554,21 @@ bool OutputTS::open_video(void)
              << "\n";
     }
 
+
+    /* reset reusable frames */
+    m_video_stream.frame = nullptr;
+    m_video_stream.frame = nullptr;
+    m_video_stream.frames_idx_in  = -1;
+    m_video_stream.frames_idx_out = -1;
+    m_video_stream.frames_used    = 0;
+
+    if (m_video_stream.frames != nullptr)
+    {
+        for (int idx = 0; idx < m_video_stream.frames_total; ++idx)
+            av_frame_free(&m_video_stream.frames[idx].frame);
+        delete[] m_video_stream.frames;
+    }
+
     /* Now that all the parameters are set, we can open the audio and
      * video codecs and allocate the necessary encode buffers. */
     switch (m_encoderType)
@@ -571,6 +589,21 @@ bool OutputTS::open_video(void)
           cerr << lock_ios()
                << "ERROR: Could not determine video encoder type.\n";
           return false;
+    }
+
+    if (m_isHDR)
+    {
+        for (int idx = 0; idx < m_video_stream.frames_total; ++idx)
+        {
+            AVFrame* frm = m_video_stream.frames[idx].frame;
+
+            AVMasteringDisplayMetadata* primaries =
+                av_mastering_display_metadata_create_side_data(frm);
+            *primaries = *m_display_primaries;
+            AVContentLightMetadata* light =
+                av_content_light_metadata_create_side_data(frm);
+            *light = *m_content_light;
+        }
     }
 
     return true;
@@ -717,7 +750,7 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
 
     m_input_frame_wait_ms = frame_duration / 10000 * 2;
 
-    while (m_running.load() && !m_imagequeue.empty())
+    while (m_running.load() && m_video_stream.frames_used != 0)
     {
         m_image_queue_empty.wait_for(lock,
                         std::chrono::milliseconds(m_input_frame_wait_ms));
@@ -1222,14 +1255,20 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
         return false;
     }
 
-    /* allocate and init a re-usable frame */
-    ost->frame = alloc_picture(ctx->pix_fmt, ctx->width, ctx->height);
-    if (!ost->frame)
+    /* allocate and init re-usable frame */
+    ost->frames = new OutputStream::FramePool[ost->frames_total];
+    for (int idx = 0; idx < ost->frames_total; ++idx)
     {
-        cerr << lock_ios()
-             << "ERROR: Could not allocate NVIDIA video frame\n";
-        Shutdown();
-        return false;
+        ost->frames[idx].frame = alloc_picture(ctx->pix_fmt,
+                                               ctx->width,
+                                               ctx->height);
+        if (!ost->frames[idx].frame)
+        {
+            cerr << lock_ios()
+                 << "ERROR: Could not allocate QSV video frame\n";
+            Shutdown();
+            return false;
+        }
     }
 
     ost->tmp_frame = NULL;
@@ -1358,15 +1397,20 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
         return false;
     }
 
-    /* allocate and init a re-usable frame */
-    ost->frame = alloc_picture(frames_ctx->sw_format,
-                               frames_ctx->width, frames_ctx->height);
-    if (!ost->frame)
+    /* allocate and init re-usable frame */
+    ost->frames = new OutputStream::FramePool[ost->frames_total];
+    for (int idx = 0; idx < ost->frames_total; ++idx)
     {
-        cerr << lock_ios()
-             << "ERROR: Could not allocate VAAPI video frame\n";
-        Shutdown();
-        return false;
+        ost->frames[idx].frame = alloc_picture(frames_ctx->sw_format,
+                                               frames_ctx->width,
+                                               frames_ctx->height);
+        if (!ost->frames[idx].frame)
+        {
+            cerr << lock_ios()
+                 << "ERROR: Could not allocate QSV video frame\n";
+            Shutdown();
+            return false;
+        }
     }
 
     return true;
@@ -1496,25 +1540,29 @@ bool OutputTS::open_qsv(const AVCodec* codec,
         return false;
     }
 
-    /* allocate and init a re-usable frame */
-    ost->frame = alloc_picture(frames_ctx->sw_format,
-                               frames_ctx->width, frames_ctx->height);
-    if (!ost->frame)
+    /* allocate and init re-usable frame */
+    ost->frames = new OutputStream::FramePool[ost->frames_total];
+    for (int idx = 0; idx < ost->frames_total; ++idx)
     {
-        cerr << lock_ios()
-             << "ERROR: Could not allocate QSV video frame\n";
-        Shutdown();
-        return false;
+        ost->frames[idx].frame = alloc_picture(frames_ctx->sw_format,
+                                               frames_ctx->width,
+                                               frames_ctx->height);
+        if (!ost->frames[idx].frame)
+        {
+            cerr << lock_ios()
+                 << "ERROR: Could not allocate QSV video frame\n";
+            Shutdown();
+            return false;
+        }
     }
 
     return true;
 }
 
-bool OutputTS::nv_encode(AVFormatContext* oc,
-                         OutputStream* ost,
-                         uint8_t* pImage, void* pEco,
-                         int image_size, int64_t timestamp)
+bool OutputTS::nv_encode(void)
 {
+    OutputStream* ost   = &m_video_stream;
+
 #if 0
     /* when we pass a frame to the encoder, it may keep a reference to it
      * internally; make sure we do not overwrite it here */
@@ -1526,66 +1574,27 @@ bool OutputTS::nv_encode(AVFormatContext* oc,
     }
 #endif
 
-    if (m_p010 || m_isHDR)
-    {
-        memcpy(ost->frame->data[0], pImage, image_size);
-        memcpy(ost->frame->data[1], pImage + image_size,
-               image_size / 2);
-    }
-    else
-    {
-        // YUV 4:2:0
-        memcpy(ost->frame->data[0], pImage, image_size);
-        memcpy(ost->frame->data[1],
-               pImage + image_size, image_size / 4);
-        memcpy(ost->frame->data[2], pImage + image_size * 5 / 4,
-               image_size / 4);
-    }
-    f_image_buffer_available(pImage, pEco);
+#if 0
+    ost->frame = ost->frames[ost->frames_idx_out].frame;
 
-    if (m_isHDR)
-    {
-        AVMasteringDisplayMetadata* primaries =
-            av_mastering_display_metadata_create_side_data(ost->frame);
-        *primaries = *m_display_primaries;
-        AVContentLightMetadata* light =
-            av_content_light_metadata_create_side_data(ost->frame);
-        *light = *m_content_light;
-    }
-
-    ost->frame->pts = av_rescale_q_rnd(timestamp, m_input_time_base,
+    ost->frame->pts = av_rescale_q_rnd(m_video_stream.timestamp,
+                                       m_input_time_base,
                                        ost->enc->time_base,
                       static_cast<AVRounding>(AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX));
+#endif
 
-    ost->next_pts = timestamp + 1;
+    ost->next_pts = m_video_stream.timestamp + 1;
 
-    return write_frame(oc, ost->enc, ost->frame, ost);
+    return write_frame(m_output_format_context,
+                       ost->enc, ost->frame, ost);
 }
 
-bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc, OutputStream* ost,
-                                uint8_t*  pImage, void* pEco,
-                                int image_size, int64_t timestamp)
+bool OutputTS::qsv_vaapi_encode(void)
 {
     static AVFrame* hw_frame = nullptr;
     int    ret;
 
-    int64_t pts = av_rescale_q(timestamp, m_input_time_base,
-                               ost->enc->time_base);
-
-    memcpy(ost->frame->data[0], pImage, image_size);
-    memcpy(ost->frame->data[1], pImage + image_size,
-           image_size / 2);
-    f_image_buffer_available(pImage, pEco);
-
-    if (m_isHDR)
-    {
-        AVMasteringDisplayMetadata* primaries =
-            av_mastering_display_metadata_create_side_data(ost->frame);
-        *primaries = *m_display_primaries;
-        AVContentLightMetadata* light =
-            av_content_light_metadata_create_side_data(ost->frame);
-        *light = *m_content_light;
-    }
+    OutputStream* ost   = &m_video_stream;
 
     if (!(hw_frame = av_frame_alloc()))
     {
@@ -1623,10 +1632,11 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc, OutputStream* ost,
         return false;
     }
 
-    hw_frame->pts = pts;
-    ost->next_pts = timestamp + 1;
+    hw_frame->pts = ost->frame->pts;
+    ost->next_pts = m_video_stream.timestamp + 1;
 
-    ret = write_frame(oc, ost->enc, hw_frame, ost);
+    ret = write_frame(m_output_format_context,
+                      ost->enc, hw_frame, ost);
     av_frame_free(&hw_frame);
 
     return ret;
@@ -1634,10 +1644,6 @@ bool OutputTS::qsv_vaapi_encode(AVFormatContext* oc, OutputStream* ost,
 
 void OutputTS::mux(void)
 {
-    uint8_t* pImage;
-    void*    pEco;
-    int      image_size;
-
     while (m_running.load() == true)
     {
         if (m_audioIO && m_audioIO->CodecChanged())
@@ -1709,41 +1715,51 @@ void OutputTS::mux(void)
                m_video_stream.timestamp <= m_audio_stream.next_timestamp)
         {
             {
-                std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
+                std::unique_lock<std::mutex> lock(m_videopool_mutex);
 
-                if (m_imagequeue.empty() || !m_video_stream.enc)
+                if (!m_video_stream.enc || m_video_stream.frames_used == 0)
                 {
-                    m_image_queue_empty.notify_one();
-                    m_image_ready.wait_for(lock,
+                    m_video_ready.wait_for(lock,
                         std::chrono::milliseconds(m_input_frame_wait_ms));
-                        break;
+                    break;
                 }
-
-                pImage    = m_imagequeue.front().image;
-                pEco      = m_imagequeue.front().pEco;
-                image_size = m_imagequeue.front().image_size;
-                m_video_stream.timestamp = m_imagequeue.front().timestamp;
-
-                m_imagequeue.pop_front();
             }
 
+            if (++m_video_stream.frames_idx_out == m_video_stream.frames_total)
+                m_video_stream.frames_idx_out = 0;
+
+            m_video_stream.frame = m_video_stream
+                       .frames[m_video_stream.frames_idx_out].frame;
+            m_video_stream.timestamp = m_video_stream
+                       .frames[m_video_stream.frames_idx_out].timestamp;
+
             if (m_encoderType == EncoderType::NV)
-                nv_encode(m_output_format_context, &m_video_stream,
-                          pImage, pEco, image_size,
-                          m_video_stream.timestamp);
+                nv_encode();
             else if (m_encoderType == EncoderType::QSV ||
                      m_encoderType == EncoderType::VAAPI)
-                qsv_vaapi_encode(m_output_format_context, &m_video_stream,
-                                 pImage, pEco, image_size,
-                                 m_video_stream.timestamp);
+                qsv_vaapi_encode();
             else
             {
                 cerr << lock_ios() << "ERROR: Unknown encoderType.\n";
                 Shutdown();
                 return;
             }
+
+            {
+                std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
+                --m_video_stream.frames_used;
+            }
         }
     }
+}
+
+void OutputTS::ClearVideoPool(void)
+{
+    const unique_lock<mutex> lock(m_imagequeue_mutex);
+
+    m_video_stream.frames_idx_in  = -1;
+    m_video_stream.frames_idx_out = -1;
+    m_video_stream.frames_used = 0;
 }
 
 void OutputTS::ClearImageQueue(void)
@@ -1759,7 +1775,81 @@ void OutputTS::DiscardImages(bool val)
 {
     m_discard_images = val;
     if (val)
+    {
+        ClearVideoPool();
         ClearImageQueue();
+    }
+}
+
+void OutputTS::copy_to_frame(void)
+{
+    uint8_t* pImage;
+    void*    pEco;
+    int      image_size;
+    int64_t  timestamp;
+
+    while (m_running.load() == true)
+    {
+        {
+            std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
+
+            if (m_imagequeue.empty())
+            {
+                m_image_queue_empty.notify_one();
+                m_image_ready.wait_for(lock,
+                       std::chrono::milliseconds(m_input_frame_wait_ms));
+                continue;
+            }
+
+            pImage     = m_imagequeue.front().image;
+            pEco       = m_imagequeue.front().pEco;
+            image_size = m_imagequeue.front().image_size;
+            timestamp  = m_imagequeue.front().timestamp;
+
+            m_imagequeue.pop_front();
+        }
+
+        if (m_video_stream.frames_used == m_video_stream.frames_total)
+        {
+            if (m_verbose > 0)
+                cerr << lock_ios() << "Output frame pool is full "
+                     << m_video_stream.frames_used << '/'
+                     << m_video_stream.frames_total << ", dropping frames.\n";
+            ClearVideoPool();
+            continue;
+        }
+
+        if (++m_video_stream.frames_idx_in == m_video_stream.frames_total)
+            m_video_stream.frames_idx_in = 0;
+
+        m_video_stream.frames[m_video_stream.frames_idx_in]
+                      .timestamp = timestamp;
+        AVFrame* frm = m_video_stream
+                       .frames[m_video_stream.frames_idx_in].frame;
+
+        frm->pts = av_rescale_q(timestamp,
+                                m_input_time_base,
+                                m_video_stream.enc->time_base);
+
+        if (m_video_stream.enc->pix_fmt == AV_PIX_FMT_YUV420P)
+        {
+            // YUV 4:2:0
+            memcpy(frm->data[0], pImage, image_size);
+            memcpy(frm->data[1], pImage + image_size, image_size / 4);
+            memcpy(frm->data[2], pImage + image_size * 5 / 4,
+                   image_size / 4);
+        }
+        else
+        {
+            memcpy(frm->data[0], pImage, image_size);
+            memcpy(frm->data[1], pImage + image_size,
+                   image_size / 2);
+        }
+        f_image_buffer_available(pImage, pEco);
+
+        ++m_video_stream.frames_used;
+        m_video_ready.notify_one();
+    }
 }
 
 bool OutputTS::AddVideoFrame(uint8_t* pImage, void* pEco,
