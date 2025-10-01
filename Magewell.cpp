@@ -13,7 +13,7 @@
 #include "Magewell.h"
 
 //#define DUMP_RAW_AUDIO_ALLBITS
-//#define DUMP_RAW_AUDIO
+#define DUMP_RAW_AUDIO
 
 #if defined(DUMP_RAW_AUDIO) || defined(DUMP_RAW_AUDIO_ALLBITS)
 #include <fstream>
@@ -415,7 +415,6 @@ bool Magewell::describe_input(HCHANNEL hChannel)
 #endif
     }
 
-
     return true;
 }
 
@@ -555,23 +554,38 @@ bool Magewell::OpenChannel(int devIndex, double boardId)
 
     if (m_verbose > 0)
     {
+        uint temperature = 0;
+        MWGetTemperature(m_channel, &temperature);
+
         cerr << "Board: " << static_cast<int>(channel_info.byBoardIndex)
              << ", Product: " << channel_info.szProductName
              << ", SerialNo: " << channel_info.szBoardSerialNo
              << ", Firmware: " << channel_info.dwFirmwareVersion
              << ", Driver: " << channel_info.dwDriverVersion
+             << ", Temperature: " << temperature
              << "\n";
     }
+
     channel_info.szFamilyName[sizeof(channel_info.szFamilyName)-1] = '\0';
     m_channel_info = channel_info;
     m_isEco = strcmp(m_channel_info.szFamilyName, "Eco Capture") == 0;
+
+    MWCAP_INPUT_SPECIFIC_STATUS status;
+    if (MWGetInputSpecificStatus(m_channel, &status) != MW_SUCCEEDED)
+        cerr << "Unable to get input status!\n";
+    else if(!status.bValid)
+    {
+        cerr << "No signal detected.\n";
+        return false;
+    }
 
     return true;
 }
 
 bool Magewell::CloseChannel(void)
 {
-    return false;
+    MWCloseChannel(m_channel);
+    return true;
 }
 
 void Magewell::DisplayVolume(void)
@@ -882,10 +896,10 @@ bool Magewell::capture_audio(void)
 
         if (!audio_signal_status.bChannelStatusValid)
         {
-            if (++err_cnt % 100 == 0 && m_verbose > 0)
+            if (++err_cnt % 50 == 0 && m_verbose > 0)
                 cerr << lock_ios() << "WARNING (cnt: " << err_cnt
                      << ") can't get audio, signal is invalid\n";
-            this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
+            this_thread::sleep_for(chrono::milliseconds(m_frame_ms * 2));
             continue;
         }
 
