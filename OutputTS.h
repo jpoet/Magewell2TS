@@ -194,11 +194,12 @@ class OutputTS
     std::thread             m_mux_thread;
     std::thread             m_copy_thread;
 
-    std::mutex              m_imagequeue_mutex;
-    std::condition_variable m_image_ready;
     std::mutex              m_videopool_mutex;
     std::condition_variable m_video_ready;
+    std::condition_variable m_video_pool_empty;
 
+    std::mutex              m_imagequeue_mutex;
+    std::condition_variable m_image_ready;
     std::condition_variable m_image_queue_empty;
 
     std::atomic<bool>       m_running      {true};

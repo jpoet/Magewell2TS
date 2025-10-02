@@ -746,14 +746,25 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
                               AVRational time_base, double frame_duration,
                               AVRational frame_rate, bool is_hdr)
 {
-    unique_lock<mutex> lock(m_imagequeue_mutex);
 
     m_input_frame_wait_ms = frame_duration / 10000 * 2;
 
-    while (m_running.load() && m_video_stream.frames_used != 0)
     {
-        m_image_queue_empty.wait_for(lock,
+        unique_lock<mutex> lock(m_imagequeue_mutex);
+        while (m_running.load() && !m_imagequeue.empty())
+        {
+            m_image_queue_empty.wait_for(lock,
+                         std::chrono::milliseconds(m_input_frame_wait_ms));
+        }
+    }
+
+    {
+        std::unique_lock<std::mutex> lock(m_videopool_mutex);
+        while (m_running.load() && m_video_stream.frames_used != 0)
+        {
+            m_video_pool_empty.wait_for(lock,
                         std::chrono::milliseconds(m_input_frame_wait_ms));
+        }
     }
 
     m_input_width = width;
@@ -806,95 +817,6 @@ bool OutputTS::addAudio(AudioBuffer::AudioFrame *& buf, int64_t timestamp)
     return m_audioIO->Add(buf, timestamp);
 }
 
-bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
-                           AVCodecContext* codec_ctx,
-                           AVFrame* frame,
-                           OutputStream* ost)
-{
-    int ret;
-    AVPacket* pkt = ost->tmp_pkt;
-
-    if (ost->prev_pts >= frame->pts)
-        ++frame->pts;
-    ost->prev_pts = frame->pts;
-
-    // send the frame to the encoder
-    ret = avcodec_send_frame(codec_ctx, frame);
-    if (ret < 0)
-    {
-        if (m_verbose > 0)
-        {
-            cerr << lock_ios()
-                 << "WARNING: Failed sending a frame to the encoder: "
-                 << AVerr2str(ret) << "\n";
-        }
-        return false;
-    }
-
-    while (ret >= 0)
-    {
-        ret = avcodec_receive_packet(codec_ctx, pkt);
-        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
-            break;
-        else if (ret < 0)
-        {
-            if (m_verbose > 0)
-            {
-                cerr << lock_ios()
-                     << "WARNING: Failed encoding a frame: AVerr2str(ret)\n";
-            }
-            return false;
-        }
-
-        /* rescale output packet timestamp values from codec to stream
-         * timebase */
-        av_packet_rescale_ts(pkt, codec_ctx->time_base, ost->st->time_base);
-
-        pkt->stream_index = ost->st->index;
-
-        if (ost->prev_dts >= pkt->dts)
-            pkt->dts = ost->prev_dts + 1;
-        ost->prev_dts = pkt->dts;
-
-        if (pkt->pts < pkt->dts)
-            pkt->pts = pkt->dts;
-
-        /* Write the compressed frame to the media file. */
-
-#if 0
-        log_packet("write_frame", fmt_ctx, pkt);
-#endif
-        ret = av_interleaved_write_frame(fmt_ctx, pkt);
-        /* pkt is now blank (av_interleaved_write_frame() takes ownership of
-         * its contents and resets pkt), so that no unreferencing is necessary.
-         * This would be different if one used av_write_frame(). */
-        if (ret < 0)
-        {
-            if (m_verbose > 0)
-            {
-                cerr << lock_ios()
-                     << "WARNING: Failed to write packet: " << AVerr2str(ret)
-                     << "\n";
-            }
-
-            if (m_verbose > 1)
-            {
-                cerr << lock_ios()
-                     << "Codec time base " << codec_ctx->time_base.num
-                     << "/" << codec_ctx->time_base.den
-                     << "\n"
-                     << "Stream          " << ost->st->time_base.num
-                     << "/" << ost->st->time_base.den
-                     << "\n";
-
-                log_packet("write_frame", fmt_ctx, pkt);
-            }
-            return false;
-        }
-    }
-
-    return ret == AVERROR_EOF ? false : true;
-}
 
 
 void OutputTS::close_container(void)
@@ -1004,6 +926,96 @@ void OutputTS::close_stream(OutputStream* ost)
     avformat_free_context(&ost->st);
     ost->st = nullptr;
 #endif
+}
+
+bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
+                           AVCodecContext* codec_ctx,
+                           AVFrame* frame,
+                           OutputStream* ost)
+{
+    int ret;
+    AVPacket* pkt = ost->tmp_pkt;
+
+    if (ost->prev_pts >= frame->pts)
+        ++frame->pts;
+    ost->prev_pts = frame->pts;
+
+    // send the frame to the encoder
+    ret = avcodec_send_frame(codec_ctx, frame);
+    if (ret < 0)
+    {
+        if (m_verbose > 0)
+        {
+            cerr << lock_ios()
+                 << "WARNING: Failed sending a frame to the encoder: "
+                 << AVerr2str(ret) << "\n";
+        }
+        return false;
+    }
+
+    while (ret >= 0)
+    {
+        ret = avcodec_receive_packet(codec_ctx, pkt);
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+            break;
+        else if (ret < 0)
+        {
+            if (m_verbose > 0)
+            {
+                cerr << lock_ios()
+                     << "WARNING: Failed encoding a frame: AVerr2str(ret)\n";
+            }
+            return false;
+        }
+
+        /* rescale output packet timestamp values from codec to stream
+         * timebase */
+        av_packet_rescale_ts(pkt, codec_ctx->time_base, ost->st->time_base);
+
+        pkt->stream_index = ost->st->index;
+
+        if (ost->prev_dts >= pkt->dts)
+            pkt->dts = ost->prev_dts + 1;
+        ost->prev_dts = pkt->dts;
+
+        if (pkt->pts < pkt->dts)
+            pkt->pts = pkt->dts;
+
+        /* Write the compressed frame to the media file. */
+
+#if 0
+        log_packet("write_frame", fmt_ctx, pkt);
+#endif
+        ret = av_interleaved_write_frame(fmt_ctx, pkt);
+        /* pkt is now blank (av_interleaved_write_frame() takes ownership of
+         * its contents and resets pkt), so that no unreferencing is necessary.
+         * This would be different if one used av_write_frame(). */
+        if (ret < 0)
+        {
+            if (m_verbose > 0)
+            {
+                cerr << lock_ios()
+                     << "WARNING: Failed to write packet: " << AVerr2str(ret)
+                     << "\n";
+            }
+
+            if (m_verbose > 1)
+            {
+                cerr << lock_ios()
+                     << "Codec time base " << codec_ctx->time_base.num
+                     << "/" << codec_ctx->time_base.den
+                     << "\n"
+                     << "Stream          " << ost->st->time_base.num
+                     << "/" << ost->st->time_base.den
+                     << "\n";
+
+                log_packet("write_frame", fmt_ctx, pkt);
+            }
+            return false;
+        }
+    }
+
+    return ret == AVERROR_EOF ? false : true;
 }
 
 /**************************************************************/
@@ -1272,23 +1284,6 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
     }
 
     ost->tmp_frame = NULL;
-#if 0
-    /* If the output format is not YUV420P, then a temporary YUV420P
-     * picture is needed too. It is then converted to the required
-     * output format. */
-    if (ctx->pix_fmt != AV_PIX_FMT_YUV420P)
-    {
-        ost->tmp_frame = alloc_picture(AV_PIX_FMT_YUV420P,
-                                       ctx->width, ctx->height);
-        if (!ost->tmp_frame)
-        {
-            cerr << lock_ios()
-                 << "ERROR: Could not allocate temporary picture." << endl;
-            Shutdown();
-            return false;
-        }
-    }
-#endif
 
     return true;
 }
@@ -1717,6 +1712,7 @@ void OutputTS::mux(void)
 
                 if (!m_video_stream.enc || m_video_stream.frames_used == 0)
                 {
+                    m_video_pool_empty.notify_one();
                     m_video_ready.wait_for(lock,
                         std::chrono::milliseconds(m_input_frame_wait_ms));
                     break;
