@@ -1575,8 +1575,6 @@ bool OutputTS::nv_encode(void)
 #endif
 
 #if 0
-    ost->frame = ost->frames[ost->frames_idx_out].frame;
-
     ost->frame->pts = av_rescale_q_rnd(m_video_stream.timestamp,
                                        m_input_time_base,
                                        ost->enc->time_base,
