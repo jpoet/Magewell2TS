@@ -1746,7 +1746,7 @@ void OutputTS::mux(void)
             }
 
             {
-                std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
+                std::unique_lock<std::mutex> lock(m_videopool_mutex);
                 --m_video_stream.frames_used;
             }
         }
@@ -1755,7 +1755,7 @@ void OutputTS::mux(void)
 
 void OutputTS::ClearVideoPool(void)
 {
-    const unique_lock<mutex> lock(m_imagequeue_mutex);
+    const unique_lock<mutex> lock(m_videopool_mutex);
 
     m_video_stream.frames_idx_in  = -1;
     m_video_stream.frames_idx_out = -1;
@@ -1847,7 +1847,10 @@ void OutputTS::copy_to_frame(void)
         }
         f_image_buffer_available(pImage, pEco);
 
-        ++m_video_stream.frames_used;
+        {
+            std::unique_lock<std::mutex> lock(m_videopool_mutex);
+            ++m_video_stream.frames_used;
+        }
         m_video_ready.notify_one();
     }
 }

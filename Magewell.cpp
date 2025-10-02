@@ -576,7 +576,7 @@ bool Magewell::OpenChannel(int devIndex, double boardId)
     else if(!status.bValid)
     {
         cerr << "No signal detected.\n";
-        return false;
+        return true;
     }
 
     return true;
