@@ -194,6 +194,9 @@ class OutputTS
     std::thread             m_mux_thread;
     std::thread             m_copy_thread;
 
+    std::mutex              m_videoenc_mutex;
+    std::condition_variable m_videoenc_ready;
+
     std::mutex              m_videopool_mutex;
     std::condition_variable m_video_ready;
     std::condition_variable m_video_pool_empty;

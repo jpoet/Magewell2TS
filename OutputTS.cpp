@@ -448,7 +448,26 @@ bool OutputTS::open_audio(void)
 
 bool OutputTS::open_video(void)
 {
+    std::unique_lock<std::mutex> lock_enc(m_videoenc_mutex);
+
     close_encoder(&m_video_stream);
+
+    /* reset reusable frames */
+    m_video_stream.frame = nullptr;
+    m_video_stream.frames_idx_in  = -1;
+    m_video_stream.frames_idx_out = -1;
+    m_video_stream.frames_used    = 0;
+
+    if (m_video_stream.frames != nullptr)
+    {
+        for (int idx = 0; idx < m_video_stream.frames_total; ++idx)
+        {
+            av_frame_free(&m_video_stream.frames[idx].frame);
+            m_video_stream.frames[idx].frame = nullptr;
+        }
+        delete[] m_video_stream.frames;
+        m_video_stream.frames = nullptr;
+    }
 
     AVDictionary* opt = NULL;
     const AVCodec* video_codec =
@@ -555,20 +574,6 @@ bool OutputTS::open_video(void)
     }
 
 
-    /* reset reusable frames */
-    m_video_stream.frame = nullptr;
-    m_video_stream.frame = nullptr;
-    m_video_stream.frames_idx_in  = -1;
-    m_video_stream.frames_idx_out = -1;
-    m_video_stream.frames_used    = 0;
-
-    if (m_video_stream.frames != nullptr)
-    {
-        for (int idx = 0; idx < m_video_stream.frames_total; ++idx)
-            av_frame_free(&m_video_stream.frames[idx].frame);
-        delete[] m_video_stream.frames;
-    }
-
     /* Now that all the parameters are set, we can open the audio and
      * video codecs and allocate the necessary encode buffers. */
     switch (m_encoderType)
@@ -606,6 +611,7 @@ bool OutputTS::open_video(void)
         }
     }
 
+    m_videoenc_ready.notify_one();
     return true;
 }
 
@@ -798,6 +804,9 @@ OutputTS::~OutputTS(void)
 {
     Shutdown();
 
+    if (m_copy_thread.joinable())
+        m_copy_thread.join();
+
     if (m_mux_thread.joinable())
         m_mux_thread.join();
 
@@ -844,17 +853,11 @@ void OutputTS::close_encoder(OutputStream* ost)
     ost->enc->hw_frames_ctx = nullptr;
     ost->hw_device = false;
 
-#if 1
     if (ost->tmp_frame /*  && ost->tmp_frame->data[0] */)
     {
-#if 0
         av_frame_free(&ost->tmp_frame);
-#else
-        av_free(&ost->tmp_frame->data[0]);
-#endif
         ost->tmp_frame = nullptr;
     }
-#endif
 
     if (ost->swr_ctx)
     {
@@ -885,18 +888,6 @@ void OutputTS::close_stream(OutputStream* ost)
         av_buffer_unref(&ost->enc->hw_frames_ctx);
         ost->hw_device = false;
     }
-
-#if 1
-    if (ost->tmp_frame /*  && ost->tmp_frame->data[0] */)
-    {
-#if 0
-        av_frame_free(&ost->tmp_frame);
-#else
-        av_free(&ost->frame->data[0]);
-#endif
-        ost->tmp_frame = nullptr;
-    }
-#endif
 
     if (ost->swr_ctx)
     {
@@ -1789,13 +1780,23 @@ void OutputTS::copy_to_frame(void)
 
     while (m_running.load() == true)
     {
+        std::unique_lock<std::mutex> lock_enc(m_videoenc_mutex);
+
+        if (m_video_stream.enc == nullptr)
         {
-            std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
+            ClearVideoPool();
+            m_videoenc_ready.wait_for(lock_enc,
+                       std::chrono::milliseconds(m_input_frame_wait_ms));
+            continue;
+        }
+
+        {
+            std::unique_lock<std::mutex> lock_i(m_imagequeue_mutex);
 
             if (m_imagequeue.empty())
             {
                 m_image_queue_empty.notify_one();
-                m_image_ready.wait_for(lock,
+                m_image_ready.wait_for(lock_i,
                        std::chrono::milliseconds(m_input_frame_wait_ms));
                 continue;
             }
@@ -1813,7 +1814,8 @@ void OutputTS::copy_to_frame(void)
             if (m_verbose > 0)
                 cerr << lock_ios() << "Output frame pool is full "
                      << m_video_stream.frames_used << '/'
-                     << m_video_stream.frames_total << ", dropping frames.\n";
+                     << m_video_stream.frames_total
+                     << ", dropping frames.\n";
             ClearVideoPool();
             continue;
         }
