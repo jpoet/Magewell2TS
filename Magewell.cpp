@@ -13,7 +13,7 @@
 #include "Magewell.h"
 
 //#define DUMP_RAW_AUDIO_ALLBITS
-#define DUMP_RAW_AUDIO
+//#define DUMP_RAW_AUDIO
 
 #if defined(DUMP_RAW_AUDIO) || defined(DUMP_RAW_AUDIO_ALLBITS)
 #include <fstream>
