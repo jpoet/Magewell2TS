@@ -240,7 +240,10 @@ bool OutputTS::open_audio(void)
     }
     m_audio_stream.next_pts = 0;
 
-    m_audio_stream.enc->bit_rate = 192000;
+    if (m_audioIO->NumChannels() == 2)
+        m_audio_stream.enc->bit_rate = 256000;
+    else
+        m_audio_stream.enc->bit_rate = 640000;
 
 #if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(61, 13, 100)
     m_audio_stream.enc->sample_fmt = audio_codec->sample_fmts ?
@@ -352,9 +355,7 @@ bool OutputTS::open_audio(void)
                  << " Audio = THREAD FRAME\n";
     }
 
-//    AVFormatContext* oc = m_output_format_context;
     const AVCodec* codec = audio_codec;
-//    AVCodecContext* enc_ctx = m_audio_stream.enc;
     AVDictionary* opt = NULL;
     int nb_samples;
     int ret;
@@ -737,8 +738,8 @@ bool OutputTS::setAudioParams(int num_channels, bool is_lpcm,
                               int samples_per_frame, int frame_size)
 {
     if (!m_audioIO->AddBuffer(num_channels, is_lpcm,
-                             bytes_per_sample, sample_rate,
-                             samples_per_frame, frame_size))
+                              bytes_per_sample, sample_rate,
+                              samples_per_frame, frame_size))
         return false;
 
     if (m_verbose > 2)

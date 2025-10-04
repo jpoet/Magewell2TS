@@ -460,7 +460,17 @@ bool AudioBuffer::DetectCodec(void)
     if (m_lpcm)
     {
          m_codec_name = "ac3";
-         m_channel_layout = AV_CHANNEL_LAYOUT_STEREO;
+         if (m_num_channels == 2)
+             m_channel_layout = AV_CHANNEL_LAYOUT_STEREO;
+         else if (m_num_channels == 6)
+             m_channel_layout = AV_CHANNEL_LAYOUT_5POINT1;
+         else
+         {
+             cerr << lock_ios()
+                  << "WARNING: " << m_num_channels
+                  << " channels is not supported.\n";
+             m_channel_layout = AV_CHANNEL_LAYOUT_STEREO;
+         }
          initialized();
          return true;
     }
@@ -742,6 +752,15 @@ bool AudioIO::CodecChanged(void)
                  << "Audio codec '" << m_codec_name << "' -> '"
                  << (*Ibuf).CodecName() << "'" << endl;
         m_codec_name = (*Ibuf).CodecName();
+    }
+
+    if (m_num_channels != (*Ibuf).NumChannels())
+    {
+        if (m_verbose > 1)
+            cerr << lock_ios()
+                 << "Audio channels " << m_num_channels << " -> "
+                 << (*Ibuf).NumChannels() << "\n";
+        m_num_channels = (*Ibuf).NumChannels();
     }
 
     m_sample_rate = (*Ibuf).SampleRate();

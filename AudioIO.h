@@ -55,6 +55,7 @@ class AudioBuffer
     bool Flushed(void) const { return m_flushed; }
 
     std::string CodecName(void) const { return m_codec_name; }
+    int         NumChannels(void) const { return m_num_channels; }
     const AVChannelLayout* ChannelLayout(void) const { return &m_channel_layout; }
     bool LPCM(void) const { return m_lpcm; }
     int  SampleRate(void) const { return m_sample_rate; }
@@ -141,6 +142,7 @@ class AudioIO
     bool    BlockReady(void) const;
     int64_t TimeStamp(void) const { return m_timestamp; }
 
+    int     NumChannels(void) const { return m_num_channels; }
     std::string CodecName(void) const { return m_codec_name; }
     const AVChannelLayout* ChannelLayout(void) const;
     int     SampleRate(void) const { return m_sample_rate; }
@@ -159,9 +161,7 @@ class AudioIO
     buffer_que_t::iterator m_Iback;
 
     std::string      m_codec_name;
-#if 0
-    AVChannelLayout  m_channel_layout;
-#endif
+    int              m_num_channels     {2};
     int              m_sample_rate      {-1};
     int              m_bytes_per_sample {0};
 
