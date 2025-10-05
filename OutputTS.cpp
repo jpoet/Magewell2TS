@@ -449,8 +449,6 @@ bool OutputTS::open_audio(void)
 
 bool OutputTS::open_video(void)
 {
-    std::unique_lock<std::mutex> lock_enc(m_videoenc_mutex);
-
     close_encoder(&m_video_stream);
 
     /* reset reusable frames */
@@ -612,7 +610,6 @@ bool OutputTS::open_video(void)
         }
     }
 
-    m_videoenc_ready.notify_one();
     return true;
 }
 
@@ -760,7 +757,7 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
         unique_lock<mutex> lock(m_imagequeue_mutex);
         while (m_running.load() && !m_imagequeue.empty())
         {
-            m_image_queue_empty.wait_for(lock,
+            m_imagequeue_empty.wait_for(lock,
                          std::chrono::milliseconds(m_input_frame_wait_ms));
         }
     }
@@ -769,8 +766,8 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
         std::unique_lock<std::mutex> lock(m_videopool_mutex);
         while (m_running.load() && m_video_stream.frames_used != 0)
         {
-            m_video_pool_empty.wait_for(lock,
-                        std::chrono::milliseconds(m_input_frame_wait_ms));
+            m_videopool_empty.wait_for(lock,
+                         std::chrono::milliseconds(m_input_frame_wait_ms));
         }
     }
 
@@ -1709,8 +1706,8 @@ void OutputTS::mux(void)
 
                 if (!m_video_stream.enc || m_video_stream.frames_used == 0)
                 {
-                    m_video_pool_empty.notify_one();
-                    m_video_ready.wait_for(lock,
+                    m_videopool_empty.notify_one();
+                    m_videopool_ready.wait_for(lock,
                         std::chrono::milliseconds(m_input_frame_wait_ms));
                     break;
                 }
@@ -1781,23 +1778,13 @@ void OutputTS::copy_to_frame(void)
 
     while (m_running.load() == true)
     {
-        std::unique_lock<std::mutex> lock_enc(m_videoenc_mutex);
-
-        if (m_video_stream.enc == nullptr)
-        {
-            ClearVideoPool();
-            m_videoenc_ready.wait_for(lock_enc,
-                       std::chrono::milliseconds(m_input_frame_wait_ms));
-            continue;
-        }
-
         {
             std::unique_lock<std::mutex> lock_i(m_imagequeue_mutex);
 
             if (m_imagequeue.empty())
             {
-                m_image_queue_empty.notify_one();
-                m_image_ready.wait_for(lock_i,
+                m_imagequeue_empty.notify_one();
+                m_imagequeue_ready.wait_for(lock_i,
                        std::chrono::milliseconds(m_input_frame_wait_ms));
                 continue;
             }
@@ -1853,7 +1840,7 @@ void OutputTS::copy_to_frame(void)
             std::unique_lock<std::mutex> lock(m_videopool_mutex);
             ++m_video_stream.frames_used;
         }
-        m_video_ready.notify_one();
+        m_videopool_ready.notify_one();
     }
 }
 
@@ -1867,7 +1854,7 @@ bool OutputTS::AddVideoFrame(uint8_t* pImage, void* pEco,
     else
     {
         m_imagequeue.push_back(imagepkt_t{timestamp, pImage, pEco, imageSize});
-        m_image_ready.notify_one();
+        m_videopool_ready.notify_one();
     }
 
     return true;
