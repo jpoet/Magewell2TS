@@ -89,7 +89,7 @@ class OutputTS
 
         int frames_idx_in          {-1};
         int frames_idx_out         {-1};
-        int frames_total           {20};
+        int frames_total           {10};
         int frames_used            {0};
 
         int samples_count          {0};
