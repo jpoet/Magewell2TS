@@ -109,7 +109,6 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
                    ShutdownCallback shutdown,
                    MagCallback image_buffer_avail)
     : m_verbose(verbose_level)
-    , m_no_audio(no_audio)
     , m_video_codec_name(video_codec_name)
     , m_device("/dev/dri/" + device)
     , m_preset(preset)
@@ -133,9 +132,8 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
         Shutdown();
     }
 
-    if (!m_no_audio)
-        m_audioIO = new AudioIO([=](bool val) { this->DiscardImages(val); },
-                                verbose_level);
+    m_audioIO = new AudioIO([=](bool val) { this->DiscardImages(val); },
+                            verbose_level);
 
     m_mux_thread = std::thread(&OutputTS::mux, this);
     pthread_setname_np(m_mux_thread.native_handle(), "mux");
@@ -734,6 +732,8 @@ bool OutputTS::setAudioParams(int num_channels, bool is_lpcm,
                               int bytes_per_sample, int sample_rate,
                               int samples_per_frame, int frame_size)
 {
+    m_no_audio = false;
+
     if (!m_audioIO->AddBuffer(num_channels, is_lpcm,
                               bytes_per_sample, sample_rate,
                               samples_per_frame, frame_size))
@@ -1633,7 +1633,7 @@ void OutputTS::mux(void)
 {
     while (m_running.load() == true)
     {
-        if (m_audioIO && m_audioIO->CodecChanged())
+        if (!m_no_audio && m_audioIO->CodecChanged())
         {
             cerr << lock_ios() << " Audio changing: closing audio encoder\n";
             if (!open_audio())
@@ -1649,7 +1649,7 @@ void OutputTS::mux(void)
         if (m_init_needed)
         {
             if (m_video_stream.enc &&
-                (!m_audioIO || m_audio_stream.enc != nullptr))
+                (m_no_audio || m_audio_stream.enc != nullptr))
             {
                 if (!open_container())
                 {
@@ -1658,23 +1658,23 @@ void OutputTS::mux(void)
                 }
                 m_video_stream.timestamp = -1;
                 m_video_stream.next_timestamp = -1;
-                if (m_audioIO)
-                    m_audio_stream.next_timestamp = -1;
-                else
+                if (m_no_audio)
                     m_audio_stream.next_timestamp = -2;
+                else
+                    m_audio_stream.next_timestamp = -1;
             }
             else
             {
                 string why;
                 if (m_video_stream.enc == nullptr)
                     why = " video";
-                if (m_audioIO && m_audio_stream.enc == nullptr)
+                if (!m_no_audio && m_audio_stream.enc == nullptr)
                 {
                     if (!why.empty())
                         why += " &";
                     why += " audio";
                 }
-                if (m_verbose > 1)
+                if (m_verbose > 2)
                     cerr << lock_ios() << "WARNING: New TS needed but"
                          << why << " encoder is not ready.\n";
             }
