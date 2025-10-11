@@ -896,9 +896,8 @@ bool Magewell::capture_audio(void)
 
         if (!audio_signal_status.bChannelStatusValid)
         {
-            if (++err_cnt % 50 == 0 && m_verbose > 0)
-                cerr << lock_ios() << "WARNING (cnt: " << err_cnt
-                     << ") can't get audio, signal is invalid\n";
+            if (m_verbose > 0 && ++err_cnt % 100 == 0)
+                cerr << lock_ios() << "No audio signal.\n";
             this_thread::sleep_for(chrono::milliseconds(m_frame_ms * 2));
             continue;
         }
