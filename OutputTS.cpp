@@ -105,7 +105,8 @@ static void log_packet(string where, const AVFormatContext* fmt_ctx,
 
 OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
                    const string & preset, int quality, int look_ahead,
-                   bool no_audio, bool p010, const string & device,
+                   bool no_audio, bool p010, int frame_buffers,
+                   const string & device,
                    ShutdownCallback shutdown,
                    MagCallback image_buffer_avail)
     : m_verbose(verbose_level)
@@ -115,6 +116,7 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     , m_quality(quality)
     , m_look_ahead(look_ahead)
     , m_p010(p010)
+    , m_frame_buffers(frame_buffers)
     , f_shutdown(shutdown)
     , f_image_buffer_available(image_buffer_avail)
 {
@@ -454,6 +456,7 @@ bool OutputTS::open_video(void)
     m_video_stream.frames_idx_in  = -1;
     m_video_stream.frames_idx_out = -1;
     m_video_stream.frames_used    = 0;
+    m_video_stream.frames_total   = m_frame_buffers;
 
     if (m_video_stream.frames != nullptr)
     {

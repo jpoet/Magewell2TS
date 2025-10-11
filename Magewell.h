@@ -42,7 +42,7 @@ class Magewell
 
     bool Capture(const std::string & video_codec, const std::string & preset,
                  int quality, int look_ahead, bool no_audio, bool p010,
-                 const std::string & gpu_device);
+                 int frame_buffers, const std::string & gpu_device);
     void Shutdown(void);
     void Reset(void) { m_reset_audio.store(true); }
 
