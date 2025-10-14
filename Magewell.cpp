@@ -1731,7 +1731,8 @@ void Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     int frame_idx  = -1;
 
     uint8_t* pbImage = nullptr;
-    int64_t  timestamp;
+    int64_t  timestamp = -1;
+    int64_t  prev_timestamp = -1;
 
     MWCAP_VIDEO_BUFFER_INFO   videoBufferInfo;
     MWCAP_VIDEO_FRAME_INFO    videoFrameInfo;
@@ -1783,6 +1784,47 @@ void Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         if ((ullStatusBits & event_mask) == 0)
             continue;
 
+        if (MW_SUCCEEDED != MWGetVideoBufferInfo(m_channel,
+                                                 &videoBufferInfo))
+        {
+            if (m_verbose > 0)
+                cerr << lock_ios()
+                     << "WARNING: Failed to get video buffer info (frame "
+                     << frame_cnt << ")\n";
+            continue;
+        }
+
+        if (frame_idx == -1)
+        {
+            frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
+        }
+        else
+        {
+            if (++frame_idx == frame_wrap_idx)
+                frame_idx = 0;
+        }
+        if (MWGetVideoFrameInfo(m_channel, frame_idx,
+                                &videoFrameInfo) != MW_SUCCEEDED)
+        {
+            if (m_verbose > 0)
+                cerr << lock_ios()
+                     << "WARNING: Failed to get video frame info (frame "
+                     << frame_cnt << ")\n";
+            continue;
+        }
+
+        prev_timestamp = timestamp;
+        timestamp = interlaced
+                    ? videoFrameInfo.allFieldBufferedTimes[1]
+                    : videoFrameInfo.allFieldBufferedTimes[0];
+        if (timestamp == prev_timestamp)
+        {
+            if (m_verbose > 1)
+                cerr << lock_ios()
+                     << "WARNING: Already processed TS " << timestamp << "\n";
+             continue;
+        }
+
         m_image_buffer_mutex.lock();
         if (m_avail_image_buffers.empty())
         {
@@ -1799,64 +1841,6 @@ void Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         pbImage = m_avail_image_buffers.front();
         m_avail_image_buffers.pop_front();
         m_image_buffer_mutex.unlock();
-
-        if (MW_SUCCEEDED != MWGetVideoBufferInfo(m_channel,
-                                                 &videoBufferInfo))
-        {
-            if (m_verbose > 0)
-                cerr << lock_ios()
-                     << "WARNING: Failed to get video buffer info (frame "
-                     << frame_cnt << ")\n";
-            pro_image_buffer_available(pbImage, nullptr);
-            continue;
-        }
-
-        if (frame_idx == -1)
-        {
-            frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
-        }
-        else
-        {
-#if 1
-            if (frame_idx == videoBufferInfo.iNewestBufferedFullFrame)
-            {
-                if (m_verbose > 0)
-                    cerr << lock_ios()
-                         << "WARNING: Already processed MW video buffer "
-                         << frame_idx << " -- Skipping (frame "
-                         << frame_cnt << ")\n";
-                pro_image_buffer_available(pbImage, nullptr);
-                continue;
-            }
-#endif
-            if (++frame_idx == frame_wrap_idx)
-                frame_idx = 0;
-#if 0
-            if (frame_idx != videoBufferInfo.iNewestBufferedFullFrame)
-            {
-                if (m_verbose > 0)
-                {
-                    cerr << lock_ios()
-                         << "WARNING: Expected MW video buffer " << frame_idx
-                         << " but current is "
-                         << (int)videoBufferInfo.iNewestBufferedFullFrame
-                         << " (frame " << frame_cnt << ")\n";
-                }
-                frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
-            }
-#endif
-
-        }
-        if (MWGetVideoFrameInfo(m_channel, frame_idx,
-                                &videoFrameInfo) != MW_SUCCEEDED)
-        {
-            if (m_verbose > 0)
-                cerr << lock_ios()
-                     << "WARNING: Failed to get video frame info (frame "
-                     << frame_cnt << ")\n";
-            pro_image_buffer_available(pbImage, nullptr);
-            continue;
-        }
 
         ret = MWCaptureVideoFrameToVirtualAddress
               (m_channel,
@@ -1883,9 +1867,6 @@ void Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         MWCAP_VIDEO_CAPTURE_STATUS captureStatus;
         MWGetVideoCaptureStatus(m_channel, &captureStatus);
 
-        timestamp = interlaced
-                    ? videoFrameInfo.allFieldBufferedTimes[1]
-                    : videoFrameInfo.allFieldBufferedTimes[0];
 
         ++frame_cnt;
 
