@@ -96,10 +96,10 @@ class OutputTS
         int samples_count          {0};
         AVFrame* frame             {nullptr};
         AVFrame* tmp_frame         {nullptr};
+#if 0
         int64_t  prev_pts          {-1};
-        int64_t  prev_audio_pts    {-1};
+#endif
         int64_t  prev_dts          {-1};
-
         AVPacket* tmp_pkt          {nullptr};
 
         struct SwrContext* swr_ctx {nullptr};

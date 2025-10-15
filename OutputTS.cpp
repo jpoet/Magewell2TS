@@ -928,9 +928,11 @@ bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
     int ret;
     AVPacket* pkt = ost->tmp_pkt;
 
+#if 0
     if (ost->prev_pts >= frame->pts)
         ++frame->pts;
     ost->prev_pts = frame->pts;
+#endif
 
     // send the frame to the encoder
     ret = avcodec_send_frame(codec_ctx, frame);
@@ -1123,8 +1125,6 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
     cerr << "\n" << ost->timestamp << " " << pkt->duration << " " << pkt->pts
          << "\n";
 #endif
-
-    ost->prev_audio_pts = pkt->pts;
 
     /* Frame size passed from magewell includes all channels */
 #if 0
