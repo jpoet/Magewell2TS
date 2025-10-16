@@ -162,7 +162,7 @@ class OutputTS
 
     std::string      m_filename               {"pipe:1"};
 
-    bool             m_no_audio               {true};
+    bool             m_no_audio               {false};
     int              m_slow_audio_cnt         {0};
 
     std::string      m_video_codec_name;
