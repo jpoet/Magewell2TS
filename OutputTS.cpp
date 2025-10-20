@@ -1245,7 +1245,8 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
     ctx->gop_size = 180;
     if (av_opt_set(ctx->priv_data, "no-open-gop", "1",
                    AV_OPT_SEARCH_CHILDREN) < 0)
-        cerr << "Warning: nvenc: Could not set no-open-gop option.\n";
+        if (m_verbose > 2)
+            cerr << "nvenc: Could not set no-open-gop option.\n";
 
     if (m_isHDR || m_p010)
         ctx->pix_fmt = AV_PIX_FMT_P010LE;
@@ -1677,7 +1678,7 @@ void OutputTS::mux(void)
                         why += " &";
                     why += " audio";
                 }
-                if (m_verbose > 1)
+                if (m_verbose > 2)
                     cerr << lock_ios() << "WARNING: New TS needed but"
                          << why << " encoder is not ready.\n";
             }
@@ -1751,6 +1752,7 @@ void OutputTS::ClearVideoPool(void)
     m_video_stream.frames_idx_in  = -1;
     m_video_stream.frames_idx_out = -1;
     m_video_stream.frames_used = 0;
+    m_videopool_cnt = 0;
 }
 
 void OutputTS::ClearImageQueue(void)
@@ -1802,15 +1804,16 @@ void OutputTS::copy_to_frame(void)
 
         if (m_video_stream.frames_used == m_video_stream.frames_total)
         {
-            if (m_verbose > 0)
-                cerr << lock_ios() << "Output frame pool is full "
-                     << m_video_stream.frames_used << '/'
-                     << m_video_stream.frames_total
-                     << ", dropping frames.\n";
+            if (m_videopool_cnt > 120 && m_verbose > 2)
+                cerr << lock_ios() << "After " << m_videopool_cnt
+                     << " frames processed, output frame pool is full. "
+                     << "Dropping " << m_video_stream.frames_total
+                     << " video frames.\n";
             ClearVideoPool();
             continue;
         }
 
+        ++m_videopool_cnt;
         if (++m_video_stream.frames_idx_in == m_video_stream.frames_total)
             m_video_stream.frames_idx_in = 0;
 
