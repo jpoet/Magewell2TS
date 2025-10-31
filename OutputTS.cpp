@@ -1697,10 +1697,11 @@ void OutputTS::mux(void)
                               &m_audio_stream);
         }
 
-#if 1
         if (m_audio_stream.next_timestamp == -1)
+        {
+            ClearVideoPool();
             ClearImageQueue();
-#endif
+        }
 
         while (!m_audio_stream.enc ||
                m_video_stream.timestamp <= m_audio_stream.next_timestamp)
@@ -1741,6 +1742,7 @@ void OutputTS::mux(void)
                 std::unique_lock<std::mutex> lock(m_videopool_mutex);
                 --m_video_stream.frames_used;
             }
+            m_videopool_avail.notify_one();
         }
     }
 }
@@ -1784,6 +1786,20 @@ void OutputTS::copy_to_frame(void)
     while (m_running.load() == true)
     {
         {
+            unique_lock<mutex> lock(m_videopool_mutex);
+            if (m_video_stream.frames_used == m_video_stream.frames_total)
+            {
+                if (m_verbose > 2)
+                    cerr << lock_ios() << "Frame pool is full ("
+                         << m_videopool_cnt << " processed)."
+                         << " Waiting for available slot.\n";
+                m_videopool_avail.wait_for(lock,
+                           std::chrono::milliseconds(m_input_frame_wait_ms));
+                continue;
+            }
+        }
+
+        {
             std::unique_lock<std::mutex> lock_i(m_imagequeue_mutex);
 
             if (m_imagequeue.empty())
@@ -1800,17 +1816,6 @@ void OutputTS::copy_to_frame(void)
             timestamp  = m_imagequeue.front().timestamp;
 
             m_imagequeue.pop_front();
-        }
-
-        if (m_video_stream.frames_used == m_video_stream.frames_total)
-        {
-            if (m_videopool_cnt > 120 && m_verbose > 2)
-                cerr << lock_ios() << "After " << m_videopool_cnt
-                     << " frames processed, output frame pool is full. "
-                     << "Dropping " << m_video_stream.frames_total
-                     << " video frames.\n";
-            ClearVideoPool();
-            continue;
         }
 
         ++m_videopool_cnt;
