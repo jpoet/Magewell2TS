@@ -2304,7 +2304,7 @@ bool Magewell::capture_video(void)
 
 bool Magewell::Capture(const string & video_codec, const string & preset,
                        int quality, int look_ahead, bool no_audio,
-                       bool p010, int frame_buffers, const string & gpu_device)
+                       bool p010, const string & gpu_device)
 {
     m_p010 = p010;
 
@@ -2314,8 +2314,7 @@ bool Magewell::Capture(const string & video_codec, const string & preset,
     if (m_isEco)
     {
         m_out2ts = new OutputTS(m_verbose, video_codec, preset, quality,
-                                look_ahead, no_audio, p010, frame_buffers,
-                                gpu_device,
+                                look_ahead, no_audio, p010, gpu_device,
                                 [=](void) { this->Shutdown(); },
                                 [=](uint8_t* ib, void* eb)
                                 { this->eco_image_buffer_available(ib, eb); });
@@ -2323,8 +2322,7 @@ bool Magewell::Capture(const string & video_codec, const string & preset,
     else
     {
         m_out2ts = new OutputTS(m_verbose, video_codec, preset, quality,
-                                look_ahead, no_audio, p010, frame_buffers,
-                                gpu_device,
+                                look_ahead, no_audio, p010, gpu_device,
                                 [=](void) { this->Shutdown(); },
                                 [=](uint8_t* ib, void* eb)
                                 { this->pro_image_buffer_available(ib, eb); });

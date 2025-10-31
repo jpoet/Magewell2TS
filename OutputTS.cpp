@@ -105,8 +105,7 @@ static void log_packet(string where, const AVFormatContext* fmt_ctx,
 
 OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
                    const string & preset, int quality, int look_ahead,
-                   bool no_audio, bool p010, int frame_buffers,
-                   const string & device,
+                   bool no_audio, bool p010, const string & device,
                    ShutdownCallback shutdown,
                    MagCallback image_buffer_avail)
     : m_verbose(verbose_level)
@@ -117,7 +116,6 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     , m_quality(quality)
     , m_look_ahead(look_ahead)
     , m_p010(p010)
-    , m_frame_buffers(frame_buffers)
     , f_shutdown(shutdown)
     , f_image_buffer_available(image_buffer_avail)
 {
@@ -781,6 +779,9 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     m_input_frame_duration = frame_duration;
     m_input_frame_rate = frame_rate;
     m_isHDR = is_hdr;
+    m_frame_buffers = 10 +
+                      (m_p010 || m_isHDR ? 5 : 0) +
+                      (m_input_width > 1920 ? 10 : 0);
 
     double fps = static_cast<double>(frame_rate.num) / frame_rate.den;
 
