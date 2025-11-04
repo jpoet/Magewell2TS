@@ -1,6 +1,5 @@
 ﻿/*
- * magewell2ts
- * Copyright (c) 2022 John Patrick Poet
+ * Copyright (c) 2022-2025 John Patrick Poet
  *
  * Permission is hereby granted, free of charge, to any person
  * obtaining a copy of this software and associated documentation
@@ -21,23 +20,6 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
- *
- *
- * Based on AudioCapture.cpp,CaptureByInput.cpp and ReadWriteEDID.cpp
- * by magewell:
- *
- * THE SOFTWARE PROVIDED BY MAGEWELL “AS IS” AND ANY EXPRESS, INCLUDING
- * BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
- * FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL
- * MAGEWELL BE LIABLE
- *
- * FOR ANY CLAIM, DIRECT OR INDIRECT DAMAGES OR OTHER LIABILITY, WHETHER
- * IN CONTRACT, TORT OR OTHERWISE, ARISING IN ANY WAY OF USING THE
- * SOFTWARE.
- *
- * CONTACT INFORMATION:
- * SDK@magewell.net
- * http://www.magewell.com/
  */
 
 #include <string_view>

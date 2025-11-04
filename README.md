@@ -222,10 +222,10 @@ Environment=HOME=/home/mythtv
 LimitCORE=infinity
 User=mythtv
 PermissionsStartOnly=true
-ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 1 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 2 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 3 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 4 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 1 -w /home/mythtv/etc/EDID/Magewell-1080p-Default+Atmos.bin
+ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 2 -w /home/mythtv/etc/EDID/Magewell-1080p-Default+Atmos.bin
+ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 3 -w /home/mythtv/etc/EDID/Magewell-1080p-Default+Atmos.bin
+ExecStartPre=/usr/local/bin/magewell2ts --wait-for 4 -i 4 -w /home/mythtv/etc/EDID/Magewell-1080p-Default+Atmos.bin
 
 ExecStart=/usr/local/bin/mythbackend -q --syslog none --logpath /var/log/mythtv -v channel,record
 RestartSec=5

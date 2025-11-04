@@ -1,12 +1,12 @@
 [Unit]
-Description=Load EDID and volume information into Magewell card inputs
+Description=Load EDID into Magewell card inputs
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/magewellpro2ts -i 1 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStart=/usr/local/bin/magewellpro2ts -i 2 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStart=/usr/local/bin/magewellpro2ts -i 3 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
-ExecStart=/usr/local/bin/magewellpro2ts -i 4 -s 100 -w /home/mythtv/etc/EDID/ProCaptureHDMI-EAC3.bin
+ExecStart=/usr/local/bin/magewellpro2ts -i 1 -w /home/mythtv/etc/EDID/Magewell-1080p-Default+Atmos.bin
+ExecStart=/usr/local/bin/magewellpro2ts -i 2 -w /home/mythtv/etc/EDID/Magewell-1080p-Default+Atmos.bin
+ExecStart=/usr/local/bin/magewellpro2ts -i 3 -w /home/mythtv/etc/EDID/Magewell-1080p-Default+Atmos.bin
+ExecStart=/usr/local/bin/magewellpro2ts -i 4 -w /home/mythtv/etc/EDID/Magewell-1080p-Default+Atmos.bin
 RemainAfterExit=yes
 
 [Install]
