@@ -2358,6 +2358,7 @@ bool Magewell::Capture(const string & video_codec, const string & preset,
         m_out2ts = new OutputTS(m_verbose, video_codec, preset, quality,
                                 look_ahead, no_audio, p010, gpu_device,
                                 [=](void) { this->Shutdown(); },
+                                [=](void) { this->Reset(); },
                                 [=](uint8_t* ib, void* eb)
                                 { this->eco_image_buffer_available(ib, eb); });
     }
@@ -2366,6 +2367,7 @@ bool Magewell::Capture(const string & video_codec, const string & preset,
         m_out2ts = new OutputTS(m_verbose, video_codec, preset, quality,
                                 look_ahead, no_audio, p010, gpu_device,
                                 [=](void) { this->Shutdown(); },
+                                [=](void) { this->Reset(); },
                                 [=](uint8_t* ib, void* eb)
                                 { this->pro_image_buffer_available(ib, eb); });
     }

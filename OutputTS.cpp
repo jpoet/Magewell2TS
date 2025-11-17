@@ -106,7 +106,7 @@ static void log_packet(string where, const AVFormatContext* fmt_ctx,
 OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
                    const string & preset, int quality, int look_ahead,
                    bool no_audio, bool p010, const string & device,
-                   ShutdownCallback shutdown,
+                   ShutdownCallback shutdown, AudioResetCallback audio_reset,
                    MagCallback image_buffer_avail)
     : m_verbose(verbose_level)
     , m_no_audio(no_audio)
@@ -117,6 +117,7 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     , m_look_ahead(look_ahead)
     , m_p010(p010)
     , f_shutdown(shutdown)
+    , f_audio_reset(audio_reset)
     , f_image_buffer_available(image_buffer_avail)
 {
     if (m_video_codec_name.find("qsv") != string::npos)
@@ -452,12 +453,6 @@ bool OutputTS::open_video(void)
     close_encoder(&m_video_stream);
 
     /* reset reusable frames */
-    m_video_stream.frame = nullptr;
-    m_video_stream.frames_idx_in  = -1;
-    m_video_stream.frames_idx_out = -1;
-    m_video_stream.frames_used    = 0;
-    m_video_stream.frames_total   = m_frame_buffers;
-
     if (m_video_stream.frames != nullptr)
     {
         for (int idx = 0; idx < m_video_stream.frames_total; ++idx)
@@ -468,6 +463,11 @@ bool OutputTS::open_video(void)
         delete[] m_video_stream.frames;
         m_video_stream.frames = nullptr;
     }
+    m_video_stream.frame = nullptr;
+    m_video_stream.frames_idx_in  = -1;
+    m_video_stream.frames_idx_out = -1;
+    m_video_stream.frames_used    = 0;
+    m_video_stream.frames_total   = m_frame_buffers;
 
     AVDictionary* opt = NULL;
     const AVCodec* video_codec =
@@ -1636,6 +1636,8 @@ bool OutputTS::qsv_vaapi_encode(void)
 
 void OutputTS::mux(void)
 {
+    int glitch_cnt = 0;
+
     while (m_running.load() == true)
     {
         if (m_audioIO && m_audioIO->CodecChanged())
@@ -1694,8 +1696,19 @@ void OutputTS::mux(void)
                  << "] " << m_audio_stream.next_pts << endl;
 #endif
 
-            write_audio_frame(m_output_format_context,
-                              &m_audio_stream);
+            if (!write_audio_frame(m_output_format_context,
+                                   &m_audio_stream))
+            {
+                if (++glitch_cnt % 20 == 0)
+                {
+                    if (m_verbose > 0)
+                        cerr << "Warning: Audio glitch. Resetting.\n";
+                    f_audio_reset();
+                }
+                this_thread::sleep_for(chrono::milliseconds(5));
+                continue;
+            }
+            glitch_cnt = 0;
         }
 
         if (m_audio_stream.next_timestamp == -1)
