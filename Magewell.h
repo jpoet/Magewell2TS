@@ -44,7 +44,7 @@ class Magewell
                  int quality, int look_ahead, bool no_audio, bool p010,
                  const std::string & gpu_device);
     void Shutdown(void);
-    void Reset(void) { m_reset_audio.store(true); }
+    void Reset(void);
 
     bool operator! (void) { return m_fatal; }
 
@@ -119,6 +119,8 @@ class Magewell
 
     std::atomic<bool> m_running     {true};
     std::atomic<bool> m_reset_audio {true};
+    std::atomic<bool> m_reset_video {true};
+    std::chrono::high_resolution_clock::time_point m_last_reset;
 
     std::function<bool (void)>  f_open_video;
 

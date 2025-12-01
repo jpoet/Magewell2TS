@@ -312,6 +312,7 @@ Magewell::Magewell(void)
         cerr << lock_ios() << "ERROR: Failed to inialize MWCapture.\n";
         m_fatal = true;
     }
+    m_last_reset = std::chrono::high_resolution_clock::now();
 }
 
 Magewell::~Magewell(void)
@@ -1684,6 +1685,13 @@ void Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             continue;
         }
 
+        if (m_reset_video.load() == true)
+        {
+            if (m_verbose > 1)
+                cerr << "Video reset." << endl;
+            return;
+        }
+
         if (ullStatusBits & MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE)
         {
             if (m_verbose > 1)
@@ -1800,6 +1808,13 @@ void Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                      << "WARNING: Failed to get Notify status (frame "
                      << frame_cnt << ")\n";
             continue;
+        }
+
+        if (m_reset_video.load() == true)
+        {
+            if (m_verbose > 1)
+                cerr << "Video reset." << endl;
+            return;
         }
 
         if (ullStatusBits & MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE)
@@ -2299,6 +2314,7 @@ bool Magewell::capture_video(void)
         }
 #endif
 
+        m_reset_video.store(false);
         if (m_isEco)
             capture_eco_video(eco_params, eco_event, video_notify,
                               ullStatusBits, interlaced);
@@ -2406,5 +2422,20 @@ void Magewell::Shutdown(void)
             cerr << lock_ios() << "Magewell::Shutdown\n";
         m_out2ts->Shutdown();
         m_reset_audio.store(true);
+    }
+}
+
+void Magewell::Reset(void)
+{
+    chrono::high_resolution_clock::time_point end =
+        chrono::high_resolution_clock::now();
+
+    if (chrono::duration_cast<chrono::microseconds>(end - m_last_reset).count() > 2000)
+    {
+        if (m_verbose > 0)
+            cerr << "Magewell:Reset\n";
+        m_reset_audio.store(true);
+        m_reset_video.store(true);
+        m_last_reset = std::chrono::high_resolution_clock::now();
     }
 }

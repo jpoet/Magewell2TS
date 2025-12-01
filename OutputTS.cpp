@@ -106,7 +106,7 @@ static void log_packet(string where, const AVFormatContext* fmt_ctx,
 OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
                    const string & preset, int quality, int look_ahead,
                    bool no_audio, bool p010, const string & device,
-                   ShutdownCallback shutdown, AudioResetCallback audio_reset,
+                   ShutdownCallback shutdown, ResetCallback reset,
                    MagCallback image_buffer_avail)
     : m_verbose(verbose_level)
     , m_no_audio(no_audio)
@@ -117,7 +117,7 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     , m_look_ahead(look_ahead)
     , m_p010(p010)
     , f_shutdown(shutdown)
-    , f_audio_reset(audio_reset)
+    , f_reset(reset)
     , f_image_buffer_available(image_buffer_avail)
 {
     if (m_video_codec_name.find("qsv") != string::npos)
@@ -1703,7 +1703,7 @@ void OutputTS::mux(void)
                 {
                     if (m_verbose > 0)
                         cerr << "Warning: Audio glitch. Resetting.\n";
-                    f_audio_reset();
+                    f_reset();
                 }
                 this_thread::sleep_for(chrono::milliseconds(5));
                 continue;

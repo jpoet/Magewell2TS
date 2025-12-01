@@ -22,7 +22,7 @@ class OutputTS
 {
   public:
     using MagCallback = std::function<void (uint8_t*, void*)>;
-    using AudioResetCallback = std::function<void (void)>;
+    using ResetCallback = std::function<void (void)>;
     using ShutdownCallback = std::function<void (void)>;
 
     enum EncoderType { UNKNOWN, NV, VAAPI, QSV };
@@ -30,7 +30,7 @@ class OutputTS
     OutputTS(int verbose, const std::string & video_codec_name,
              const std::string & preset, int quality, int look_ahead,
              bool no_audio, bool p010, const std::string & device,
-             ShutdownCallback shutdown, AudioResetCallback audio_reset,
+             ShutdownCallback shutdown, ResetCallback reset,
              MagCallback image_buffer_avail);
     ~OutputTS(void);
 
@@ -192,7 +192,7 @@ class OutputTS
     std::mutex              m_container_mutex;
 
     ShutdownCallback        f_shutdown;
-    AudioResetCallback      f_audio_reset;
+    ResetCallback           f_reset;
     MagCallback             f_image_buffer_available;
     std::thread             m_mux_thread;
     std::thread             m_copy_thread;
