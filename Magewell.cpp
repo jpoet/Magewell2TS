@@ -2430,7 +2430,7 @@ void Magewell::Reset(void)
     chrono::high_resolution_clock::time_point end =
         chrono::high_resolution_clock::now();
 
-    if (chrono::duration_cast<chrono::microseconds>(end - m_last_reset).count() > 2000)
+    if (chrono::duration_cast<chrono::microseconds>(end - m_last_reset).count() > 4000)
     {
         if (m_verbose > 0)
             cerr << "Magewell:Reset\n";

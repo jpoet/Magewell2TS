@@ -1699,7 +1699,7 @@ void OutputTS::mux(void)
             if (!write_audio_frame(m_output_format_context,
                                    &m_audio_stream))
             {
-                if (++glitch_cnt % 20 == 0)
+                if (++glitch_cnt % 100 == 0)
                 {
                     if (m_verbose > 0)
                         cerr << "Warning: Audio glitch. Resetting.\n";
