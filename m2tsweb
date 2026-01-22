@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+
+
+import sys
+import cherrypy
+import threading
+import subprocess
+
+
+def http_methods_allowed(methods=['GET', 'HEAD']):
+    method = cherrypy.request.method.upper()
+    if method not in methods:
+        cherrypy.response.headers['Allow'] = ", ".join(methods)
+        raise cherrypy.HTTPError(405)
+
+cherrypy.tools.allow = cherrypy.Tool('on_start_resource', http_methods_allowed)
+
+
+class RootPage:
+
+    @cherrypy.expose
+    @cherrypy.tools.allow(methods=['GET', 'HEAD'])
+    def stream(self, input='1', codec='hevc_qsv', device='',  board='',
+               noAudio='', lookAhead='', quality='', preset=''):
+
+        cherrypy.response.stream = True
+        cherrypy.response.headers['Content-Type'] = 'application/octet-stream'
+
+        args = ['magewell2ts', '-m']
+        if input:
+            args += ['-i', input]
+        if codec:
+            args += ['-c', codec]
+        if device:
+            args += ['-d', device]
+        if board:
+            args += ['-b', board]
+        if noAudio:
+            args += ['-n']
+        if lookAhead:
+            args += ['-a', lookAhead]
+        if quality:
+            args += ['-q', quality]
+        if preset:
+            args += ['-p', preset]
+
+        def streamit():
+            process = subprocess.Popen(
+                args,
+                stdout=subprocess.PIPE,
+            )
+
+            try:
+                while True:
+                    data = process.stdout.read(16384)
+                    if not data:
+                        print(f'## end of file detected', file=sys.stderr)
+                        break
+                    yield data
+            except GeneratorExit:
+                print(f'## generator exited', file=sys.stderr)
+            except BrokenPipeError:
+                print(f'## broken pipe error', file=sys.stderr)
+            except Exception as e:
+                print(f'## an error occurred: {e}', file=sys.stderr)
+            print(f'## cleaning up', file=sys.stderr)
+            process.kill()
+            process.wait()
+            print(f'## done', file=sys.stderr)
+
+        return streamit()
+
+
+config = { 'global' :
+           { 'server.socket_host' : '0.0.0.0',
+             'server.socket_port' : 6502,
+             'tools.encode.on' : True,
+             'tools.encode.encoding':'utf8',
+             'tools.encode.text_only' : False,
+             'tools.decode.on' : True,
+             'tools.trailing_slash.on' : True,
+             'log.screen' : True
+             },
+        }
+
+
+cherrypy.quickstart(RootPage(), config=config)
