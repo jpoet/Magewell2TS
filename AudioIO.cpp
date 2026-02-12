@@ -40,6 +40,12 @@
 using namespace std;
 using namespace s6_lock_ios;
 
+/**
+ * @brief Convert AV error code to string representation
+ *
+ * @param code Error code to convert
+ * @return String representation of error code
+ */
 static std::string AVerr2str(int code)
 {
     char astr[AV_ERROR_MAX_STRING_SIZE] = { 0 };
@@ -47,18 +53,30 @@ static std::string AVerr2str(int code)
     return string(astr);
 }
 
+/**
+ * @brief Assignment operator implementation
+ *
+ * Copies all member variables from another AudioBuffer object
+ *
+ * @param rhs Right-hand side object to copy from
+ * @return Reference to this object
+ */
 AudioBuffer& AudioBuffer::operator=(const AudioBuffer & rhs)
 {
     if (this == &rhs)
         return *this;
 
+    // Reset EOF flag
     m_EoF                  = false;
+
+    // Copy S/PDIF context pointers
     m_spdif_format_context = rhs.m_spdif_format_context;
     m_spdif_avio_context   = rhs.m_spdif_avio_context;
     m_spdif_avio_context_buffer = rhs.m_spdif_avio_context_buffer;
     m_spdif_codec          = rhs.m_spdif_codec;
     m_spdif_codec_id       = rhs.m_spdif_codec_id;
 
+    // Copy audio properties
     m_lpcm                 = rhs.m_lpcm;
     av_channel_layout_copy(&m_channel_layout, &rhs.m_channel_layout);
     m_codec_name           = rhs.m_codec_name;
@@ -69,6 +87,7 @@ AudioBuffer& AudioBuffer::operator=(const AudioBuffer & rhs)
     m_sample_rate          = rhs.m_sample_rate;
     m_block_size           = rhs.m_block_size;
 
+    // Copy other properties
     m_parent               = rhs.m_parent;
     m_id                   = rhs.m_id;
     m_verbose              = rhs.m_verbose;
@@ -76,6 +95,12 @@ AudioBuffer& AudioBuffer::operator=(const AudioBuffer & rhs)
     return *this;
 }
 
+/**
+ * @brief Equality operator implementation
+ *
+ * @param rhs Right-hand side object to compare with
+ * @return true if objects are equal, false otherwise
+ */
 bool AudioBuffer::operator==(const AudioBuffer & rhs)
 {
     if (this == &rhs)
@@ -83,6 +108,21 @@ bool AudioBuffer::operator==(const AudioBuffer & rhs)
     return false;
 }
 
+/**
+ * @brief Constructor for AudioBuffer
+ *
+ * Initializes an audio buffer with specified parameters and sets up basic properties
+ *
+ * @param num_channels Number of audio channels
+ * @param is_lpcm Flag indicating if audio is LPCM format
+ * @param bytes_per_sample Number of bytes per audio sample
+ * @param sample_rate Audio sample rate
+ * @param samples_per_frame Number of samples per audio frame
+ * @param frame_size Size of audio frame in bytes
+ * @param parent Pointer to parent AudioIO object
+ * @param verbose Verbose level for logging
+ * @param id Unique identifier for this buffer
+ */
 AudioBuffer::AudioBuffer(int num_channels, bool is_lpcm,
                          int bytes_per_sample, int sample_rate,
                          int samples_per_frame, int frame_size,
@@ -97,14 +137,25 @@ AudioBuffer::AudioBuffer(int num_channels, bool is_lpcm,
     , m_id(id)
     , m_verbose(verbose)
 {
+    // Calculate block size based on audio parameters
     m_block_size = 8 * m_bytes_per_sample * m_samples_per_frame * 8;
 }
 
+/**
+ * @brief Destructor for AudioBuffer
+ *
+ * Sets EOF flag to signal destruction
+ */
 AudioBuffer::~AudioBuffer(void)
 {
     m_EoF.store(true);
 }
 
+/**
+ * @brief Clear all queued audio frames
+ *
+ * Acquires mutex lock and clears both audio and probed queues
+ */
 void AudioBuffer::PurgeQueue(void)
 {
     const unique_lock<mutex> lock(m_write_mutex);
@@ -115,6 +166,12 @@ void AudioBuffer::PurgeQueue(void)
              << "[" << m_id << "] audio buffer cleared.\n";
 }
 
+/**
+ * @brief Print current buffer state for debugging
+ *
+ * @param where Location identifier for logging
+ * @param force Force printing regardless of verbose level
+ */
 void AudioBuffer::PrintState(const string & where, bool force) const
 {
     if (force || m_verbose > 0)
@@ -137,6 +194,15 @@ void AudioBuffer::PrintState(const string & where, bool force) const
     }
 }
 
+/**
+ * @brief Add an audio frame to the buffer queue
+ *
+ * Adds an audio frame to the queue and notifies waiting readers
+ *
+ * @param buf Pointer to audio frame data to add
+ * @param timestamp Timestamp for the frame
+ * @return true if successful, false otherwise
+ */
 bool AudioBuffer::Add(AudioFrame *& buf, int64_t timestamp)
 {
 #if 0
@@ -148,6 +214,7 @@ bool AudioBuffer::Add(AudioFrame *& buf, int64_t timestamp)
 #endif
 
     {
+        // Acquire write mutex and add frame to queue
         const unique_lock<mutex> lock(m_write_mutex);
         {
             m_total_write += buf->size();
@@ -155,10 +222,20 @@ bool AudioBuffer::Add(AudioFrame *& buf, int64_t timestamp)
         }
     }
 
+    // Notify waiting readers that new data is available
     m_data_avail.notify_one();
     return true;
 }
 
+/**
+ * @brief Read audio data from buffer
+ *
+ * Reads audio data from the queue, handling EOF conditions and buffering
+ *
+ * @param buf Destination buffer to read into
+ * @param len Length of data to read
+ * @return Number of bytes read, or AVERROR_EOF on EOF
+ */
 int AudioBuffer::Read(uint8_t* buf, uint32_t len)
 {
     uint8_t* dest = buf;
@@ -166,6 +243,7 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
 
     unique_lock<mutex> lock(m_write_mutex);
 
+    // Wait for data to become available or EOF
     while (m_audio_queue.empty())
     {
         if (m_EoF.load() == true)
@@ -188,38 +266,51 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
 
     AudioFrame* frame;
     uint32_t frm = 0;
+    // Process frames until requested length is filled or queue is empty
     while (frm + m_frame_size <= len)
     {
         frame = m_audio_queue.begin()->frame;
         pkt_sz = frame->size();
 
+        // Copy frame data to destination
         copy(frame->begin(), frame->end(), dest);
 
         dest += pkt_sz;
         frm += pkt_sz;
 
+        // Move frame to probed queue if probing, otherwise delete it
         if (m_probing)
             m_probed_queue.push_back(m_audio_queue.front());
         else
         {
             ++m_pkts_read;
-            delete frame;
+            delete frame;  // Important: This is where memory is freed
         }
 
+        // Update timestamp if needed
         if (ts == m_parent->m_timestamp)
             ts = m_audio_queue.front().timestamp;
 
+        // Remove processed frame from queue
         m_audio_queue.pop_front();
         if (m_audio_queue.empty())
             break;
     }
 
+    // Update parent timestamp
     m_parent->m_timestamp = ts;
     m_total_read += frm;
 
     return frm;
 }
 
+/**
+ * @brief Read audio frame from S/PDIF input
+ *
+ * Reads an audio frame directly from S/PDIF input using FFmpeg's av_read_frame
+ *
+ * @return Pointer to AVPacket containing audio frame, or nullptr on error
+ */
 AVPacket* AudioBuffer::ReadSPDIF(void)
 {
     AVPacket* pkt = av_packet_alloc();
@@ -231,6 +322,7 @@ AVPacket* AudioBuffer::ReadSPDIF(void)
         return nullptr;
     }
 
+    // Check if S/PDIF context is valid
     if (m_spdif_format_context == nullptr)
     {
         cerr << lock_ios()
@@ -238,6 +330,7 @@ AVPacket* AudioBuffer::ReadSPDIF(void)
         return nullptr;
     }
 
+    // Wait for data to become available or EOF
     while (m_audio_queue.empty())
     {
         if (m_EoF.load() == true)
@@ -246,10 +339,12 @@ AVPacket* AudioBuffer::ReadSPDIF(void)
         m_data_avail.wait_for(lock, chrono::microseconds(100));
     }
 
+    // Read frame from S/PDIF context
     int ret = av_read_frame(m_spdif_format_context, pkt);
 
     if (ret < 0)
     {
+        // Free packet on error
         av_packet_free(&pkt);
         if (ret != AVERROR_EOF && m_verbose > 0)
             cerr << lock_ios()
@@ -268,6 +363,16 @@ AVPacket* AudioBuffer::ReadSPDIF(void)
     return pkt;
 }
 
+/**
+ * @brief Read callback function for AVIO context
+ *
+ * This function is used as a callback for reading data through AVIO context
+ *
+ * @param opaque Pointer to AudioBuffer object
+ * @param buf Buffer to read data into
+ * @param buf_size Size of buffer
+ * @return Number of bytes read, or negative error code
+ */
 static int read_packet(void* opaque, uint8_t* buf, int buf_size)
 {
     AudioBuffer* q = reinterpret_cast<AudioBuffer* >(opaque);
@@ -275,9 +380,15 @@ static int read_packet(void* opaque, uint8_t* buf, int buf_size)
     return q->Read(buf, buf_size);
 }
 
+/**
+ * @brief Initialize buffer after probing
+ *
+ * Copies probed frames to main queue and sets initialization state
+ */
 void AudioBuffer::initialized(void)
 {
     unique_lock<mutex> lock(m_write_mutex);
+    // Move probed frames to main queue
     copy(m_probed_queue.begin(), m_probed_queue.end(),
          std::inserter(m_audio_queue, m_audio_queue.begin()));
     m_probed_queue.clear();
@@ -286,8 +397,16 @@ void AudioBuffer::initialized(void)
     PrintState("Init");
 }
 
+/**
+ * @brief Open S/PDIF format context
+ *
+ * Allocates and initializes the S/PDIF format context for audio input
+ *
+ * @return true if successful, false otherwise
+ */
 bool AudioBuffer::open_spdif_context(void)
 {
+    // Free existing context if present
     if (m_spdif_format_context)
     {
         avformat_close_input(&m_spdif_format_context);
@@ -305,6 +424,7 @@ bool AudioBuffer::open_spdif_context(void)
         m_spdif_format_context = nullptr;
     }
 
+    // Allocate new format context
     if (!(m_spdif_format_context = avformat_alloc_context()))
     {
         cerr << lock_ios()
@@ -313,6 +433,7 @@ bool AudioBuffer::open_spdif_context(void)
         return false;
     }
 
+    // Allocate buffer for AVIO context
     m_spdif_avio_context_buffer =
         reinterpret_cast<uint8_t* >(av_malloc(m_frame_size));
     if (!m_spdif_avio_context_buffer)
@@ -323,6 +444,7 @@ bool AudioBuffer::open_spdif_context(void)
         return false;
     }
 
+    // Create AVIO context
     m_spdif_avio_context = avio_alloc_context(m_spdif_avio_context_buffer,
                                               m_frame_size,
                                               0,
@@ -340,6 +462,7 @@ bool AudioBuffer::open_spdif_context(void)
 
     m_spdif_format_context->pb = m_spdif_avio_context;
 
+    // Find S/PDIF input format
     const AVInputFormat* spdif_fmt = av_find_input_format("spdif");
 
     if (0 > avformat_open_input(&m_spdif_format_context, NULL,
@@ -353,6 +476,13 @@ bool AudioBuffer::open_spdif_context(void)
     return true;
 }
 
+/**
+ * @brief Open S/PDIF input for audio format detection
+ *
+ * Probes and opens S/PDIF input to detect audio codec parameters
+ *
+ * @return true if successful, false otherwise
+ */
 bool AudioBuffer::open_spdif(void)
 {
     /* retrieve stream information */
@@ -378,6 +508,7 @@ bool AudioBuffer::open_spdif(void)
             return false;
         }
 
+        // Probe input buffer for format detection
         if ((ret = av_probe_input_buffer(m_spdif_avio_context,
                                          &fmt, "", nullptr, 0,
                                          0)) != 0)
@@ -395,6 +526,7 @@ bool AudioBuffer::open_spdif(void)
                  << "' '" << fmt->long_name << "'" << endl;
         }
 
+        // Find stream information
         if (0 > avformat_find_stream_info(m_spdif_format_context, NULL))
         {
             cerr << lock_ios()
@@ -416,6 +548,7 @@ bool AudioBuffer::open_spdif(void)
         av_channel_layout_copy(&m_channel_layout,
                                &audio_stream->codecpar->ch_layout);
 
+        // Handle channel layout for EAC3 encoder compatibility
         if (m_channel_layout.nb_channels > 6)
             // HACK!  FFmpeg complains:
             /* Specified channel layout '7.1' is not supported by the
@@ -477,10 +610,18 @@ bool AudioBuffer::open_spdif(void)
     return true;
 }
 
+/**
+ * @brief Detect audio codec from input
+ *
+ * Detects audio codec by probing S/PDIF input or using LPCM parameters
+ *
+ * @return true if successful, false otherwise
+ */
 bool AudioBuffer::DetectCodec(void)
 {
     cerr << lock_ios() << "Detecting codec\n";
 
+    // Handle LPCM case directly
     if (m_lpcm)
     {
          m_codec_name = "ac3";
@@ -534,12 +675,25 @@ bool AudioBuffer::DetectCodec(void)
 /************************************************
  * AudioIO
  ************************************************/
+/**
+ * @brief Constructor for AudioIO
+ *
+ * Initializes AudioIO with a discard callback and verbose level
+ *
+ * @param discard Callback function for discarding images
+ * @param verbose Verbose level for logging
+ */
 AudioIO::AudioIO(DiscardImageCallback discard, int verbose)
     : f_discard_images(discard)
     , m_verbose(verbose)
 {
 }
 
+/**
+ * @brief Shutdown audio I/O system
+ *
+ * Signals all buffers to stop and sets running flag to false
+ */
 void AudioIO::Shutdown(void)
 {
     if (m_running.exchange(false))
@@ -552,6 +706,19 @@ void AudioIO::Shutdown(void)
     }
 }
 
+/**
+ * @brief Add a new audio buffer with specified parameters
+ *
+ * Creates a new audio buffer and adds it to the queue
+ *
+ * @param num_channels Number of audio channels
+ * @param is_lpcm Flag indicating LPCM format
+ * @param bytes_per_sample Bytes per audio sample
+ * @param sample_rate Audio sample rate
+ * @param samples_per_frame Samples per audio frame
+ * @param frame_size Size of audio frame in bytes
+ * @return true if successful, false otherwise
+ */
 bool AudioIO::AddBuffer(int num_channels, bool is_lpcm,
                         int bytes_per_sample, int sample_rate,
                         int samples_per_frame, int frame_size)
@@ -563,12 +730,14 @@ bool AudioIO::AddBuffer(int num_channels, bool is_lpcm,
         if (m_running.load() == false)
             return false;
 
+        // Set EOF on previous buffer if exists
         if (!m_buffer_q.empty())
         {
             Ibuf = m_buffer_q.end() - 1;
             (*Ibuf).setEoF();
         }
 
+        // Create new buffer and add to queue
         m_buffer_q.push_back(AudioBuffer(num_channels, is_lpcm,
                                          bytes_per_sample, sample_rate,
                                          samples_per_frame, frame_size,
@@ -593,6 +762,11 @@ bool AudioIO::AddBuffer(int num_channels, bool is_lpcm,
     return true;
 }
 
+/**
+ * @brief Rescan S/PDIF input for audio format detection
+ *
+ * @return true if successful, false otherwise
+ */
 bool AudioIO::RescanSPDIF(void)
 {
     if (!m_buffer_q.empty())
@@ -600,6 +774,11 @@ bool AudioIO::RescanSPDIF(void)
     return false;
 }
 
+/**
+ * @brief Get current buffer ID
+ *
+ * @return Current buffer ID
+ */
 int AudioIO::BufId(void) const
 {
     const std::unique_lock<std::mutex> lock(m_buffer_mutex);
@@ -611,6 +790,11 @@ int AudioIO::BufId(void) const
     return (*Ibuf).Id();
 }
 
+/**
+ * @brief Get total size of buffered audio data
+ *
+ * @return Total size in bytes
+ */
 int AudioIO::Size(void) const
 {
     const std::unique_lock<std::mutex> lock(m_buffer_mutex);
@@ -628,6 +812,11 @@ int AudioIO::Size(void) const
     return sz;
 }
 
+/**
+ * @brief Check if all buffers are empty
+ *
+ * @return true if empty, false otherwise
+ */
 bool AudioIO::Empty(void) const
 {
     const std::unique_lock<std::mutex> lock(m_buffer_mutex);
@@ -644,6 +833,11 @@ bool AudioIO::Empty(void) const
     return true;
 }
 
+/**
+ * @brief Check if first buffer is ready for data
+ *
+ * @return true if ready, false otherwise
+ */
 bool AudioIO::BlockReady(void) const
 {
     const std::unique_lock<std::mutex> lock(m_buffer_mutex);
@@ -660,6 +854,13 @@ bool AudioIO::BlockReady(void) const
 }
 
 
+/**
+ * @brief Add audio frame to the last buffer
+ *
+ * @param buf Pointer to audio frame data
+ * @param timestamp Timestamp for the frame
+ * @return true if successful, false otherwise
+ */
 bool AudioIO::Add(AudioBuffer::AudioFrame *& buf, int64_t timestamp)
 {
     const unique_lock<mutex> lock(m_buffer_mutex);
@@ -677,7 +878,7 @@ bool AudioIO::Add(AudioBuffer::AudioFrame *& buf, int64_t timestamp)
     {
         cerr << lock_ios() << "\nWARNING: AudioIO::Add buf size: "
              << buf.size() << " expected " << (*Ibuf).FrameSize() << "\n"
-             << "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n";
+             << "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n";
         return false;
     }
 #endif
@@ -685,6 +886,13 @@ bool AudioIO::Add(AudioBuffer::AudioFrame *& buf, int64_t timestamp)
     return (*m_Iback).Add(buf, timestamp);
 }
 
+/**
+ * @brief Read audio data from first buffer
+ *
+ * @param dest Destination buffer to read into
+ * @param len Length of data to read
+ * @return Number of bytes read
+ */
 int AudioIO::Read(uint8_t* dest, int len)
 {
     if (m_buffer_q.empty())
@@ -698,6 +906,11 @@ int AudioIO::Read(uint8_t* dest, int len)
     return (*Ibuf).Read(dest, len);
 }
 
+/**
+ * @brief Read audio frame from S/PDIF input
+ *
+ * @return Pointer to AVPacket containing audio frame, or nullptr on error
+ */
 AVPacket* AudioIO::ReadSPDIF(void)
 {
     if (m_buffer_q.empty())
@@ -710,6 +923,11 @@ AVPacket* AudioIO::ReadSPDIF(void)
     return m_buffer_q.begin()->ReadSPDIF();
 }
 
+/**
+ * @brief Get channel layout from first buffer
+ *
+ * @return Pointer to channel layout structure or nullptr if empty
+ */
 const AVChannelLayout* AudioIO::ChannelLayout(void) const
 {
     const lock_guard<mutex> lock(m_buffer_mutex);
@@ -718,6 +936,11 @@ const AVChannelLayout* AudioIO::ChannelLayout(void) const
     return m_buffer_q.begin()->ChannelLayout();
 }
 
+/**
+ * @brief Clear all audio queues
+ *
+ * Clears audio queues in the first buffer
+ */
 void AudioIO::PurgeQueue(void)
 {
     const lock_guard<mutex> lock(m_buffer_mutex);
@@ -726,6 +949,11 @@ void AudioIO::PurgeQueue(void)
     return m_buffer_q.begin()->PurgeQueue();
 }
 
+/**
+ * @brief Reset audio system
+ *
+ * @param where Location identifier for logging
+ */
 void AudioIO::Reset(const string & where)
 {
     if (m_verbose > 2)
@@ -736,10 +964,16 @@ void AudioIO::Reset(const string & where)
     return m_buffer_q.begin()->SetReady(false);
 }
 
+/**
+ * @brief Check if audio codec has changed
+ *
+ * @return true if codec changed, false otherwise
+ */
 bool AudioIO::CodecChanged(void)
 {
     {
         const lock_guard<mutex> lock(m_buffer_mutex);
+        // Remove flushed buffers
         while (!m_buffer_q.empty() && m_buffer_q.begin()->Flushed())
             m_buffer_q.pop_front();
         if (m_buffer_q.empty())
@@ -748,6 +982,7 @@ bool AudioIO::CodecChanged(void)
             return false;
         }
 
+        // If buffer is already initialized, no change
         if (m_buffer_q.begin()->IsReady())
             return false;
     }
@@ -756,6 +991,7 @@ bool AudioIO::CodecChanged(void)
     if (!(*Ibuf).LPCM())
         f_discard_images(true);
 
+    // Detect new codec
     if (!(*Ibuf).DetectCodec())
     {
 #if 1
@@ -769,6 +1005,7 @@ bool AudioIO::CodecChanged(void)
     if (!(*Ibuf).LPCM())
         f_discard_images(false);
 
+    // Update codec parameters if changed
     if (m_codec_name != (*Ibuf).CodecName())
     {
         if (m_verbose > 1)
