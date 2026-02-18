@@ -619,7 +619,7 @@ bool AudioBuffer::open_spdif(void)
  */
 bool AudioBuffer::DetectCodec(void)
 {
-    cerr << lock_ios() << "Detecting codec\n";
+    cerr << lock_ios() << "[" << m_id << "] Detecting codec\n";
 
     // Handle LPCM case directly
     if (m_lpcm)
@@ -655,11 +655,9 @@ bool AudioBuffer::DetectCodec(void)
             return true;
         }
 
-        if (idx > 11)
+        if (++idx > 3)
         {
-#if 0
             raise(SIGHUP);
-#endif
             break;
         }
 
@@ -667,7 +665,7 @@ bool AudioBuffer::DetectCodec(void)
         m_data_avail.wait_for(lock, chrono::microseconds(500));
     }
 
-    initialized();
+    cerr << lock_ios() << "[" << m_id << "] Detect codec failed\n";
     setEoF();
     return false;
 }
@@ -959,9 +957,10 @@ void AudioIO::Reset(const string & where)
     if (m_verbose > 2)
         cerr << lock_ios() << "AudioIO Reset by " << where << endl;
     const lock_guard<mutex> lock(m_buffer_mutex);
+    m_codec_name.clear();
     if (m_buffer_q.empty())
         return;
-    return m_buffer_q.begin()->SetReady(false);
+    m_buffer_q.pop_front();
 }
 
 /**
@@ -998,7 +997,7 @@ bool AudioIO::CodecChanged(void)
         cerr << lock_ios()
              << "Failed to detect S/PDIF\n";
 #endif
-        m_codec_name.clear();
+        Reset("AudioIO::CodecChanged");
         return false;
     }
 

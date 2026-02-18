@@ -1863,7 +1863,10 @@ void OutputTS::mux(void)
                 {
                     if (m_verbose > 0)
                         cerr << "Warning: Audio glitch. Resetting.\n";
+                    m_audioIO->Reset("OutputTS::mux");
                     f_reset();
+                    ClearVideoPool();
+                    ClearImageQueue();
                 }
                 this_thread::sleep_for(chrono::milliseconds(5));
                 continue;

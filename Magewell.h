@@ -16,10 +16,10 @@
 
 /**
  * @brief Magewell class for controlling video capture cards using Magewell API
- * 
+ *
  * This class provides functionality to open channels, capture video and audio,
  * handle HDR information, and manage video buffers for Magewell capture devices.
- * 
+ *
  * @author John Patrick Poet
  * @date 2022-2025
  */
@@ -36,7 +36,7 @@ class Magewell
 public:
     /**
      * @brief Constructor for Magewell class
-     * 
+     *
      * Initializes the MWCapture library instance. If initialization fails,
      * sets fatal error flag.
      */
@@ -44,7 +44,7 @@ public:
 
     /**
      * @brief Destructor for Magewell class
-     * 
+     *
      * Cleans up resources by closing the channel and exiting the MWCapture instance.
      */
     ~Magewell(void);
@@ -228,7 +228,7 @@ private:
      * @param ullStatusBits Status bits
      * @param interlaced Whether video is interlaced
      */
-    void capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
+    bool capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                            int eco_event,
                            HNOTIFY video_notify,
                            ULONGLONG ullStatusBits,
@@ -245,7 +245,7 @@ private:
      * @param ullStatusBits Status bits
      * @param interlaced Whether video is interlaced
      */
-    void capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
+    bool capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                            HNOTIFY video_notify,
                            MWCAP_PTR notify_event,
                            MWCAP_PTR capture_event,
@@ -262,9 +262,9 @@ private:
 
     /**
      * @brief Capture audio data
-     * @return true always
      */
-    bool capture_audio(void);
+    void capture_audio_loop(void);
+    void capture_audio(void);
 
 private:
     // Audio buffer parameters

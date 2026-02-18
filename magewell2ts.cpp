@@ -47,7 +47,6 @@ void signal_handler(int signum)
 {
     if (signum == SIGHUP || signum == SIGUSR1)
     {
-        cerr << "\n\nResetting audio.\n" << endl;
         g_mw.Reset();
     }
     else if (signum == SIGINT || signum == SIGTERM)

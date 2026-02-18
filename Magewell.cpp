@@ -975,10 +975,8 @@ int EcoEventWait(mw_event_t event, int timeout/*ms*/)
  * @brief Capture audio data from the device
  *
  * Main audio capture loop that handles audio frame acquisition and processing.
- *
- * @return true always
  */
-bool Magewell::capture_audio(void)
+void Magewell::capture_audio_loop(void)
 {
     bool      lpcm = false;
     int       bytes_per_sample = 0;
@@ -1034,7 +1032,7 @@ bool Magewell::capture_audio(void)
         {
             cerr << lock_ios() << "ERROR: Failed to create eco event.\n";
             Shutdown();
-            return false;
+            return;
         }
         notify_audio  = MWRegisterNotify(m_channel, eco_event,
                                          (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
@@ -1049,7 +1047,7 @@ bool Magewell::capture_audio(void)
         {
             cerr << lock_ios() << "ERROR: create notify_event fail\n";
             Shutdown();
-            return false;
+            return;
         }
         notify_audio  = MWRegisterNotify(m_channel, notify_event,
                                          (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
@@ -1099,7 +1097,7 @@ bool Magewell::capture_audio(void)
             if (m_reset_audio.load() == true)
             {
                 if (m_verbose > 1)
-                    cerr << "Audio reset." << endl;
+                    cerr << "Audio re-initializing." << endl;
                 params_changed = true;
             }
             if (lpcm != audio_signal_status.bLPCM)
@@ -1189,8 +1187,11 @@ bool Magewell::capture_audio(void)
 
         err_cnt = 0;
         frame_cnt = 0;
-        while (m_reset_audio.load() == false)
+        for (;;)
         {
+            if (m_reset_audio.load() == true)
+                goto audio_capture_stoped;
+
             // Wait for notification
             if (m_isEco)
             {
@@ -1237,7 +1238,7 @@ bool Magewell::capture_audio(void)
             {
                 if (m_verbose > 0)
                     cerr << lock_ios()
-                         << "WARNING: Audio input RESET!\n";
+                         << "WARNING: Audio input restarting.\n";
                 this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
                 break;
             }
@@ -1347,9 +1348,6 @@ bool Magewell::capture_audio(void)
     cerr << lock_ios()
          << "\nAudio Capture finished.\n" << endl;
 
-    // Shutdown audio capture
-    Shutdown();
-
     // Clean up notification resources
     if (notify_audio)
     {
@@ -1371,8 +1369,17 @@ bool Magewell::capture_audio(void)
         MWCloseEvent(notify_event);
         notify_event = 0;
     }
+}
 
-    return true;
+void Magewell::capture_audio(void)
+{
+    while (m_running.load() == true)
+    {
+        capture_audio_loop();
+    }
+
+    // Make sure other threads stop.
+    Shutdown();
 }
 
 /**
@@ -1921,8 +1928,10 @@ void Magewell::set_notify(HNOTIFY&  notify,
  * @param video_notify Video notification handle
  * @param ullStatusBits Status bits
  * @param interlaced Whether video is interlaced
+ *
+ * @return true if reset needed
  */
-void Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
+bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                                  int eco_event,
                                  HNOTIFY video_notify,
                                  ULONGLONG ullStatusBits,
@@ -1965,7 +1974,7 @@ void Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         {
             if (m_verbose > 1)
                 cerr << "Video reset." << endl;
-            return;
+            return true;
         }
 
         // Handle signal change
@@ -1975,7 +1984,7 @@ void Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 cerr << lock_ios()
                      << "MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE\n";
             this_thread::sleep_for(chrono::milliseconds(5));
-            return;
+            return false;
         }
 
         // Check if we have enough buffers
@@ -2034,6 +2043,8 @@ void Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                              m_num_pixels, timestamp))
             Shutdown();
     }
+
+    return true;
 }
 
 /**
@@ -2049,8 +2060,10 @@ void Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
  * @param event_mask Event mask
  * @param ullStatusBits Status bits
  * @param interlaced Whether video is interlaced
+ *
+ * @return true if reset needed
  */
-void Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
+bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                                  HNOTIFY video_notify,
                                  MWCAP_PTR notify_event,
                                  MWCAP_PTR capture_event,
@@ -2100,7 +2113,7 @@ void Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         {
             if (m_verbose > 1)
                 cerr << "Video reset." << endl;
-            return;
+            return true;
         }
 
         // Handle signal change
@@ -2110,7 +2123,7 @@ void Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 cerr << lock_ios()
                      << "MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE\n";
             this_thread::sleep_for(chrono::milliseconds(5));
-            return;
+            return false;
         }
 
         // Check signal lock status
@@ -2122,7 +2135,7 @@ void Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                      << "WARNING: Video signal lost lock. (frame "
                      << frame_cnt << ")\n";
             this_thread::sleep_for(chrono::milliseconds(5));
-            return;
+            return false;
         }
 
         // Check event mask
@@ -2235,6 +2248,8 @@ void Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                                      m_num_pixels, timestamp))
             Shutdown();
     }
+
+    return true;
 }
 
 /**
@@ -2616,13 +2631,13 @@ bool Magewell::capture_video(void)
 
         m_reset_video.store(false);
         if (m_isEco)
-            capture_eco_video(eco_params, eco_event, video_notify,
-                              ullStatusBits, interlaced);
+            params_changed = capture_eco_video(eco_params, eco_event, video_notify,
+                                               ullStatusBits, interlaced);
         else
-            capture_pro_video(eco_params, video_notify,
-                              notify_event, capture_event,
-                              frame_wrap_idx, event_mask,
-                              ullStatusBits, interlaced);
+            params_changed = capture_pro_video(eco_params, video_notify,
+                                               notify_event, capture_event,
+                                               frame_wrap_idx, event_mask,
+                                               ullStatusBits, interlaced);
     }
 
     if (m_isEco)
