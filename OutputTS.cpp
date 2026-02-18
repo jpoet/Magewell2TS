@@ -1142,6 +1142,7 @@ bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
             }
             return false;
         }
+        ++ost->frames_written;
     }
 
     return ret == AVERROR_EOF ? false : true;
@@ -1861,7 +1862,9 @@ void OutputTS::mux(void)
             {
                 if (++glitch_cnt % 100 == 0)
                 {
-                    if (m_verbose > 0)
+                    if (m_video_stream.frames_written > 900)
+                        cerr << "Damaged: Audio glitch. Resetting.\n";
+                    else if (m_verbose > 0)
                         cerr << "Warning: Audio glitch. Resetting.\n";
                     m_audioIO->Reset("OutputTS::mux");
                     f_reset();

@@ -88,6 +88,7 @@ class OutputTS
 
         FramePool* frames          {nullptr};
 
+        int frames_written         {0};
         int frames_idx_in          {-1};
         int frames_idx_out         {-1};
         int frames_total           {10};
