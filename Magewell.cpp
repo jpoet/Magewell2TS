@@ -2778,7 +2778,7 @@ void Magewell::Reset(void)
         chrono::high_resolution_clock::now();
 
     // Rate limit resets to prevent excessive resets
-    if (chrono::duration_cast<chrono::microseconds>(end - m_last_reset).count() > 2000)
+    if (chrono::duration_cast<chrono::microseconds>(end - m_last_reset).count() > 4000)
     {
         if (m_verbose > 0)
             cerr << "Magewell:Reset\n";
