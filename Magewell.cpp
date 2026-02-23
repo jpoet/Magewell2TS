@@ -2077,7 +2077,15 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
 
     uint8_t* pbImage = nullptr;
     int64_t  timestamp = -1;
-    int64_t  prev_timestamp = -1;
+    int64_t  previous_ts = -1;
+    int64_t  expected_ts = -1;
+    int64_t  frame_ts    = -1;
+#if 0
+    long long card_ts    = -1;
+#endif
+    int      previous_idx = -1;
+
+    int      quarter_dur = eco_params.llFrameDuration / 4;
 
     MWCAP_VIDEO_BUFFER_INFO   videoBufferInfo;
     MWCAP_VIDEO_FRAME_INFO    videoFrameInfo;
@@ -2154,6 +2162,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         }
 
         // Manage frame index
+        previous_idx = frame_idx;
         if (frame_idx == -1)
         {
             frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
@@ -2175,18 +2184,48 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             continue;
         }
 
-        // Get timestamp
-        prev_timestamp = timestamp;
-        timestamp = interlaced
-                    ? videoFrameInfo.allFieldBufferedTimes[1]
-                    : videoFrameInfo.allFieldBufferedTimes[0];
-        if (timestamp == prev_timestamp)
+        frame_ts = videoFrameInfo.allFieldBufferedTimes[0];
+#if 0
+        MWGetDeviceTime(m_channel, &card_ts);
+#endif
+        if (frame_ts == -1)
+            timestamp = expected_ts;
+        else
         {
-            if (m_verbose > 1)
-                cerr << lock_ios()
-                     << "WARNING: Already processed TS " << timestamp << "\n";
-             continue;
+            timestamp = frame_ts;
+
+            if (timestamp < expected_ts - quarter_dur ||
+                expected_ts + quarter_dur < timestamp)
+            {
+                if (expected_ts >= 0)
+                {
+                    if (m_verbose > 2)
+                    {
+                        cerr << lock_ios()
+                             << "WARNING: Unexpected TimeStamp " << "[" << previous_idx << " -> "
+                             << frame_idx << "]"
+                             << " diff:" << expected_ts - timestamp
+                             << " prev:" << previous_ts
+                             << " expected:" << expected_ts
+                             << " actual:" << timestamp
+#if 0
+                             << " cardTS:" << card_ts
+                             << " diff: " << card_ts - timestamp
+#endif
+                             << "\n";
+                    }
+                    if (timestamp > expected_ts)
+                    {
+                        if (m_verbose > 0)
+                            cerr << "WARNING: Magewell driver lost a frame. Can't keep up!\n";
+                    }
+                    else
+                        timestamp = expected_ts;
+                }
+            }
         }
+        expected_ts = timestamp + eco_params.llFrameDuration;
+        previous_ts = timestamp;
 
         // Get available buffer
         m_image_buffer_mutex.lock();

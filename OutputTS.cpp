@@ -934,9 +934,9 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     m_input_frame_duration = frame_duration;
     m_input_frame_rate = frame_rate;
     m_isHDR = is_hdr;
-    m_frame_buffers = 10 +
-                      (m_p010 || m_isHDR ? 5 : 0) +
-                      (m_input_width > 1920 ? 10 : 0);
+    m_frame_buffers = 12 +
+                      (m_p010 || m_isHDR ? 20 : 0) +
+                      std::exp(max(22 - m_quality, 1));
 
     double fps = static_cast<double>(frame_rate.num) / frame_rate.den;
 
@@ -1588,6 +1588,7 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     av_dict_copy(&opt, opt_arg, 0);
 
     // Set encoder options
+    av_opt_set(ost->enc->priv_data, "rc_mode", "ICQ", 0);
     ost->enc->global_quality = m_quality;
 
     if (m_video_codec_name != "av1_qsv")
@@ -1982,12 +1983,15 @@ void OutputTS::copy_to_frame(void)
     void*    pEco;
     int      image_size;
     int64_t  timestamp;
+    int64_t  prev_ts = -1;
+    int64_t  prev_pts = -1;
+    int      prev_idx = -1;
 
     while (m_running.load() == true)
     {
         {
             unique_lock<mutex> lock(m_videopool_mutex);
-            if (m_video_stream.frames_used == m_video_stream.frames_total)
+            if (m_video_stream.frames_used >= m_video_stream.frames_total - 1)
             {
                 if (m_verbose > 2)
                     cerr << lock_ios() << "Frame pool is full ("
@@ -2030,6 +2034,27 @@ void OutputTS::copy_to_frame(void)
         frm->pts = av_rescale_q(timestamp,
                                 m_input_time_base,
                                 m_video_stream.enc->time_base);
+
+        if (frm->pts <= prev_pts)
+        {
+            if (m_verbose > 0)
+            {
+                cerr << lock_ios()
+                     << "WARNING: copy_frame: scaled pts did not increase: "
+                     << "[" << prev_idx << "] -> ["
+                     << m_video_stream.frames_idx_in << "] / "
+                     << m_video_stream.frames_used << "; "
+                     << prev_pts << " -> " << frm->pts << ". TS "
+                     << prev_ts << " -> " << timestamp
+                     << " diff:" << timestamp - prev_ts
+                     << " expected: " << m_input_frame_duration
+                     << "\n";
+            }
+            ++frm->pts;
+        }
+        prev_pts = frm->pts;
+        prev_ts = timestamp;
+        prev_idx = m_video_stream.frames_idx_in;
 
         // Copy frame data based on pixel format
         if (m_video_stream.enc->pix_fmt == AV_PIX_FMT_YUV420P)
