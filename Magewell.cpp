@@ -1220,6 +1220,7 @@ void Magewell::capture_audio_loop(void)
                                                   &notify_status))
                 continue;
 
+#if 0
             // Handle signal change
             if (!m_isEco)
             {
@@ -1232,6 +1233,7 @@ void Magewell::capture_audio_loop(void)
                     break;
                 }
             }
+#endif
 
             // Handle input reset
             if (notify_status & MWCAP_NOTIFY_AUDIO_INPUT_RESET)
