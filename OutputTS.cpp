@@ -2100,7 +2100,7 @@ bool OutputTS::AddVideoFrame(uint8_t* pImage, void* pEco,
     else
     {
         m_imagequeue.push_back(imagepkt_t{timestamp, pImage, pEco, imageSize});
-        m_videopool_ready.notify_one();
+        m_imagequeue_ready.notify_one();
     }
 
     return true;
