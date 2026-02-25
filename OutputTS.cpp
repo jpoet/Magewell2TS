@@ -139,7 +139,6 @@ static void log_packet(string where, const AVFormatContext* fmt_ctx,
  * @param preset Encoding preset
  * @param quality Quality setting for encoding
  * @param look_ahead Look ahead setting for encoding
- * @param no_audio Flag to disable audio
  * @param p010 Flag to use P010 format
  * @param device GPU device identifier
  * @param shutdown Callback for shutdown events
@@ -149,11 +148,10 @@ static void log_packet(string where, const AVFormatContext* fmt_ctx,
  */
 OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
                    const string & preset, int quality, int look_ahead,
-                   bool no_audio, bool p010, const string & device,
+                   bool p010, const string & device,
                    ShutdownCallback shutdown, ResetCallback reset,
                    MagCallback image_buffer_avail)
     : m_verbose(verbose_level)
-    , m_no_audio(no_audio)
     , m_video_codec_name(video_codec_name)
     , m_device("/dev/dri/" + device)
     , m_preset(preset)
@@ -177,18 +175,6 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
         cerr << lock_ios()
              << "ERROR: Codec '" << m_video_codec_name << "' not supported.\n";
         Shutdown();
-    }
-
-    // Initialize audio IO if audio is enabled
-    if (!m_no_audio)
-    {
-        m_audioIO = new AudioIO([=](bool val) { this->DiscardImages(val); },
-                                verbose_level);
-        if (m_audioIO == nullptr)
-        {
-            cerr << lock_ios() << "Failed to create Audio handler\n";
-            return;
-        }
     }
 
     // Start muxing and copying threads
@@ -876,6 +862,18 @@ bool OutputTS::setAudioParams(int num_channels, bool is_lpcm,
                               int bytes_per_sample, int sample_rate,
                               int samples_per_frame, int frame_size)
 {
+    if (m_audioIO == nullptr)
+    {
+        m_audioIO = new AudioIO([=](bool val) { this->DiscardImages(val); },
+                                m_verbose);
+        if (m_audioIO == nullptr)
+        {
+            cerr << lock_ios() << "Failed to create Audio handler\n";
+            return false;
+        }
+    }
+    m_no_audio = false;
+
     if (!m_audioIO->AddBuffer(num_channels, is_lpcm,
                               bytes_per_sample, sample_rate,
                               samples_per_frame, frame_size))
@@ -934,9 +932,9 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     m_input_frame_duration = frame_duration;
     m_input_frame_rate = frame_rate;
     m_isHDR = is_hdr;
-    m_frame_buffers = 12 +
+    m_frame_buffers = 15 +
                       (m_p010 || m_isHDR ? 20 : 0) +
-                      std::exp(max(22 - m_quality, 1));
+                      std::exp(max(25 - m_quality, 1));
 
     double fps = static_cast<double>(frame_rate.num) / frame_rate.den;
 
@@ -1256,7 +1254,11 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
     AVPacket* pkt = m_audioIO->ReadSPDIF();
 
     if (pkt == nullptr)
+    {
+        if (m_verbose > 2)
+            cerr << "Failed to read pkt from S/PDIF\n";
         return false;
+    }
 
     // Set timestamp and duration
     ost->timestamp = m_audioIO->TimeStamp();
@@ -1843,9 +1845,11 @@ void OutputTS::mux(void)
                         why += " &";
                     why += " audio";
                 }
-                if (m_verbose > 2)
+                if (m_verbose > 4)
+                {
                     cerr << lock_ios() << "WARNING: New TS needed but"
                          << why << " encoder is not ready.\n";
+                }
             }
         }
 
@@ -1991,11 +1995,13 @@ void OutputTS::copy_to_frame(void)
     {
         {
             unique_lock<mutex> lock(m_videopool_mutex);
-            if (m_video_stream.frames_used >= m_video_stream.frames_total - 1)
+            if (m_video_stream.frames_used >= m_video_stream.frames_total)
             {
-                if (m_verbose > 2)
-                    cerr << lock_ios() << "Frame pool is full ("
-                         << m_videopool_cnt << " processed)."
+                if (m_verbose > 3)
+                    cerr << lock_ios() << "Frame pool is full "
+                         << m_video_stream.frames_used << "/"
+                         << m_video_stream.frames_total
+                         << " (" << m_videopool_cnt << " processed)."
                          << " Waiting for available slot.\n";
                 m_videopool_avail.wait_for(lock,
                            std::chrono::milliseconds(m_input_frame_wait_ms));
@@ -2043,14 +2049,15 @@ void OutputTS::copy_to_frame(void)
                      << "WARNING: copy_frame: scaled pts did not increase: "
                      << "[" << prev_idx << "] -> ["
                      << m_video_stream.frames_idx_in << "] / "
-                     << m_video_stream.frames_used << "; "
+                     << m_video_stream.frames_used << "/"
+                     << m_video_stream.frames_total << "; "
                      << prev_pts << " -> " << frm->pts << ". TS "
                      << prev_ts << " -> " << timestamp
                      << " diff:" << timestamp - prev_ts
                      << " expected: " << m_input_frame_duration
                      << "\n";
             }
-            ++frm->pts;
+//            ++frm->pts;
         }
         prev_pts = frm->pts;
         prev_ts = timestamp;

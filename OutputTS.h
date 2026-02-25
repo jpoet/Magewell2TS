@@ -29,7 +29,7 @@ class OutputTS
 
     OutputTS(int verbose, const std::string & video_codec_name,
              const std::string & preset, int quality, int look_ahead,
-             bool no_audio, bool p010, const std::string & device,
+             bool p010, const std::string & device,
              ShutdownCallback shutdown, ResetCallback reset,
              MagCallback image_buffer_avail);
     ~OutputTS(void);
@@ -163,7 +163,7 @@ class OutputTS
 
     std::string      m_filename               {"pipe:1"};
 
-    bool             m_no_audio               {false};
+    bool             m_no_audio               {true};
     int              m_slow_audio_cnt         {0};
 
     std::string      m_video_codec_name;

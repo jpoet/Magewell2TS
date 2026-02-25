@@ -371,7 +371,7 @@ bool Magewell::describe_input(HCHANNEL hChannel)
     // Check if there's a valid signal
     if (!status.bValid)
     {
-        cerr << "No signal\n";
+        cerr << "No signal detected on input.\n";
         return false;
     }
 
@@ -680,10 +680,7 @@ bool Magewell::OpenChannel(int devIndex, double boardId)
     if (MWGetInputSpecificStatus(m_channel, &status) != MW_SUCCEEDED)
         cerr << "Unable to get input status!\n";
     else if(!status.bValid)
-    {
-        cerr << "No signal detected.\n";
-        return true;
-    }
+        cerr << "No signal detected on input.\n";
 
     return true;
 }
@@ -978,6 +975,7 @@ int EcoEventWait(mw_event_t event, int timeout/*ms*/)
  */
 void Magewell::capture_audio_loop(void)
 {
+    bool      good_signal = true;
     bool      lpcm = false;
     int       bytes_per_sample = 0;
     int       even_bytes_per_sample = 0;
@@ -1000,6 +998,9 @@ void Magewell::capture_audio_loop(void)
     ULONGLONG notify_status = 0;
     MWCAP_AUDIO_CAPTURE_FRAME macf;
 
+    if (m_verbose > 2)
+        cerr << "Starting audio capture loop\n";
+
 #ifdef DUMP_RAW_AUDIO_ALLBITS
     ofstream fraw_all;
     fraw_all.open("raw-audio-allbits.bin", ofstream::binary);
@@ -1013,14 +1014,16 @@ void Magewell::capture_audio_loop(void)
     MWGetAudioInputSourceArray(m_channel, nullptr, &input_count);
     if (input_count == 0)
     {
-        cerr << lock_ios() << "ERROR: can't find audio input\n";
+        if (m_verbose > 0)
+            cerr << "ERROR: can't find audio input\n";
         goto audio_capture_stoped;
     }
 
     // Start audio capture
     if (MW_SUCCEEDED != MWStartAudioCapture(m_channel))
     {
-        cerr << lock_ios() << "ERROR: start audio capture fail!\n";
+        if (m_verbose > 0)
+            cerr << "ERROR: start audio capture fail!\n";
         goto audio_capture_stoped;
     }
 
@@ -1067,7 +1070,7 @@ void Magewell::capture_audio_loop(void)
         if (MW_SUCCEEDED != MWGetAudioSignalStatus(m_channel,
                                                    &audio_signal_status))
         {
-            if (++err_cnt % 50 == 0 && m_verbose > 0)
+            if (m_verbose > 0 && ++err_cnt % 50 == 0)
                 cerr << lock_ios() << "WARNING (cnt: " << err_cnt
                      << ") can't get audio signal status\n";
             this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
@@ -1077,11 +1080,13 @@ void Magewell::capture_audio_loop(void)
         // Check if audio signal is valid
         if (!audio_signal_status.bChannelStatusValid)
         {
-            if (m_verbose > 0 && ++err_cnt % 100 == 0)
+            if (good_signal && m_verbose > 0 && ++err_cnt % 100 == 0)
                 cerr << lock_ios() << "No audio signal.\n";
+            good_signal = false;
             this_thread::sleep_for(chrono::milliseconds(m_frame_ms * 2));
             continue;
         }
+        good_signal = true;
 
         // Calculate bytes per sample
         even_bytes_per_sample = audio_signal_status.cBitsPerSample / 8;
@@ -1157,7 +1162,7 @@ void Magewell::capture_audio_loop(void)
 
             if (0 == cur_channels)
             {
-                if (err_cnt++ % 25 == 0 && m_verbose > 0)
+                if (m_verbose > 0 && err_cnt++ % 25 == 0)
                     cerr << lock_ios() << "WARNING [" << err_cnt
                          << "] Invalid audio channel count: "
                          << cur_channels << endl;
@@ -2744,7 +2749,7 @@ bool Magewell::Capture(const string & video_codec, const string & preset,
     if (m_isEco)
     {
         m_out2ts = new OutputTS(m_verbose, video_codec, preset, quality,
-                                look_ahead, no_audio, p010, gpu_device,
+                                look_ahead, p010, gpu_device,
                                 [=](void) { this->Shutdown(); },
                                 [=](void) { this->Reset(); },
                                 [=](uint8_t* ib, void* eb)
@@ -2753,7 +2758,7 @@ bool Magewell::Capture(const string & video_codec, const string & preset,
     else
     {
         m_out2ts = new OutputTS(m_verbose, video_codec, preset, quality,
-                                look_ahead, no_audio, p010, gpu_device,
+                                look_ahead, p010, gpu_device,
                                 [=](void) { this->Shutdown(); },
                                 [=](void) { this->Reset(); },
                                 [=](uint8_t* ib, void* eb)
