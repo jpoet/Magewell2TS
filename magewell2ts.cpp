@@ -51,22 +51,22 @@ void signal_handler(int signum)
     }
     else if (signum == SIGINT || signum == SIGTERM)
     {
-        cerr << "Received SIGINT/SIGTERM." << endl;
+        clog << "Received SIGINT/SIGTERM." << endl;
         g_mw.Shutdown();
     }
     else
-        cerr << "Unhandled interrupt." << endl;
+        clog << "Unhandled interrupt." << endl;
 }
 
 void show_help(string_view app)
 {
-    cerr << app << endl;
+    clog << app << endl;
 
-    cerr << "\n"
+    clog << "\n"
          << "Defaults in []:\n"
          << "\n";
 
-    cerr << "--board (-b)       : board id, if you have more than one [0]\n"
+    clog << "--board (-b)       : board id, if you have more than one [0]\n"
          << "--device (-d)      : vaapi/qsv device (e.g. renderD129) [renderD128]\n"
          << "--input (-i)       : input idx, *required*. Starts at 1\n"
          << "--list (-l)        : List capture card inputs\n"
@@ -82,7 +82,7 @@ void show_help(string_view app)
          << "--write-edid (-w)  : Write EDID info from file to input\n"
          << "--wait-for         : Wait for given number of inputs to be initialized. 10 second timeout\n";
 
-    cerr << "\n"
+    clog << "\n"
          << "Examples:\n"
          << "\tCapture from input 2 and write Transport Stream to stdout:\n"
          << "\t" << app << " -i 2 -m\n"
@@ -96,7 +96,7 @@ void show_help(string_view app)
          << "\tUse Intel quick-sync to encode h.265 video and pipe it to mpv:\n"
          << "\t" << app << " -b 1 -i 1 -m -n -c hevc_qsv | mpv -\n";
 
-    cerr << "\nNOTE: setting EDID does not survive a reboot.\n";
+    clog << "\nNOTE: setting EDID does not survive a reboot.\n";
 }
 
 bool string_to_int(string_view st, int &value, string_view var)
@@ -105,7 +105,7 @@ bool string_to_int(string_view st, int &value, string_view var)
                                   value);
     if (result.ec == errc::invalid_argument)
     {
-        cerr << "Invalid " << var << ": " << st << endl;
+        clog << "Invalid " << var << ": " << st << endl;
         value = -1;
         return false;
     }
@@ -140,7 +140,7 @@ int main(int argc, char* argv[])
     bool        no_audio      = false;
     bool        p010          = false;
 
-    std::cerr << mutex_init_own;
+    std::clog << mutex_init_own;
 
     vector<string_view> args(argv + 1, argv + argc);
 
@@ -250,7 +250,7 @@ int main(int argc, char* argv[])
         }
         else
         {
-            cerr << "Unrecognized option '" << *iter << "'\n";
+            clog << "Unrecognized option '" << *iter << "'\n";
             exit(1);
         }
     }

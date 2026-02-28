@@ -162,7 +162,7 @@ void AudioBuffer::PurgeQueue(void)
     m_audio_queue.clear();
     m_probed_queue.clear();
     if (m_verbose > 1)
-        cerr << lock_ios()
+        clog << lock_ios()
              << "[" << m_id << "] audio buffer cleared.\n";
 }
 
@@ -177,7 +177,7 @@ void AudioBuffer::PrintState(const string & where, bool force) const
     if (force || m_verbose > 0)
     {
         string loc = "[" + std::to_string(m_id) + "] " + where + " ";
-        cerr << lock_ios()
+        clog << lock_ios()
              << loc
              << (m_lpcm ? "LPCM" : "Bitstream")
              << " Codec: " << (m_codec_name.empty() ? "Unknown" : m_codec_name)
@@ -208,7 +208,7 @@ bool AudioBuffer::Add(AudioFrame *& buf, int64_t timestamp)
 #if 0
     if (buf->size() != m_frame_size)
     {
-        cerr << lock_ios() << "WARNING: Adding audio buffer with size "
+        clog << lock_ios() << "WARNING: Adding audio buffer with size "
              << buf->size() << ". expected " << m_frame_size << endl;
     }
 #endif
@@ -250,7 +250,7 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
         {
             if (m_verbose > 2)
             {
-                cerr << lock_ios()
+                clog << lock_ios()
                      << "[" << m_id << "] AudioIO::Read: EOF\n";
             }
             m_flushed = true;
@@ -316,17 +316,17 @@ AVPacket* AudioBuffer::ReadSPDIF(void)
     AVPacket* pkt = av_packet_alloc();
     if (!pkt)
     {
-        cerr << lock_ios()
+        clog << lock_ios()
              << "WARNING: [" << m_id
-             << "] Could not allocate pkt for spdif input.\n";
+             << "] Could not allocate pkt for spdif input." << endl;
         return nullptr;
     }
 
     // Check if S/PDIF context is valid
     if (m_spdif_format_context == nullptr)
     {
-        cerr << lock_ios()
-             << "WARNING: [" << m_id << "] S/PDIF context is invalid.\n";
+        clog << lock_ios()
+             << "WARNING: [" << m_id << "] S/PDIF context is invalid." << endl;
         return nullptr;
     }
 
@@ -347,7 +347,7 @@ AVPacket* AudioBuffer::ReadSPDIF(void)
         // Free packet on error
         av_packet_free(&pkt);
         if (ret != AVERROR_EOF && m_verbose > 0)
-            cerr << lock_ios()
+            clog << lock_ios()
                  << "WARNING: [" << m_id
                  << "] Failed to read spdif frame: (" << ret << ") "
                  << AVerr2str(ret) << endl;
@@ -427,9 +427,9 @@ bool AudioBuffer::open_spdif_context(void)
     // Allocate new format context
     if (!(m_spdif_format_context = avformat_alloc_context()))
     {
-        cerr << lock_ios()
+        clog << lock_ios()
              << "WARNING: [" << m_id
-             << "] Unable to allocate spdif format context.\n";
+             << "] Unable to allocate spdif format context." << endl;
         return false;
     }
 
@@ -438,9 +438,9 @@ bool AudioBuffer::open_spdif_context(void)
         reinterpret_cast<uint8_t* >(av_malloc(m_frame_size));
     if (!m_spdif_avio_context_buffer)
     {
-        cerr << lock_ios()
+        clog << lock_ios()
              << "WARNING: [" << m_id
-             << "] Unable to allocate spdif avio context buffer.\n";
+             << "] Unable to allocate spdif avio context buffer." << endl;
         return false;
     }
 
@@ -454,9 +454,9 @@ bool AudioBuffer::open_spdif_context(void)
                                               nullptr);
     if (!m_spdif_avio_context)
     {
-        cerr << lock_ios()
+        clog << lock_ios()
              << "WARNING: [" << m_id
-             << "] Unable to allocate audio input avio context.\n";
+             << "] Unable to allocate audio input avio context." << endl;
         return false;
     }
 
@@ -468,8 +468,8 @@ bool AudioBuffer::open_spdif_context(void)
     if (0 > avformat_open_input(&m_spdif_format_context, NULL,
                                 spdif_fmt, NULL))
     {
-        cerr << lock_ios()
-             << "WARNING: [" << m_id << "] Could not open spdif input.\n";
+        clog << lock_ios()
+             << "WARNING: [" << m_id << "] Could not open spdif input." << endl;
         return false;
     }
 
@@ -491,7 +491,7 @@ bool AudioBuffer::open_spdif(void)
     int idx;
 
     if (m_verbose > 1)
-        cerr << lock_ios()
+        clog << lock_ios()
              << "[" << m_id << "] Scanning S/PDIF\n";
 
     open_spdif_context();
@@ -502,8 +502,9 @@ bool AudioBuffer::open_spdif(void)
     {
         if (m_EoF.load())
         {
-            cerr << lock_ios()
-                 << "WARNING: [" << m_id << "] Abort S/PDIF scan due EoF.\n";
+            clog << lock_ios()
+                 << "WARNING: [" << m_id << "] Abort S/PDIF scan due EoF."
+                 << endl;
             m_flushed = true;
             return false;
         }
@@ -513,7 +514,7 @@ bool AudioBuffer::open_spdif(void)
                                          &fmt, "", nullptr, 0,
                                          0)) != 0)
         {
-            cerr << lock_ios()
+            clog << lock_ios()
                  << "WARNING: [" << m_id << "] Failed to probe spdif input: "
                  << AVerr2str(ret) << endl;
             continue;
@@ -521,7 +522,7 @@ bool AudioBuffer::open_spdif(void)
 
         if (m_verbose > 1)
         {
-            cerr << lock_ios()
+            clog << lock_ios()
                  << "[" << m_id << "] --> Detected fmt '" << fmt->name
                  << "' '" << fmt->long_name << "'" << endl;
         }
@@ -529,15 +530,16 @@ bool AudioBuffer::open_spdif(void)
         // Find stream information
         if (0 > avformat_find_stream_info(m_spdif_format_context, NULL))
         {
-            cerr << lock_ios()
+            clog << lock_ios()
                  << "WARNING: [" << m_id
-                 << "] Could not find stream information\n";
+                 << "] Could not find stream information." << endl;
             continue;
         }
         if (m_spdif_format_context->nb_streams < 1)
         {
-            cerr << lock_ios()
-                 << "WARNING: [" << m_id << "] No streams found in SPDIF.\n";
+            clog << lock_ios()
+                 << "WARNING: [" << m_id << "] No streams found in SPDIF."
+                 << endl;
             continue;
         }
 
@@ -558,7 +560,7 @@ bool AudioBuffer::open_spdif(void)
 
         m_sample_rate = audio_stream->codecpar->sample_rate;
         if (m_verbose > 1)
-            cerr << "Bistream sample rate: " << m_sample_rate << "\n"
+            clog << "Bistream sample rate: " << m_sample_rate << "\n"
                  << "          frame size: "
                  << audio_stream->codecpar->frame_size
                  << endl;
@@ -571,9 +573,9 @@ bool AudioBuffer::open_spdif(void)
 
         if (!audio_stream)
         {
-            cerr << lock_ios()
+            clog << lock_ios()
                  << "WARNING: [" << m_id
-                 << "] Could not find audio stream in spdif input.\n";
+                 << "] Could not find audio stream in spdif input." << endl;
             continue;
         }
 
@@ -588,9 +590,9 @@ bool AudioBuffer::open_spdif(void)
     /* Find a decoder for the audio stream. */
     if (!(m_spdif_codec = avcodec_find_decoder(m_spdif_codec_id)))
     {
-        cerr << lock_ios()
+        clog << lock_ios()
              << "WARNING: [" << m_id << "] Could not find input audio codec "
-             << m_spdif_codec_id << "\n";
+             << m_spdif_codec_id << endl;
         m_codec_name = "Unknown";
         return false;
     }
@@ -598,7 +600,7 @@ bool AudioBuffer::open_spdif(void)
     m_codec_name = m_spdif_codec->name;
 
 #if 0
-    cerr << lock_ios() << "Probed S/PDIF with "
+    clog << lock_ios() << "Probed S/PDIF with "
          << (int)(m_read - m_begin) << " bytes "
          << (int)(m_read - m_begin) / m_frame_size << " buffer.\n";
 #endif
@@ -619,7 +621,7 @@ bool AudioBuffer::open_spdif(void)
  */
 bool AudioBuffer::DetectCodec(void)
 {
-    cerr << lock_ios() << "[" << m_id << "] Detecting codec\n";
+    clog << lock_ios() << "[" << m_id << "] Detecting codec\n";
 
     // Handle LPCM case directly
     if (m_lpcm)
@@ -631,9 +633,9 @@ bool AudioBuffer::DetectCodec(void)
              m_channel_layout = AV_CHANNEL_LAYOUT_5POINT1;
          else
          {
-             cerr << lock_ios()
+             clog << lock_ios()
                   << "WARNING: " << m_num_channels
-                  << " channels is not supported.\n";
+                  << " channels is not supported." << endl;
              m_channel_layout = AV_CHANNEL_LAYOUT_STEREO;
          }
          initialized();
@@ -645,7 +647,7 @@ bool AudioBuffer::DetectCodec(void)
     while (m_EoF.load() == false)
     {
         if (m_verbose > 5)
-            cerr << lock_ios()
+            clog << lock_ios()
                  << "\n[" << m_id << "] Detect codec (try " << ++idx << ")\n";
 
         if (open_spdif())
@@ -665,7 +667,7 @@ bool AudioBuffer::DetectCodec(void)
         m_data_avail.wait_for(lock, chrono::microseconds(500));
     }
 
-    cerr << lock_ios() << "[" << m_id << "] Detect codec failed\n";
+    clog << lock_ios() << "[" << m_id << "] Detect codec failed\n";
     setEoF();
     return false;
 }
@@ -744,7 +746,7 @@ bool AudioIO::AddBuffer(int num_channels, bool is_lpcm,
 
         if (m_verbose > 2)
         {
-            cerr << lock_ios()
+            clog << lock_ios()
                  << "[" << (*m_Iback).Id() << "] "
                  << "AddBuffer(num_channels = " << num_channels << "\n"
                  << "               is_lpcm = "
@@ -753,7 +755,7 @@ bool AudioIO::AddBuffer(int num_channels, bool is_lpcm,
                  << "           sample_rate = " << sample_rate << "\n"
                  << "     samples_per_frame = " << samples_per_frame << "\n"
                  << "            frame_size = " << frame_size << "\n"
-                 << ")\n";
+                 << ")" << endl;
         }
     }
 
@@ -842,7 +844,7 @@ bool AudioIO::BlockReady(void) const
 
     if (m_buffer_q.empty())
     {
-        cerr << lock_ios()
+        clog << lock_ios()
              << "q empty\n";
         return false;
     }
@@ -865,8 +867,8 @@ bool AudioIO::Add(AudioBuffer::AudioFrame *& buf, int64_t timestamp)
 
     if (m_buffer_q.empty())
     {
-        cerr << lock_ios()
-             << "WARNING: No audio buffers to Add to\n";
+        clog << lock_ios()
+             << "WARNING: No audio buffers to Add to." << endl;
         return 0;
     }
 
@@ -874,9 +876,9 @@ bool AudioIO::Add(AudioBuffer::AudioFrame *& buf, int64_t timestamp)
     buffer_que_t::iterator Ibuf = m_buffer_q.end() - 1;
     if (static_cast<int32_t>(buf.size()) != (*Ibuf).FrameSize())
     {
-        cerr << lock_ios() << "\nWARNING: AudioIO::Add buf size: "
+        clog << lock_ios() << "\nWARNING: AudioIO::Add buf size: "
              << buf.size() << " expected " << (*Ibuf).FrameSize() << "\n"
-             << "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n";
+             << "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%" << endl;
         return false;
     }
 #endif
@@ -895,8 +897,8 @@ int AudioIO::Read(uint8_t* dest, int len)
 {
     if (m_buffer_q.empty())
     {
-        cerr << lock_ios()
-             << "WARNING: No audio buffers to Read from\n";
+        clog << lock_ios()
+             << "WARNING: No audio buffers to Read from." << endl;
         return 0;
     }
 
@@ -913,8 +915,8 @@ AVPacket* AudioIO::ReadSPDIF(void)
 {
     if (m_buffer_q.empty())
     {
-        cerr << lock_ios()
-             << "WARNING: No audio buffers to Read from\n";
+        clog << lock_ios()
+             << "WARNING: No audio buffers to Read from" << endl;
         return 0;
     }
 
@@ -955,7 +957,7 @@ void AudioIO::PurgeQueue(void)
 void AudioIO::Reset(const string & where)
 {
     if (m_verbose > 2)
-        cerr << lock_ios() << "AudioIO Reset by " << where << endl;
+        clog << lock_ios() << "AudioIO Reset by " << where << endl;
     const lock_guard<mutex> lock(m_buffer_mutex);
     m_codec_name.clear();
     if (m_buffer_q.empty())
@@ -994,7 +996,7 @@ bool AudioIO::CodecChanged(void)
     if (!(*Ibuf).DetectCodec())
     {
 #if 1
-        cerr << lock_ios()
+        clog << lock_ios()
              << "Failed to detect S/PDIF\n";
 #endif
         Reset("AudioIO::CodecChanged");
@@ -1008,7 +1010,7 @@ bool AudioIO::CodecChanged(void)
     if (m_codec_name != (*Ibuf).CodecName())
     {
         if (m_verbose > 1)
-            cerr << lock_ios()
+            clog << lock_ios()
                  << "Audio codec '" << m_codec_name << "' -> '"
                  << (*Ibuf).CodecName() << "'" << endl;
         m_codec_name = (*Ibuf).CodecName();
@@ -1017,7 +1019,7 @@ bool AudioIO::CodecChanged(void)
     if (m_num_channels != (*Ibuf).NumChannels())
     {
         if (m_verbose > 1)
-            cerr << lock_ios()
+            clog << lock_ios()
                  << "Audio channels " << m_num_channels << " -> "
                  << (*Ibuf).NumChannels() << "\n";
         m_num_channels = (*Ibuf).NumChannels();
@@ -1028,7 +1030,7 @@ bool AudioIO::CodecChanged(void)
     if (m_bytes_per_sample != (*Ibuf).BytesPerSample())
     {
         if (m_verbose > 1)
-            cerr << lock_ios()
+            clog << lock_ios()
                  << "Audio bytes per sample " << m_bytes_per_sample << " -> "
                  << (*Ibuf).BytesPerSample() << endl;
         m_bytes_per_sample = (*Ibuf).BytesPerSample();
@@ -1036,7 +1038,7 @@ bool AudioIO::CodecChanged(void)
     if (m_lpcm != (*Ibuf).LPCM())
     {
         if (m_verbose > 1)
-            cerr << lock_ios()
+            clog << lock_ios()
                  << "Audio " << (m_lpcm ? "LPCM" : "Bitstream")
                  << " -> "
                  << ((*Ibuf).LPCM() ? "LPCM" : "Bitstream")
