@@ -976,7 +976,9 @@ int EcoEventWait(mw_event_t event, int timeout/*ms*/)
  */
 void Magewell::capture_audio_loop(void)
 {
+#if 0
     bool      good_signal = true;
+#endif
     bool      lpcm = false;
     int       bytes_per_sample = 0;
     int       even_bytes_per_sample = 0;
@@ -1078,6 +1080,7 @@ void Magewell::capture_audio_loop(void)
             continue;
         }
 
+#if 0
         // Check if audio signal is valid
         if (!audio_signal_status.bChannelStatusValid)
         {
@@ -1088,6 +1091,7 @@ void Magewell::capture_audio_loop(void)
             continue;
         }
         good_signal = true;
+#endif
 
         // Calculate bytes per sample
         even_bytes_per_sample = audio_signal_status.cBitsPerSample / 8;
@@ -2092,7 +2096,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     MWCAP_VIDEO_BUFFER_INFO   videoBufferInfo;
     MWCAP_VIDEO_FRAME_INFO    videoFrameInfo;
     MWCAP_VIDEO_SIGNAL_STATUS videoSignalStatus;
-    MW_RESULT ret;
+    MW_RESULT result;
 
     // Main capture loop
     while (m_running.load() == true)
@@ -2197,14 +2201,15 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             timestamp = frame_ts;
 
             if (timestamp < expected_ts - quarter_dur ||
-                expected_ts + quarter_dur < timestamp)
+                            expected_ts + quarter_dur < timestamp)
             {
                 if (expected_ts >= 0)
                 {
                     if (m_verbose > 2)
                     {
                         clog << lock_ios()
-                             << "WARNING: Unexpected TimeStamp " << "[" << previous_idx << " -> "
+                             << "WARNING: Unexpected TimeStamp "
+                             << "[" << previous_idx << " -> "
                              << frame_idx << "]"
                              << " diff:" << expected_ts - timestamp
                              << " prev:" << previous_ts
@@ -2218,8 +2223,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                     }
                     if (timestamp > expected_ts)
                     {
-                        if (m_verbose > 0)
-                            clog << "WARNING: Magewell driver lost a frame. Can't keep up!" << endl;
+                        m_out2ts->HardReset("Magewell driver lost a frame. Can't keep up!");
                     }
                     else
                         timestamp = expected_ts;
@@ -2248,17 +2252,27 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         m_image_buffer_mutex.unlock();
 
         // Capture frame to virtual address
-        ret = MWCaptureVideoFrameToVirtualAddress
-              (m_channel,
-               frame_idx,
-               reinterpret_cast<MWCAP_PTR>(pbImage),
-               m_image_size,
-               m_min_stride,
-               0,
-               0,
-               eco_params.dwFOURCC,
-               eco_params.cx,
-               eco_params.cy);
+        result = MWCaptureVideoFrameToVirtualAddress
+                 (m_channel,
+                  frame_idx,
+                  reinterpret_cast<MWCAP_PTR>(pbImage),
+                  m_image_size,
+                  m_min_stride,
+                  0,
+                  0,
+                  eco_params.dwFOURCC,
+                  eco_params.cx,
+                  eco_params.cy);
+
+        if (result != MW_SUCCEEDED)
+        {
+            if (m_verbose > 0)
+                clog << lock_ios()
+                     << "WARNING: Failed to retrieve frame "
+                     << "(frame " << frame_cnt << ")" << endl;
+            pro_image_buffer_available(pbImage, nullptr);
+            continue;
+        }
 
         // Wait for capture completion
         if (MWWaitEvent(capture_event, -1) <= 0)

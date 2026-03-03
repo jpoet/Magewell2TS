@@ -934,7 +934,7 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     m_input_frame_rate = frame_rate;
     m_isHDR = is_hdr;
     m_frame_buffers = 15 +
-                      (m_p010 || m_isHDR ? 20 : 0) +
+                      (m_p010 || m_isHDR ? 30 : 0) +
                       std::exp(max(25 - m_quality, 1));
 
     double fps = static_cast<double>(frame_rate.num) / frame_rate.den;
@@ -1868,14 +1868,7 @@ void OutputTS::mux(void)
             {
                 if (++glitch_cnt % 100 == 0)
                 {
-                    if (m_video_stream.frames_written > 900)
-                        clog << "Damaged: Audio glitch. Resetting.\n";
-                    else if (m_verbose > 0)
-                        clog << "Warning: Audio glitch. Resetting.\n";
-                    m_audioIO->Reset("OutputTS::mux");
-                    f_reset();
-                    ClearVideoPool();
-                    ClearImageQueue();
+                    HardReset("Audio glitch");
                 }
                 this_thread::sleep_for(chrono::milliseconds(5));
                 continue;
@@ -1934,6 +1927,21 @@ void OutputTS::mux(void)
             m_videopool_avail.notify_one();
         }
     }
+}
+
+/**
+ * @brief hard reset all resources
+ */
+void OutputTS::HardReset(const string& why)
+{
+    if (m_video_stream.frames_written > 1800)
+        clog << "DAMAGED: " << why << ". Resetting." << endl;
+    else if (m_verbose > 0)
+        clog << "WARNING: " << why << ". Resetting." << endl;
+    m_audioIO->Reset("OutputTS::mux");
+    f_reset();
+    ClearVideoPool();
+    ClearImageQueue();
 }
 
 /**
@@ -1998,7 +2006,7 @@ void OutputTS::copy_to_frame(void)
             unique_lock<mutex> lock(m_videopool_mutex);
             if (m_video_stream.frames_used >= m_video_stream.frames_total)
             {
-                if (m_verbose > 3)
+                if (m_verbose > 2)
                     clog << lock_ios() << "Frame pool is full "
                          << m_video_stream.frames_used << "/"
                          << m_video_stream.frames_total
@@ -2042,12 +2050,13 @@ void OutputTS::copy_to_frame(void)
                                 m_input_time_base,
                                 m_video_stream.enc->time_base);
 
+#if 1
         if (frm->pts <= prev_pts)
         {
             if (m_verbose > 0)
             {
                 clog << lock_ios()
-                     << "WARNING: copy_frame: scaled pts did not increase: "
+                     << "DAMAGED: copy_frame: scaled pts did not increase: "
                      << "[" << prev_idx << "] -> ["
                      << m_video_stream.frames_idx_in << "] / "
                      << m_video_stream.frames_used << "/"
@@ -2058,8 +2067,9 @@ void OutputTS::copy_to_frame(void)
                      << " expected: " << m_input_frame_duration
                      << endl;
             }
-//            ++frm->pts;
         }
+#endif
+
         prev_pts = frm->pts;
         prev_ts = timestamp;
         prev_idx = m_video_stream.frames_idx_in;

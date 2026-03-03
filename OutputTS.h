@@ -56,6 +56,7 @@ class OutputTS
                         AVRational time_base, double frame_duration,
                         AVRational frame_rate, bool is_hdr);
     bool addAudio(AudioBuffer::AudioFrame *& buf, int64_t timestamp);
+    void HardReset(const std::string& why);
     void ClearVideoPool(void);
     void ClearImageQueue(void);
     void DiscardImages(bool val);
