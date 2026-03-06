@@ -213,7 +213,6 @@ class OutputTS
     std::condition_variable m_videopool_ready;
     std::condition_variable m_videopool_avail;
     std::condition_variable m_videopool_empty;
-    int                     m_videopool_cnt {0};
 
     std::mutex              m_imagequeue_mutex;
     std::condition_variable m_imagequeue_ready;

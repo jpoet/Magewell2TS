@@ -935,7 +935,7 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     m_input_frame_duration = frame_duration;
     m_input_frame_rate = frame_rate;
     m_isHDR = is_hdr;
-    m_frame_buffers = 18;
+    m_frame_buffers = 20;
 
     if (m_p010 || m_isHDR)
         m_sw_pix_fmt = AV_PIX_FMT_P010;
@@ -1932,7 +1932,6 @@ void OutputTS::ClearVideoPool(void)
     m_video_stream.frames_idx_in  = -1;
     m_video_stream.frames_idx_out = -1;
     m_video_stream.frames_used = 0;
-    m_videopool_cnt = 0;
 }
 
 /**
@@ -1979,46 +1978,79 @@ void OutputTS::copy_to_frame(void)
     int      prev_idx = -1;
     int      ret = 0;
 
+    int      avg_vidpool_used = 0;
+    int      avg_vidpool_samples = 0;
+    int      max_vidpool_used = 0;
+    int      avg_vidpool_5m_used = 0;
+    int      avg_vidpool_5m_samples = 0;
+    int      max_vidpool_5m_used = 0;
+
+    chrono::steady_clock::time_point current_tm;
+    chrono::steady_clock::time_point avg_vidpool_tm = chrono::steady_clock::now();
+
     while (m_running.load() == true)
     {
         {
-            unique_lock<mutex> lock(m_videopool_mutex);
-            if (m_video_stream.frames_used >= m_video_stream.frames_total)
+            std::unique_lock<std::mutex> lock_i(m_imagequeue_mutex);
+
+            for (;;)
             {
-                if (m_verbose > 2)
-                    clog << lock_ios() << "Frame pool is full "
-                         << m_video_stream.frames_used << "/"
-                         << m_video_stream.frames_total
-                         << " (" << m_videopool_cnt << " processed)."
-                         << " Waiting for available slot.\n";
-                m_videopool_avail.wait_for(lock,
-                           std::chrono::milliseconds(m_input_frame_wait_ms));
-                continue;
+                if (m_imagequeue.empty())
+                {
+                    m_imagequeue_empty.notify_one();
+                    m_imagequeue_ready.wait_for(lock_i,
+                        std::chrono::milliseconds(m_input_frame_wait_ms));
+                }
+                else
+                {
+                    pImage     = m_imagequeue.front().image;
+                    pEco       = m_imagequeue.front().pEco;
+                    image_size = m_imagequeue.front().image_size;
+                    timestamp  = m_imagequeue.front().timestamp;
+
+                    m_imagequeue.pop_front();
+                    break;
+                }
             }
         }
 
         {
-            std::unique_lock<std::mutex> lock_i(m_imagequeue_mutex);
+            unique_lock<mutex> lock(m_videopool_mutex);
 
-            if (m_imagequeue.empty())
+            for (;;)
             {
-                m_imagequeue_empty.notify_one();
-                m_imagequeue_ready.wait_for(lock_i,
-                       std::chrono::milliseconds(m_input_frame_wait_ms));
-                continue;
+                if (m_video_stream.frames_used < m_video_stream.frames_total)
+                    break;
+                m_videopool_avail.wait_for(lock,
+                           std::chrono::milliseconds(m_input_frame_wait_ms));
             }
 
-            pImage     = m_imagequeue.front().image;
-            pEco       = m_imagequeue.front().pEco;
-            image_size = m_imagequeue.front().image_size;
-            timestamp  = m_imagequeue.front().timestamp;
-
-            m_imagequeue.pop_front();
+            if (++m_video_stream.frames_idx_in == m_video_stream.frames_total)
+                m_video_stream.frames_idx_in = 0;
         }
 
-        ++m_videopool_cnt;
-        if (++m_video_stream.frames_idx_in == m_video_stream.frames_total)
-            m_video_stream.frames_idx_in = 0;
+        if (m_verbose > 0)
+        {
+            current_tm = chrono::steady_clock::now();
+            if (chrono::duration_cast<chrono::seconds>
+                (current_tm - avg_vidpool_tm).count() > 300)
+            {
+                clog << lock_ios() << "Frame pool avg:"
+                     << avg_vidpool_used / avg_vidpool_samples
+                     << "/" << m_video_stream.frames_total
+                     << ", max:" << max_vidpool_used
+                     << ", 5min avg:"
+                     << avg_vidpool_5m_used / avg_vidpool_5m_samples
+                     << "/" << m_video_stream.frames_total
+                     << ", max:" << max_vidpool_5m_used
+                     << endl;
+                cerr.flush();
+                avg_vidpool_tm = current_tm;
+                avg_vidpool_5m_samples = 0;
+                avg_vidpool_5m_used = 0;
+                max_vidpool_5m_used = 0;
+            }
+        }
 
         m_video_stream.frames[m_video_stream.frames_idx_in]
                       .timestamp = timestamp;
@@ -2097,7 +2129,17 @@ void OutputTS::copy_to_frame(void)
 
         {
             std::unique_lock<std::mutex> lock(m_videopool_mutex);
+
             ++m_video_stream.frames_used;
+
+            avg_vidpool_used += m_video_stream.frames_used;
+            ++avg_vidpool_samples;
+            avg_vidpool_5m_used += m_video_stream.frames_used;
+            ++avg_vidpool_5m_samples;
+            if (max_vidpool_used < m_video_stream.frames_used)
+                max_vidpool_used = m_video_stream.frames_used;
+            if (max_vidpool_5m_used < m_video_stream.frames_used)
+                max_vidpool_5m_used = m_video_stream.frames_used;
         }
         m_videopool_ready.notify_one();
     }
