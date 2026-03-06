@@ -211,8 +211,10 @@ OutputTS::~OutputTS(void)
 
     // Close streams and container
     close_stream(&m_video_stream);
-    if (m_video_stream.hw_device_ctx != nullptr)
+    if (m_video_stream.hw_device_ctx)
         av_buffer_unref(&m_video_stream.hw_device_ctx);
+    if (m_video_stream.hw_frames_ctx)
+        av_buffer_unref(&m_video_stream.hw_frames_ctx);
 
     close_stream(&m_audio_stream);
     close_container();
@@ -933,9 +935,12 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     m_input_frame_duration = frame_duration;
     m_input_frame_rate = frame_rate;
     m_isHDR = is_hdr;
-    m_frame_buffers = 15 +
-                      (m_p010 || m_isHDR ? 30 : 0) +
-                      std::exp(max(25 - m_quality, 1));
+    m_frame_buffers = 18;
+
+    if (m_p010 || m_isHDR)
+        m_sw_pix_fmt = AV_PIX_FMT_P010;
+    else
+        m_sw_pix_fmt = AV_PIX_FMT_NV12;
 
     double fps = static_cast<double>(frame_rate.num) / frame_rate.den;
 
@@ -1346,6 +1351,45 @@ AVFrame* OutputTS::alloc_picture(enum AVPixelFormat pix_fmt,
 }
 
 /**
+ * @brief Allocate hardware picture frame
+ * @param hw_frames_ctx hardware context.
+ * @param pix_fmt Pixel format for frame
+ * @param width Width of frame
+ * @param height Height of frame
+ * @return Pointer to allocated AVFrame or nullptr on error
+ * @note Allocates memory for video frames
+ */
+AVFrame* OutputTS::alloc_hw_picture(AVBufferRef* hw_frames_ctx,
+                                    enum AVPixelFormat pix_fmt,
+                                    int width, int height)
+{
+    AVFrame* picture;
+    int ret;
+
+    picture = av_frame_alloc();
+    if (!picture)
+        return nullptr;
+
+    picture->format = pix_fmt;
+    picture->width  = width;
+    picture->height = height;
+
+    // Allocate frame buffer
+    ret = av_hwframe_get_buffer(hw_frames_ctx, picture, 0);
+    if (ret < 0)
+    {
+        const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(pix_fmt);
+        clog << lock_ios()
+             << "ERROR: Could not allocate hw " << desc->name
+             << " video frame of " << width << "x" << height
+             << " : " << AV_ts2str(ret) << endl;
+        return nullptr;
+    }
+
+    return picture;
+}
+
+/**
  * @brief Open NVIDIA encoder
  * @param codec Video codec to use
  * @param ost Output stream
@@ -1435,6 +1479,95 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
     return true;
 }
 
+bool OutputTS::init_intel_hw(const string & type,
+                             const AVCodec* codec,
+                             AVDictionary*  opt,
+                             OutputStream*  ost,
+                             AVHWFramesContext* frames_ctx)
+{
+    int    ret;
+
+    frames_ctx->width     = m_input_width;
+    frames_ctx->height    = m_input_height;
+    frames_ctx->initial_pool_size = 20;
+
+    // Initialize frames context
+    if ((ret = av_hwframe_ctx_init(ost->hw_frames_ctx)) < 0)
+    {
+        clog << lock_ios()
+             << "ERROR: Failed to initialize " << type << " frame context."
+             << "Error code: " << AVerr2str(ret) << endl;
+        av_buffer_unref(&ost->hw_frames_ctx);
+        Shutdown();
+        return false;
+    }
+
+    ost->enc->hw_frames_ctx = av_buffer_ref(ost->hw_frames_ctx);
+    if (!ost->enc->hw_frames_ctx)
+    {
+        ret = AVERROR(ENOMEM);
+        clog << lock_ios()
+             << "ERROR: Failed to allocate hw frame buffer. "
+             << "Error code: " << AVerr2str(ret) << endl;
+        av_buffer_unref(&ost->hw_frames_ctx);
+        Shutdown();
+        return false;
+    }
+    ost->hw_device = true;
+
+    // Open codec
+    if ((ret = avcodec_open2(ost->enc, codec, &opt)) < 0)
+    {
+        clog << lock_ios()
+             << "ERROR: Cannot open " << type
+             << " video encoder codec. Error code: "
+             << AVerr2str(ret) << endl;
+        Shutdown();
+        return false;
+    }
+
+    // Allocate reusable frames
+    ost->frames = new OutputStream::FramePool[ost->frames_total];
+    for (int idx = 0; idx < ost->frames_total; ++idx)
+    {
+        ost->frames[idx].frame = alloc_hw_picture(ost->hw_frames_ctx,
+                                                  frames_ctx->sw_format,
+                                                  frames_ctx->width,
+                                                  frames_ctx->height);
+        if (!ost->frames[idx].frame)
+        {
+            clog << lock_ios()
+                 << "ERROR: Could not allocate " << type << " video frame["
+                 << idx << "]" << endl;
+            Shutdown();
+            return false;
+        }
+    }
+
+    // Create temporary frame for mapping
+    ost->tmp_frame = av_frame_alloc();
+
+    if (ost->tmp_frame == nullptr)
+    {
+        clog << lock_ios()
+             << "ERROR: Unable to allocate a temporary video frame." << endl;
+        Shutdown();
+        return false;
+    }
+
+    // Set up temporary frame with source format
+    ost->tmp_frame->format = frames_ctx->sw_format;
+    ost->tmp_frame->width  = m_input_width;
+    ost->tmp_frame->height = m_input_height;
+
+    // Allocate buffer for temp frame
+    ret = av_frame_get_buffer(ost->tmp_frame, 32);
+    if (ret < 0)
+        return false;
+
+    return true;
+}
+
 /**
  * @brief Open VAAPI encoder
  * @param codec Video codec to use
@@ -1447,19 +1580,17 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
                           OutputStream* ost, AVDictionary* opt_arg)
 {
     int ret;
-    AVCodecContext* ctx = ost->enc;
     AVDictionary* opt = nullptr;
-    AVBufferRef* hw_frames_ref;
     AVHWFramesContext* frames_ctx = nullptr;
 
     av_dict_copy(&opt, opt_arg, 0);
 
     // Set encoder options
-    av_opt_set(ctx->priv_data, "rc_mode", "ICQ", 0);
-    av_opt_set_int(ctx->priv_data, "maxrate", 25000000, 0);
-    av_opt_set_int(ctx->priv_data, "bufsize", 400000000, 0);
-    av_opt_set_int(ctx->priv_data, "bf", 0, 0);
-    av_opt_set_int(ctx->priv_data, "qp", 25, 0);
+    av_opt_set(ost->enc->priv_data, "rc_mode", "ICQ", 0);
+    av_opt_set_int(ost->enc->priv_data, "maxrate", 25000000, 0);
+    av_opt_set_int(ost->enc->priv_data, "bufsize", 400000000, 0);
+    av_opt_set_int(ost->enc->priv_data, "bf", 0, 0);
+    av_opt_set_int(ost->enc->priv_data, "qp", 25, 0);
 
     // Create hardware device context
     if (ost->hw_device_ctx == nullptr)
@@ -1496,79 +1627,22 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     }
 
     // Create hardware frames context
-    if (!(hw_frames_ref = av_hwframe_ctx_alloc(ost->hw_device_ctx)))
+    if (!(ost->hw_frames_ctx = av_hwframe_ctx_alloc(ost->hw_device_ctx)))
     {
         clog << lock_ios()
              << "ERROR: Failed to create VAAPI frame context." << endl;
         Shutdown();
         return false;
     }
-    frames_ctx = reinterpret_cast<AVHWFramesContext* >(hw_frames_ref->data);
+    frames_ctx = reinterpret_cast<AVHWFramesContext* >(ost->hw_frames_ctx->data);
 
     // Set frame format
-    if (m_isHDR || m_p010)
-        frames_ctx->sw_format = AV_PIX_FMT_P010;
-    else
-        frames_ctx->sw_format = AV_PIX_FMT_NV12;
+    frames_ctx->sw_format = m_sw_pix_fmt;
 
     frames_ctx->format    = AV_PIX_FMT_VAAPI;
     ost->enc->pix_fmt     = AV_PIX_FMT_VAAPI;
 
-    frames_ctx->width     = m_input_width;
-    frames_ctx->height    = m_input_height;
-    frames_ctx->initial_pool_size = 20;
-
-    // Initialize frames context
-    if ((ret = av_hwframe_ctx_init(hw_frames_ref)) < 0)
-    {
-        clog << lock_ios()
-             << "ERROR: Failed to initialize VAAPI frame context."
-             << "Error code: " << AVerr2str(ret) << endl;
-        av_buffer_unref(&hw_frames_ref);
-        Shutdown();
-        return false;
-    }
-    ctx->hw_frames_ctx = av_buffer_ref(hw_frames_ref);
-    if (!ctx->hw_frames_ctx)
-    {
-        ret = AVERROR(ENOMEM);
-        clog << lock_ios()
-             << "ERROR: Failed to allocate hw frame buffer. "
-             << "Error code: " << AVerr2str(ret) << endl;
-        av_buffer_unref(&hw_frames_ref);
-        Shutdown();
-        return false;
-    }
-    av_buffer_unref(&hw_frames_ref);
-    ost->hw_device = true;
-
-    // Open codec
-    if ((ret = avcodec_open2(ctx, codec, &opt)) < 0)
-    {
-        clog << lock_ios()
-             << "ERROR: Cannot open VAAPI video encoder codec. Error code: "
-             << AVerr2str(ret) << endl;
-        Shutdown();
-        return false;
-    }
-
-    // Allocate reusable frames
-    ost->frames = new OutputStream::FramePool[ost->frames_total];
-    for (int idx = 0; idx < ost->frames_total; ++idx)
-    {
-        ost->frames[idx].frame = alloc_picture(frames_ctx->sw_format,
-                                               frames_ctx->width,
-                                               frames_ctx->height);
-        if (!ost->frames[idx].frame)
-        {
-            clog << lock_ios()
-                 << "ERROR: Could not allocate QSV video frame" << endl;
-            Shutdown();
-            return false;
-        }
-    }
-
-    return true;
+    return init_intel_hw("VAAPI", codec, opt, ost, frames_ctx);
 }
 
 /**
@@ -1585,7 +1659,6 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     int    ret;
 
     AVDictionary* opt = nullptr;
-    AVBufferRef* hw_frames_ref;
     AVHWFramesContext* frames_ctx = nullptr;
 
     av_dict_copy(&opt, opt_arg, 0);
@@ -1611,10 +1684,13 @@ bool OutputTS::open_qsv(const AVCodec* codec,
         {
             if (m_video_codec_name == "hevc_qsv")
                 av_opt_set_int(ost->enc->priv_data, "look_ahead", 1, 0);
-            av_opt_set_int(ost->enc->priv_data, "look_ahead_depth", m_look_ahead, 0);
+            av_opt_set_int(ost->enc->priv_data, "look_ahead_depth",
+                           m_look_ahead, 0);
         }
         av_opt_set_int(ost->enc->priv_data, "extra_hw_frames", m_look_ahead, 0);
         av_opt_set(ost->enc->priv_data, "skip_frame", "insert_dummy", 0);
+
+        av_opt_set(ost->enc->priv_data, "async_depth", "4", 0);
     }
 
     av_opt_set_int(ost->enc->priv_data, "idr_interval", 0, 0);
@@ -1643,79 +1719,22 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     }
 
     // Create hardware frames context
-    if (!(hw_frames_ref = av_hwframe_ctx_alloc(ost->hw_device_ctx)))
+    if (!(ost->hw_frames_ctx = av_hwframe_ctx_alloc(ost->hw_device_ctx)))
     {
         clog << lock_ios()
              << "ERROR: Failed to create QSV frame context." << endl;
         Shutdown();
         return false;
     }
-    frames_ctx = reinterpret_cast<AVHWFramesContext* >(hw_frames_ref->data);
+    frames_ctx = reinterpret_cast<AVHWFramesContext* >(ost->hw_frames_ctx->data);
 
     // Set frame format
-    if (m_isHDR || m_p010)
-        frames_ctx->sw_format = AV_PIX_FMT_P010;
-    else
-        frames_ctx->sw_format = AV_PIX_FMT_NV12;
+    frames_ctx->sw_format = m_sw_pix_fmt;
 
     frames_ctx->format    = AV_PIX_FMT_QSV;
     ost->enc->pix_fmt     = AV_PIX_FMT_QSV;
 
-    frames_ctx->width     = m_input_width;
-    frames_ctx->height    = m_input_height;
-    frames_ctx->initial_pool_size = 20;
-
-    // Initialize frames context
-    if ((ret = av_hwframe_ctx_init(hw_frames_ref)) < 0)
-    {
-        clog << lock_ios()
-             << "ERROR: Failed to initialize QSV frame context."
-             << "Error code: " << AVerr2str(ret) << endl;
-        av_buffer_unref(&hw_frames_ref);
-        Shutdown();
-        return false;
-    }
-    ost->enc->hw_frames_ctx = av_buffer_ref(hw_frames_ref);
-    if (!ost->enc->hw_frames_ctx)
-    {
-        ret = AVERROR(ENOMEM);
-        clog << lock_ios()
-             << "ERROR: Failed to allocate hw frame buffer. "
-             << "Error code: " << AVerr2str(ret) << endl;
-        av_buffer_unref(&hw_frames_ref);
-        Shutdown();
-        return false;
-    }
-    av_buffer_unref(&hw_frames_ref);
-    ost->hw_device = true;
-
-    // Open codec
-    if ((ret = avcodec_open2(ost->enc, codec, &opt)) < 0)
-    {
-        clog << lock_ios()
-             << "ERROR: Cannot open QSV video encoder codec. Error code: "
-             << AVerr2str(ret) << endl;
-        Shutdown();
-        return false;
-    }
-
-    // Allocate reusable frames
-    ost->frames = new OutputStream::FramePool[ost->frames_total];
-    for (int idx = 0; idx < ost->frames_total; ++idx)
-    {
-        ost->frames[idx].frame = alloc_picture(frames_ctx->sw_format,
-                                               frames_ctx->width,
-                                               frames_ctx->height);
-        if (!ost->frames[idx].frame)
-        {
-            clog << lock_ios()
-                 << "ERROR: Could not allocate QSV video frame" << endl;
-            Shutdown();
-            return false;
-        }
-    }
-
-    return true;
+    return init_intel_hw("QSV", codec, opt, ost, frames_ctx);
 }
 
 /**
@@ -1740,55 +1759,13 @@ bool OutputTS::nv_encode(void)
  */
 bool OutputTS::qsv_vaapi_encode(void)
 {
-    static AVFrame* hw_frame = nullptr;
     int    ret;
-
     OutputStream* ost   = &m_video_stream;
 
-    if (!(hw_frame = av_frame_alloc()))
-    {
-        clog << lock_ios()
-             << "ERROR: Failed to allocate hw frame.";
-        Shutdown();
-        return false;
-    }
-
-    // Get hardware frame buffer
-    if ((ret = av_hwframe_get_buffer(ost->enc->hw_frames_ctx,
-                                     hw_frame, 0)) < 0)
-    {
-        clog << lock_ios()
-             << "ERROR: Failed to get hw buffer: "
-             << AV_ts2str(ret) << endl;
-        Shutdown();
-        return false;
-    }
-
-    // Transfer frame data to hardware
-    if (!hw_frame->hw_frames_ctx)
-    {
-        clog << lock_ios()
-             << "ERROR: Failed to allocate hw frame CTX." << endl;
-        Shutdown();
-        return false;
-    }
-
-    if ((ret = av_hwframe_transfer_data(hw_frame,
-                                        ost->frame, 0)) < 0)
-    {
-        clog << lock_ios()
-             << "ERROR: failed transferring frame data to surface: "
-             << AV_ts2str(ret) << endl;
-        Shutdown();
-        return false;
-    }
-
-    hw_frame->pts = ost->frame->pts;
     ost->next_pts = m_video_stream.timestamp + 1;
 
     ret = write_frame(m_output_format_context,
-                      ost->enc, hw_frame, ost);
-    av_frame_free(&hw_frame);
+                      ost->enc, ost->frame, ost);
 
     return ret;
 }
@@ -1992,6 +1969,7 @@ void OutputTS::DiscardImages(bool val)
  */
 void OutputTS::copy_to_frame(void)
 {
+    AVFrame* dst_frame;
     uint8_t* pImage;
     void*    pEco;
     int      image_size;
@@ -1999,6 +1977,7 @@ void OutputTS::copy_to_frame(void)
     int64_t  prev_ts = -1;
     int64_t  prev_pts = -1;
     int      prev_idx = -1;
+    int      ret = 0;
 
     while (m_running.load() == true)
     {
@@ -2074,21 +2053,46 @@ void OutputTS::copy_to_frame(void)
         prev_ts = timestamp;
         prev_idx = m_video_stream.frames_idx_in;
 
+        if (m_video_stream.hw_frames_ctx)
+        {
+            // Map hardware frame to temporary frame
+            if ((ret = av_hwframe_map(m_video_stream.tmp_frame, frm,
+                                      AV_HWFRAME_MAP_WRITE |
+                                      AV_HWFRAME_MAP_OVERWRITE)) < 0)
+            {
+                clog << lock_ios()
+                     << "ERROR: Could not map hw frame: "
+                     << AVerr2str(ret) << endl;
+                Shutdown();
+                return;
+            }
+            dst_frame = m_video_stream.tmp_frame;
+        }
+        else
+            dst_frame = frm;
+
         // Copy frame data based on pixel format
         if (m_video_stream.enc->pix_fmt == AV_PIX_FMT_YUV420P)
         {
             // YUV 4:2:0
-            memcpy(frm->data[0], pImage, image_size);
-            memcpy(frm->data[1], pImage + image_size, image_size / 4);
-            memcpy(frm->data[2], pImage + image_size * 5 / 4,
+            memcpy(dst_frame->data[0], pImage, image_size);
+            memcpy(dst_frame->data[1], pImage + image_size, image_size / 4);
+            memcpy(dst_frame->data[2], pImage + image_size * 5 / 4,
                    image_size / 4);
         }
         else
         {
-            memcpy(frm->data[0], pImage, image_size);
-            memcpy(frm->data[1], pImage + image_size,
+            memcpy(dst_frame->data[0], pImage, image_size);
+            memcpy(dst_frame->data[1], pImage + image_size,
                    image_size / 2);
         }
+
+        if (m_video_stream.hw_frames_ctx)
+        {
+            // Unmap and cleanup
+            av_frame_unref(m_video_stream.tmp_frame);
+        }
+
         f_image_buffer_available(pImage, pEco);
 
         {

@@ -70,6 +70,7 @@ class OutputTS
     // a wrapper around a single output AVStream
     using OutputStream = struct {
         AVBufferRef* hw_device_ctx {nullptr};
+        AVBufferRef* hw_frames_ctx  {nullptr};
         bool         hw_device     {false};
 
         AVStream* st               {nullptr};
@@ -141,8 +142,16 @@ class OutputTS
     // Video output
     static AVFrame* alloc_picture(enum AVPixelFormat pix_fmt,
                                   int width, int height);
+    static AVFrame* alloc_hw_picture(AVBufferRef* hw_frame_ctx,
+                                     enum AVPixelFormat pix_fmt,
+                                     int width, int height);
     bool open_nvidia(const AVCodec* codec, OutputStream* ost,
                      AVDictionary* opt_arg);
+    bool init_intel_hw(const std::string & type,
+                       const AVCodec* codec,
+                       AVDictionary*  opt,
+                       OutputStream*  ost,
+                       AVHWFramesContext* frames_ctx);
     bool open_vaapi(const AVCodec* codec, OutputStream* ost,
                     AVDictionary* opt_arg);
     bool open_qsv(const AVCodec* codec, OutputStream* ost,
@@ -181,6 +190,7 @@ class OutputTS
 
     bool             m_interlaced             {false};
 
+    enum AVPixelFormat            m_sw_pix_fmt        {AV_PIX_FMT_NV12};
     bool                          m_p010              {false};
     int                           m_frame_buffers     {10};
     // HDR
