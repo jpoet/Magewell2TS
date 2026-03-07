@@ -346,12 +346,23 @@ AVPacket* AudioBuffer::ReadSPDIF(void)
     {
         // Free packet on error
         av_packet_free(&pkt);
-        if (ret != AVERROR_EOF && m_verbose > 0)
-            clog << lock_ios()
-                 << "WARNING: [" << m_id
-                 << "] Failed to read spdif frame: (" << ret << ") "
-                 << AVerr2str(ret) << endl;
-        return nullptr;
+        if (ret == AVERROR_EOF)
+        {
+            if (m_verbose > 0)
+                clog << "Audio EOF\n";
+            return pkt;
+        }
+        else
+        {
+            if (m_verbose > 0)
+            {
+                clog << lock_ios()
+                     << "WARNING: [" << m_id
+                     << "] Failed to read spdif frame: (" << ret << ") "
+                     << AVerr2str(ret) << endl;
+            }
+            return nullptr;
+        }
     }
 
 #ifdef DUMP_FFMPEG_BITSTREAM
@@ -869,7 +880,7 @@ bool AudioIO::Add(AudioBuffer::AudioFrame *& buf, int64_t timestamp)
     {
         clog << lock_ios()
              << "WARNING: No audio buffers to Add to." << endl;
-        return 0;
+        return false;
     }
 
 #if 0

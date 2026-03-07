@@ -1263,6 +1263,7 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
     {
         if (m_verbose > 2)
             clog << "Failed to read pkt from S/PDIF" << endl;
+        HardReset("S/PDIF Audio glitch");
         return false;
     }
 

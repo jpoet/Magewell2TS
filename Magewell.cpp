@@ -976,7 +976,7 @@ int EcoEventWait(mw_event_t event, int timeout/*ms*/)
  */
 void Magewell::capture_audio_loop(void)
 {
-#if 0
+#if 1
     bool      good_signal = true;
 #endif
     bool      lpcm = false;
@@ -1080,7 +1080,7 @@ void Magewell::capture_audio_loop(void)
             continue;
         }
 
-#if 0
+#if 1
         // Check if audio signal is valid
         if (!audio_signal_status.bChannelStatusValid)
         {
@@ -2223,7 +2223,9 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                     }
                     if (timestamp > expected_ts)
                     {
+#if 0
                         m_out2ts->HardReset("Magewell driver lost a frame. Can't keep up!");
+#endif
                     }
                     else
                         timestamp = expected_ts;
