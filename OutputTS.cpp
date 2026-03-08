@@ -1547,26 +1547,9 @@ bool OutputTS::init_intel_hw(const string & type,
         }
     }
 
-    // Create temporary frame for mapping
-    ost->tmp_frame = av_frame_alloc();
-
-    if (ost->tmp_frame == nullptr)
-    {
-        clog << lock_ios()
-             << "ERROR: Unable to allocate a temporary video frame." << endl;
-        Shutdown();
-        return false;
-    }
-
-    // Set up temporary frame with source format
-    ost->tmp_frame->format = frames_ctx->sw_format;
-    ost->tmp_frame->width  = m_input_width;
-    ost->tmp_frame->height = m_input_height;
-
-    // Allocate buffer for temp frame
-    ret = av_frame_get_buffer(ost->tmp_frame, 32);
-    if (ret < 0)
-        return false;
+    ost->tmp_frame = alloc_picture(frames_ctx->sw_format,
+                                   frames_ctx->width,
+                                   frames_ctx->height);
 
     return true;
 }

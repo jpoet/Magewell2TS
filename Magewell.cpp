@@ -2189,9 +2189,6 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         }
 
         frame_ts = videoFrameInfo.allFieldBufferedTimes[0];
-#if 0
-        MWGetDeviceTime(m_channel, &card_ts);
-#endif
         if (frame_ts == -1)
             timestamp = expected_ts;
         else
@@ -2213,11 +2210,9 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                              << " prev:" << previous_ts
                              << " expected:" << expected_ts
                              << " actual:" << timestamp
-#if 0
-                             << " cardTS:" << card_ts
-                             << " diff: " << card_ts - timestamp
-#endif
-                             << endl;
+                             << '\n';
+                        cerr.flush();
+                        break;
                     }
                     if (timestamp > expected_ts)
                     {
