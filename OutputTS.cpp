@@ -1263,7 +1263,9 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
     {
         if (m_verbose > 2)
             clog << "Failed to read pkt from S/PDIF" << endl;
+#if 0
         HardReset("S/PDIF Audio glitch");
+#endif
         return false;
     }
 
@@ -1916,10 +1918,23 @@ void OutputTS::HardReset(const string& why)
         clog << "DAMAGED: " << why << ". Resetting." << endl;
     else if (m_verbose > 0)
         clog << "WARNING: " << why << ". Resetting." << endl;
-    m_audioIO->Reset("OutputTS::mux");
+    m_audioIO->Reset(why);
     f_reset();
     ClearVideoPool();
     ClearImageQueue();
+}
+
+/**
+ * @brief soft reset all resources
+ */
+void OutputTS::SoftReset(const string& why)
+{
+    if (m_verbose > 0)
+        clog << why << ". Soft reset." << endl;
+#if 0
+    m_audioIO->Reset(why);
+#endif
+    DiscardImages(true);
 }
 
 /**

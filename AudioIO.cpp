@@ -1014,8 +1014,7 @@ bool AudioIO::CodecChanged(void)
         return false;
     }
 
-    if (!(*Ibuf).LPCM())
-        f_discard_images(false);
+    f_discard_images(false);
 
     // Update codec parameters if changed
     if (m_codec_name != (*Ibuf).CodecName())

@@ -1248,9 +1248,7 @@ void Magewell::capture_audio_loop(void)
             // Handle input reset
             if (notify_status & MWCAP_NOTIFY_AUDIO_INPUT_RESET)
             {
-                if (m_verbose > 0)
-                    clog << lock_ios()
-                         << "WARNING: Audio input restarting.\n";
+                m_out2ts->SoftReset("Audio input restarting.");
                 this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
                 break;
             }
@@ -2205,7 +2203,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             {
                 if (expected_ts >= 0)
                 {
-                    if (m_verbose > 2)
+                    if (m_verbose > 0)
                     {
                         clog << lock_ios()
                              << "WARNING: Unexpected TimeStamp "
@@ -2223,9 +2221,8 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                     }
                     if (timestamp > expected_ts)
                     {
-#if 0
-                        m_out2ts->HardReset("Magewell driver lost a frame. Can't keep up!");
-#endif
+                        cerr << "DAMAGED: Magewell driver lost a frame. Can't keep up!"
+                             << endl;
                     }
                     else
                         timestamp = expected_ts;
@@ -2827,7 +2824,7 @@ void Magewell::Reset(void)
         chrono::high_resolution_clock::now();
 
     // Rate limit resets to prevent excessive resets
-    if (chrono::duration_cast<chrono::microseconds>(end - m_last_reset).count() > 4000)
+    if (chrono::duration_cast<chrono::seconds>(end - m_last_reset).count() > 4)
     {
         if (m_verbose > 0)
             clog << "Magewell:Reset" << endl;
