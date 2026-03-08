@@ -1676,29 +1676,8 @@ void Magewell::pro_image_buffer_available(uint8_t* pbImage, void* buf)
 {
     unique_lock<mutex> lock(m_image_buffer_mutex);
 
-    --m_image_buffers_inflight;
-
-    // Check if we have too many buffers
-    if (m_avail_image_buffers.size() > m_image_buffers_desired)
-    {
-        if (m_verbose > 3)
-            clog << lock_ios() << "Releasing excess video buffer.\n";
-        // Unpin and delete buffer if we have too many
-        MWUnpinVideoBuffer(m_channel, (LPBYTE)(pbImage));
-        delete[] pbImage;
-        if (--m_image_buffer_total <
-            (m_image_buffers_desired + 2) && m_verbose > 2)
-            clog << lock_ios() << "INFO: Video encoder is "
-                 << m_image_buffer_total << " frames behind.\n";
-
-        m_image_buffers.erase(pbImage);
-    }
-    else
-        m_avail_image_buffers.push_back(pbImage);
-
-    // Notify waiting threads if needed
-    if (m_image_buffers_desired == 0 && m_image_buffers_inflight == 0)
-        m_image_returned.notify_one();
+    m_avail_image_buffers.push_back(pbImage);
+    m_image_returned.notify_one();
 }
 
 /**
@@ -2128,13 +2107,9 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
 
     uint8_t* pbImage = nullptr;
     int64_t  timestamp = -1;
-    int64_t  previous_ts = -1;
     int64_t  expected_ts = -1;
     int64_t  frame_ts    = -1;
-#if 0
-    long long card_ts    = -1;
-#endif
-    int      previous_idx = -1;
+    uint     skipped_frame_cnt = 0;
 
     int      quarter_dur = eco_params.llFrameDuration / 4;
 
@@ -2147,7 +2122,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     while (m_running.load() == true)
     {
         // Wait for notification
-        if (MWWaitEvent(notify_event, m_frame_ms2) <= 0)
+        if (MWWaitEvent(notify_event, 250) <= 0)
         {
             if (m_verbose > 1)
                 clog << lock_ios()
@@ -2222,7 +2197,6 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         }
 
         // Manage frame index
-        previous_idx = frame_idx;
         if (frame_idx == -1)
         {
             frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
@@ -2233,68 +2207,88 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 frame_idx = 0;
         }
 
-        // Get frame info
-        if (MWGetVideoFrameInfo(m_channel, frame_idx,
-                                &videoFrameInfo) != MW_SUCCEEDED)
+        for (;;)
         {
-            if (m_verbose > 0)
-                clog << lock_ios()
-                     << "WARNING: Failed to get video frame info (frame "
-                     << frame_cnt << ")" << endl;
-            continue;
-        }
-
-        frame_ts = videoFrameInfo.allFieldBufferedTimes[0];
-        if (frame_ts == -1)
-            timestamp = expected_ts;
-        else
-        {
-            timestamp = frame_ts;
-
-            if (timestamp < expected_ts - quarter_dur ||
-                            expected_ts + quarter_dur < timestamp)
+            // Get frame info
+            if (MWGetVideoFrameInfo(m_channel, frame_idx,
+                                    &videoFrameInfo) != MW_SUCCEEDED)
             {
-                if (expected_ts >= 0)
+                if (m_verbose > 0)
                 {
-                    if (m_verbose > 0)
+                    clog << lock_ios()
+                         << "WARNING: Failed to get video frame info (frame "
+                         << frame_cnt << ")\n";
+                    cerr.flush();
+                }
+                continue;
+            }
+
+            frame_ts = videoFrameInfo.allFieldBufferedTimes[0];
+            if (frame_ts == -1)
+            {
+                /**
+                 * TS will be -1 if MW has started to write a new frame there.
+                 * This means the frame we wanted is being clobbered :(
+                 */
+                if (skipped_frame_cnt++ % 1800 == 0)
+                {
+                    clog << "DAMAGED: Magewell driver has dropped "
+                         << skipped_frame_cnt << " frames.\n";
+                    cerr.flush();
+                }
+                if (++frame_idx == frame_wrap_idx)
+                    frame_idx = 0;
+                expected_ts += eco_params.llFrameDuration;
+                continue;
+            }
+            else
+            {
+                timestamp = frame_ts;
+
+                if (timestamp < expected_ts - quarter_dur ||
+                    expected_ts + quarter_dur < timestamp)
+                {
+                    if (expected_ts >= 0)
                     {
-                        clog << lock_ios()
-                             << "WARNING: Unexpected TimeStamp "
-                             << "[" << previous_idx << " -> "
-                             << frame_idx << "]"
-                             << " diff:" << expected_ts - timestamp
-                             << " prev:" << previous_ts
-                             << " expected:" << expected_ts
-                             << " actual:" << timestamp
-                             << '\n';
-                        cerr.flush();
-                        break;
+                        if (timestamp > expected_ts)
+                        {
+                            /* We have effectively lost two
+                             frames. The current frame has been
+                             overwritten and the next frame is *being*
+                             overwritten. */
+                            if (skipped_frame_cnt % 1800 == 0)
+                            {
+                                clog << "DAMAGED: Magewell driver has dropped "
+                                     << skipped_frame_cnt + 1 << " frames.\n";
+                                cerr.flush();
+                            }
+                            skipped_frame_cnt += 2;
+
+                            // MW will be writing to the next frame,
+                            //    so get the one after it.
+                            frame_idx = videoBufferInfo.iNewestBufferedFullFrame + 2;
+                            frame_idx %= frame_wrap_idx;
+                            expected_ts += eco_params.llFrameDuration;
+                            continue;
+                        }
+                        else
+                        {
+                            timestamp = expected_ts;
+                        }
                     }
-                    if (timestamp > expected_ts)
-                    {
-                        cerr << "DAMAGED: Magewell driver lost a frame. Can't keep up!"
-                             << endl;
-                    }
-                    else
-                        timestamp = expected_ts;
                 }
             }
+            break;
         }
         expected_ts = timestamp + eco_params.llFrameDuration;
-        previous_ts = timestamp;
 
         // Get available buffer
         m_image_buffer_mutex.lock();
         if (m_avail_image_buffers.empty())
         {
-            m_image_buffer_mutex.unlock();
-            add_pro_image_buffer();
-            m_image_buffer_mutex.lock();
-            if (m_verbose > 2)
-                clog << lock_ios()
-                     << "WARNING: video encoder is "
-                     << m_image_buffer_total << " frames behind (frame "
-                     << frame_cnt << ")" << endl;
+            unique_lock<mutex> lock(m_image_buffer_mutex);
+            m_image_returned.wait_for(lock, chrono::milliseconds(m_frame_ms),
+                                      [this]{return !m_image_buffers.empty();});
         }
 
         pbImage = m_avail_image_buffers.front();

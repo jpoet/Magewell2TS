@@ -1828,7 +1828,12 @@ void OutputTS::mux(void)
             {
                 if (++glitch_cnt % 100 == 0)
                 {
+#if 0
                     HardReset("Audio glitch");
+#else
+                    clog << "Audio glitch.\n";
+                    cerr.flush();
+#endif
                 }
                 this_thread::sleep_for(chrono::milliseconds(5));
                 continue;

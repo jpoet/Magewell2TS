@@ -26,7 +26,7 @@
 class Magewell
 {
     // Constants
-    static const int k_min_video_buffers = 6;  ///< Minimum number of video buffers to maintain
+    static const int k_min_video_buffers = 20;  ///< Minimum number of video buffers to maintain
 
     // Type definitions
     using imageset_t = std::set<uint8_t*>;     ///< Set of image buffers
