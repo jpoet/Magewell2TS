@@ -321,7 +321,8 @@ bool OutputTS::open_audio(void)
     {
         clog << lock_ios()
              << "WARNING: Could not find audio encoder for '"
-             << m_audioIO->CodecName() << "'" << endl;
+             << m_audioIO->CodecName() << "'\n";
+        cerr.flush();
         return true;
     }
 
@@ -1087,7 +1088,8 @@ bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
         {
             clog << lock_ios()
                  << "WARNING: Failed sending a frame to the encoder: "
-                 << AVerr2str(ret) << endl;
+                 << AVerr2str(ret) << '\n';
+            cerr.flush();
         }
         return false;
     }
@@ -1103,8 +1105,8 @@ bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
             if (m_verbose > 0)
             {
                 clog << lock_ios()
-                     << "WARNING: Failed encoding a frame: AVerr2str(ret)"
-                     << endl;
+                     << "WARNING: Failed encoding a frame: AVerr2str(ret)\n";
+                cerr.flush();
             }
             return false;
         }
@@ -1130,7 +1132,8 @@ bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
             {
                 clog << lock_ios()
                      << "WARNING: Failed to write packet: " << AVerr2str(ret)
-                     << endl;
+                     << '\n';
+                cerr.flush();
             }
 
             if (m_verbose > 1)
@@ -1222,8 +1225,8 @@ bool OutputTS::write_pcm_frame(AVFormatContext* oc, OutputStream* ost)
     // Make frame writable
     if (0 > av_frame_make_writable(ost->frame))
     {
-        clog << "WARNING: write_pcm_frame: Failed to make frame writable"
-             << endl;
+        clog << "WARNING: write_pcm_frame: Failed to make frame writable\n";
+        cerr.flush();
         return false;
     }
 
@@ -1234,7 +1237,8 @@ bool OutputTS::write_pcm_frame(AVFormatContext* oc, OutputStream* ost)
                       frame->nb_samples);
     if (ret < 0)
     {
-        clog << "WARNING: write_pcm_frame: Error while converting" << endl;
+        clog << "WARNING: write_pcm_frame: Error while converting\n";
+        cerr.flush();
         return false;
     }
 
@@ -1294,7 +1298,8 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
     {
         clog << lock_ios()
              << "WARNING: Failed to write audio packet: " << AVerr2str(ret)
-             << endl;
+             << '\n';
+        cerr.flush();
         return false;
     }
 
@@ -1344,9 +1349,10 @@ AVFrame* OutputTS::alloc_picture(enum AVPixelFormat pix_fmt,
     {
         const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(pix_fmt);
         clog << lock_ios()
-             << "ERROR: Could not allocate " << desc->name
+             << "WARNING: Could not allocate " << desc->name
              << " video frame of " << width << "x" << height
-             << " : " << AV_ts2str(ret) << endl;
+             << " : " << AV_ts2str(ret) << '\n';
+        cerr.flush();
         return nullptr;
     }
 
@@ -1383,9 +1389,10 @@ AVFrame* OutputTS::alloc_hw_picture(AVBufferRef* hw_frames_ctx,
     {
         const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(pix_fmt);
         clog << lock_ios()
-             << "ERROR: Could not allocate hw " << desc->name
+             << "WARNING: Could not allocate hw " << desc->name
              << " video frame of " << width << "x" << height
-             << " : " << AV_ts2str(ret) << endl;
+             << " : " << AV_ts2str(ret) << '\n';
+        cerr.flush();
         return nullptr;
     }
 
@@ -1812,7 +1819,8 @@ void OutputTS::mux(void)
                 if (m_verbose > 4)
                 {
                     clog << lock_ios() << "WARNING: New TS needed but"
-                         << why << " encoder is not ready." << endl;
+                         << why << " encoder is not ready.\n";
+                    cerr.flush();
                 }
             }
         }

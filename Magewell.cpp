@@ -478,6 +478,7 @@ bool Magewell::describe_input(HCHANNEL hChannel)
              << "\n";
     }
 
+    cerr.flush();
     return true;
 }
 
@@ -499,7 +500,10 @@ void Magewell::ListInputs(void)
     int idx;
 
     // Display number of channels found
-    clog << lock_ios() << num_channels << " channels.\n";
+    ios_lock lock;
+    clog << lock_ios(lock);
+
+    clog << num_channels << " channels.\n";
 
     // Iterate through all channels
     for (idx = 0; idx < num_channels; ++idx)
@@ -555,6 +559,7 @@ void Magewell::ListInputs(void)
         // Close channel after use
         MWCloseChannel(hChannel);
     }
+    cerr.flush();
 }
 
 /**
@@ -609,7 +614,8 @@ bool Magewell::OpenChannel(int devIndex, double boardId)
     // Check if any channels are available
     if (channel_cnt == 0)
     {
-        clog << "ERROR: Failed to detect any input channels.";
+        clog << "ERROR: Failed to detect any input channels.\n";
+        cerr.flush();
         m_fatal = true;
         return false;
     }
@@ -625,7 +631,8 @@ bool Magewell::OpenChannel(int devIndex, double boardId)
         {
             clog << "ERROR: Only " << channel_cnt
                  << " input channels detected. Cannot open input "
-                 << devIndex << endl;
+                 << devIndex << '\n';
+            cerr.flush();
             m_fatal = true;
             return false;
         }
@@ -641,7 +648,8 @@ bool Magewell::OpenChannel(int devIndex, double boardId)
         clog << "ERROR: Failed to open input channel ";
         if (boardId >= 0)
             clog << "board " << boardId << " ";
-        clog << devIndex + 1 << endl;
+        clog << devIndex + 1 << '\n';
+        cerr.flush();
     }
 
     m_channel_idx = devIndex;
@@ -651,7 +659,8 @@ bool Magewell::OpenChannel(int devIndex, double boardId)
     if (MW_SUCCEEDED != MWGetChannelInfo(m_channel, &channel_info))
     {
         clog << "ERROR: Unable to retrieve channel info for index "
-             << m_channel_idx << "!" << endl;
+             << m_channel_idx << "!\n";
+        cerr.flush();
         return false;
     }
 
@@ -678,10 +687,11 @@ bool Magewell::OpenChannel(int devIndex, double boardId)
     // Get input status
     MWCAP_INPUT_SPECIFIC_STATUS status;
     if (MWGetInputSpecificStatus(m_channel, &status) != MW_SUCCEEDED)
-        clog << "Unable to get input status!" << endl;
+        clog << "Unable to get input status!\n";
     else if(!status.bValid)
-        clog << "No signal detected on input." << endl;
+        clog << "No signal detected on input.\n";
 
+    cerr.flush();
     return true;
 }
 
@@ -725,6 +735,7 @@ void Magewell::DisplayVolume(void)
              << (volume.abMute[idx] ? "Yes" : "No")
              << ", Volume: " << volume.asVolume[idx] << "\n";
     }
+    cerr.flush();
 }
 
 /**
@@ -1002,7 +1013,10 @@ void Magewell::capture_audio_loop(void)
     MWCAP_AUDIO_CAPTURE_FRAME macf;
 
     if (m_verbose > 2)
+    {
         clog << "Starting audio capture loop\n";
+        cerr.flush();
+    }
 
 #ifdef DUMP_RAW_AUDIO_ALLBITS
     ofstream fraw_all;
@@ -1018,7 +1032,10 @@ void Magewell::capture_audio_loop(void)
     if (input_count == 0)
     {
         if (m_verbose > 0)
-            clog << "ERROR: can't find audio input." << endl;
+        {
+            clog << "ERROR: can't find audio input.\n";
+            cerr.flush();
+        }
         goto audio_capture_stoped;
     }
 
@@ -1026,7 +1043,10 @@ void Magewell::capture_audio_loop(void)
     if (MW_SUCCEEDED != MWStartAudioCapture(m_channel))
     {
         if (m_verbose > 0)
-            clog << "ERROR: start audio capture fail!" << endl;
+        {
+            clog << "ERROR: start audio capture fail!\n";
+            cerr.flush();
+        }
         goto audio_capture_stoped;
     }
 
@@ -1036,7 +1056,8 @@ void Magewell::capture_audio_loop(void)
         eco_event = eventfd(0, EFD_NONBLOCK);
         if (eco_event < 0)
         {
-            clog << lock_ios() << "ERROR: Failed to create eco event." << endl;
+            clog << lock_ios() << "ERROR: Failed to create eco event.\n";
+            cerr.flush();
             Shutdown();
             return;
         }
@@ -1051,7 +1072,8 @@ void Magewell::capture_audio_loop(void)
         notify_event = MWCreateEvent();
         if (notify_event == 0)
         {
-            clog << lock_ios() << "ERROR: create notify_event fail" << endl;
+            clog << lock_ios() << "ERROR: create notify_event fail.\n";
+            cerr.flush();
             Shutdown();
             return;
         }
@@ -1063,8 +1085,11 @@ void Magewell::capture_audio_loop(void)
 
     // Display starting message if verbose
     if (m_verbose > 1)
+    {
         clog << lock_ios()
              << "Audio capture starting\n";
+        cerr.flush();
+    }
 
     // Main audio capture loop
     while (m_running.load() == true)
@@ -1074,8 +1099,11 @@ void Magewell::capture_audio_loop(void)
                                                    &audio_signal_status))
         {
             if (m_verbose > 0 && ++err_cnt % 50 == 0)
+            {
                 clog << lock_ios() << "WARNING (cnt: " << err_cnt
-                     << ") can't get audio signal status." << endl;
+                     << ") can't get audio signal status.\n";
+                cerr.flush();
+            }
             this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
             continue;
         }
@@ -1085,7 +1113,10 @@ void Magewell::capture_audio_loop(void)
         if (!audio_signal_status.bChannelStatusValid)
         {
             if (good_signal && m_verbose > 0 && ++err_cnt % 100 == 0)
-                clog << lock_ios() << "No audio signal." << endl;
+            {
+                clog << lock_ios() << "No audio signal.\n";
+                cerr.flush();
+            }
             good_signal = false;
             this_thread::sleep_for(chrono::milliseconds(m_frame_ms * 2));
             continue;
@@ -1107,7 +1138,7 @@ void Magewell::capture_audio_loop(void)
             if (m_reset_audio.load() == true)
             {
                 if (m_verbose > 1)
-                    clog << "Audio re-initializing." << endl;
+                    clog << "Audio re-initializing.\n";
                 params_changed = true;
             }
             if (lpcm != audio_signal_status.bLPCM)
@@ -1115,9 +1146,9 @@ void Magewell::capture_audio_loop(void)
                 if (m_verbose > 1)
                 {
                     if (lpcm)
-                        clog << "lPCM -> Bitstream" << endl;
+                        clog << "lPCM -> Bitstream\n";
                     else
-                        clog << "Bitstream -> lPCM" << endl;
+                        clog << "Bitstream -> lPCM\n";
                 }
                 lpcm = audio_signal_status.bLPCM;
                 params_changed = true;
@@ -1126,7 +1157,7 @@ void Magewell::capture_audio_loop(void)
             {
                 if (m_verbose > 1)
                     clog << "Audio sample rate " << sample_rate
-                         << " -> " << audio_signal_status.dwSampleRate << endl;
+                         << " -> " << audio_signal_status.dwSampleRate << '\n';
                 sample_rate = audio_signal_status.dwSampleRate;
                 params_changed = true;
             }
@@ -1134,7 +1165,7 @@ void Magewell::capture_audio_loop(void)
             {
                 if (m_verbose > 1)
                     clog << "Audio bytes per sample " << bytes_per_sample
-                         << " -> " << even_bytes_per_sample << endl;
+                         << " -> " << even_bytes_per_sample << '\n';
                 bytes_per_sample = even_bytes_per_sample;
                 params_changed = true;
             }
@@ -1142,10 +1173,11 @@ void Magewell::capture_audio_loop(void)
             {
                 if (m_verbose > 1)
                     clog << "Audio channels " << valid_channels
-                         << " -> " << audio_signal_status.wChannelValid << endl;
+                         << " -> " << audio_signal_status.wChannelValid << '\n';
                 valid_channels = audio_signal_status.wChannelValid;
                 params_changed = true;
             }
+            cerr.flush();
         }
 
         // Handle parameter changes
@@ -1168,9 +1200,12 @@ void Magewell::capture_audio_loop(void)
             if (0 == cur_channels)
             {
                 if (m_verbose > 0 && err_cnt++ % 25 == 0)
+                {
                     clog << lock_ios() << "WARNING [" << err_cnt
                          << "] Invalid audio channel count: "
-                         << cur_channels << endl;
+                         << cur_channels << '\n';
+                    cerr.flush();
+                }
 
                 this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
                 continue;
@@ -1195,6 +1230,7 @@ void Magewell::capture_audio_loop(void)
             m_reset_audio.store(false);
         }
 
+        cerr.flush();
         err_cnt = 0;
         frame_cnt = 0;
         for (;;)
@@ -1422,7 +1458,8 @@ bool Magewell::update_HDRinfo(void)
                                                  MWCAP_HDMI_INFOFRAME_ID_HDR,
                                                  &m_infoPacket))
     {
-        clog << lock_ios() << "WARNING: HDMI HDR infoframe not available.\n";
+        clog << "WARNING: HDMI HDR infoframe not available.\n";
+        cerr.flush();
         return false;
     }
 
@@ -1890,8 +1927,10 @@ bool Magewell::open_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN & eco_params)
         return false;
 
     if (m_verbose > 1)
-        clog << lock_ios()
-             << "Eco Video capture started.\n";
+    {
+        clog << "Eco Video capture started.\n";
+        cerr.flush();
+    }
 
     return true;
 }
@@ -1976,9 +2015,12 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                                               &ullStatusBits))
         {
             if (m_verbose > 0)
+            {
                 clog << lock_ios()
                      << "WARNING: Failed to get Notify status (frame "
-                     << frame_cnt << ")" << endl;
+                     << frame_cnt << ")\n";
+                cerr.flush();
+            }
             continue;
         }
 
@@ -2012,10 +2054,13 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             else
                 add_eco_image_buffer();
             if (m_verbose > 2)
+            {
                 clog << lock_ios()
                      << "WARNING: video encoder is "
                      << m_image_buffer_total << " frames behind (frame "
-                     << frame_cnt << ")" << endl;
+                     << frame_cnt << ")\n";
+                cerr.flush();
+            }
         }
 
         // Get capture status
@@ -2025,8 +2070,10 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             eco_status.pvFrame == reinterpret_cast<MWCAP_PTR>(nullptr))
         {
             if (m_verbose > 4)
-                clog << lock_ios()
-                     << "WARNING: Failed to get Eco video frame." << endl;
+            {
+                clog << "WARNING: Failed to get Eco video frame.\n";
+                cerr.flush();
+            }
 //                    add_eco_image_buffer();
             this_thread::sleep_for(chrono::milliseconds(1));
             continue;
@@ -2114,9 +2161,12 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                                               &ullStatusBits))
         {
             if (m_verbose > 0)
+            {
                 clog << lock_ios()
                      << "WARNING: Failed to get Notify status (frame "
-                     << frame_cnt << ")" << endl;
+                     << frame_cnt << ")\n";
+                cerr.flush();
+            }
             continue;
         }
 
@@ -2143,9 +2193,12 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
         {
             if (m_verbose > 0)
+            {
                 clog << lock_ios()
                      << "WARNING: Video signal lost lock. (frame "
-                     << frame_cnt << ")" << endl;
+                     << frame_cnt << ")\n";
+                cerr.flush();
+            }
             this_thread::sleep_for(chrono::milliseconds(5));
             return false;
         }
@@ -2159,9 +2212,12 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                                                  &videoBufferInfo))
         {
             if (m_verbose > 0)
+            {
                 clog << lock_ios()
                      << "WARNING: Failed to get video buffer info (frame "
-                     << frame_cnt << ")" << endl;
+                     << frame_cnt << ")\n";
+                cerr.flush();
+            }
             continue;
         }
 
@@ -2261,9 +2317,12 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         if (result != MW_SUCCEEDED)
         {
             if (m_verbose > 0)
+            {
                 clog << lock_ios()
                      << "WARNING: Failed to retrieve frame "
-                     << "(frame " << frame_cnt << ")" << endl;
+                     << "(frame " << frame_cnt << ")\n";
+                cerr.flush();
+            }
             pro_image_buffer_available(pbImage, nullptr);
             continue;
         }
@@ -2272,9 +2331,12 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         if (MWWaitEvent(capture_event, -1) <= 0)
         {
             if (m_verbose > 0)
+            {
                 clog << lock_ios()
                      << "WARNING: wait capture event error or timeout "
-                     << "(frame " << frame_cnt << ")" << endl;
+                     << "(frame " << frame_cnt << ")\n";
+                cerr.flush();
+            }
             pro_image_buffer_available(pbImage, nullptr);
             continue;
         }
@@ -2377,6 +2439,8 @@ bool Magewell::capture_video(void)
 
     while (m_running.load() == true)
     {
+        cerr.flush();
+
         MWCAP_VIDEO_SIGNAL_STATUS videoSignalStatus;
 
         MWGetVideoSignalStatus(m_channel, &videoSignalStatus);
@@ -2384,8 +2448,7 @@ bool Magewell::capture_video(void)
         if (videoSignalStatus.state == MWCAP_VIDEO_SIGNAL_UNSUPPORTED)
         {
             if (state != videoSignalStatus.state && m_verbose > 0)
-                clog << "WARNING: Input video signal status: Unsupported"
-                     << endl;
+                clog << "WARNING: Input video signal status: Unsupported\n";
             locked = false;
             state = videoSignalStatus.state;
             this_thread::sleep_for(chrono::milliseconds(m_frame_ms * 10));
@@ -2401,24 +2464,21 @@ bool Magewell::capture_video(void)
               break;
             case MWCAP_VIDEO_SIGNAL_NONE:
               if (state != videoSignalStatus.state && m_verbose > 0)
-                  clog << "WARNING: Input video signal status: NONE"
-                       << endl;
+                  clog << "WARNING: Input video signal status: NONE\n";
               locked = false;
               state = videoSignalStatus.state;
               this_thread::sleep_for(chrono::milliseconds(m_frame_ms * 5));
               continue;
             case MWCAP_VIDEO_SIGNAL_LOCKING:
               if (state != videoSignalStatus.state && m_verbose > 0)
-                  clog << "WARNING: Input video signal status: Locking"
-                       << endl;;
+                  clog << "WARNING: Input video signal status: Locking\n";
               locked = false;
               state = videoSignalStatus.state;
               this_thread::sleep_for(chrono::milliseconds(m_frame_ms * 5));
               continue;
             default:
               if (m_verbose > 0)
-                  clog << "WARNING: Video signal status: lost locked."
-                       << endl;
+                  clog << "WARNING: Video signal status: lost locked.\n";
               locked = false;
               this_thread::sleep_for(chrono::milliseconds(m_frame_ms * 5));
               continue;
@@ -2566,6 +2626,7 @@ bool Magewell::capture_video(void)
                 if (videoSignalStatus.bSegmentedFrame)
                     clog << "Input signal frame segmented\n";
                 clog << "========\n";
+                cerr.flush();
             }
 
             if (MWGetVideoBufferInfo(m_channel,
