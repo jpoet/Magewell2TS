@@ -56,7 +56,7 @@ class OutputTS
                         AVRational time_base, double frame_duration,
                         AVRational frame_rate, bool is_hdr);
     bool addAudio(AudioBuffer::AudioFrame *& buf, int64_t timestamp);
-    void HardReset(const std::string& why);
+    void HardReset(const std::string& why, bool force_damage = false);
     void SoftReset(const std::string& why);
     void ClearVideoPool(void);
     void ClearImageQueue(void);
@@ -71,7 +71,7 @@ class OutputTS
     // a wrapper around a single output AVStream
     using OutputStream = struct {
         AVBufferRef* hw_device_ctx {nullptr};
-        AVBufferRef* hw_frames_ctx  {nullptr};
+        AVBufferRef* hw_frames_ctx {nullptr};
         bool         hw_device     {false};
 
         AVStream* st               {nullptr};
@@ -151,8 +151,7 @@ class OutputTS
     bool init_intel_hw(const std::string & type,
                        const AVCodec* codec,
                        AVDictionary*  opt,
-                       OutputStream*  ost,
-                       AVHWFramesContext* frames_ctx);
+                       OutputStream*  ost);
     bool open_vaapi(const AVCodec* codec, OutputStream* ost,
                     AVDictionary* opt_arg);
     bool open_qsv(const AVCodec* codec, OutputStream* ost,

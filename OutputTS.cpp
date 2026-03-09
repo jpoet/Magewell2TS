@@ -211,10 +211,6 @@ OutputTS::~OutputTS(void)
 
     // Close streams and container
     close_stream(&m_video_stream);
-    if (m_video_stream.hw_device_ctx)
-        av_buffer_unref(&m_video_stream.hw_device_ctx);
-    if (m_video_stream.hw_frames_ctx)
-        av_buffer_unref(&m_video_stream.hw_frames_ctx);
 
     close_stream(&m_audio_stream);
     close_container();
@@ -936,7 +932,7 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     m_input_frame_duration = frame_duration;
     m_input_frame_rate = frame_rate;
     m_isHDR = is_hdr;
-    m_frame_buffers = 20;
+    m_frame_buffers = 40;
 
     if (m_p010 || m_isHDR)
         m_sw_pix_fmt = AV_PIX_FMT_P010;
@@ -996,7 +992,7 @@ void OutputTS::close_encoder(OutputStream* ost)
     if (!ost->enc)
         return;
 
-    // Free hardware frames context
+    // Free encoder hardware frames context
     av_buffer_unref(&ost->enc->hw_frames_ctx);
     ost->enc->hw_frames_ctx = nullptr;
     ost->hw_device = false;
@@ -1036,6 +1032,10 @@ void OutputTS::close_stream(OutputStream* ost)
     // Free hardware device context
     if (ost->hw_device)
     {
+        if (ost->hw_frames_ctx)
+            av_buffer_unref(&ost->hw_frames_ctx);
+        if (ost->hw_device_ctx)
+            av_buffer_unref(&ost->hw_device_ctx);
         av_buffer_unref(&ost->enc->hw_frames_ctx);
         ost->hw_device = false;
     }
@@ -1267,9 +1267,6 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
     {
         if (m_verbose > 2)
             clog << "Failed to read pkt from S/PDIF" << endl;
-#if 0
-        HardReset("S/PDIF Audio glitch");
-#endif
         return false;
     }
 
@@ -1492,14 +1489,27 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
 bool OutputTS::init_intel_hw(const string & type,
                              const AVCodec* codec,
                              AVDictionary*  opt,
-                             OutputStream*  ost,
-                             AVHWFramesContext* frames_ctx)
+                             OutputStream*  ost)
 {
     int    ret;
 
+    // Create hardware frames context
+    if (!(ost->hw_frames_ctx = av_hwframe_ctx_alloc(ost->hw_device_ctx)))
+    {
+        clog << lock_ios()
+             << "ERROR: Failed to create QSV frame context." << endl;
+        Shutdown();
+        return false;
+    }
+
+    AVHWFramesContext* frames_ctx =
+        reinterpret_cast<AVHWFramesContext* >(ost->hw_frames_ctx->data);
+    // Set frame format
+    frames_ctx->format    = ost->enc->pix_fmt;
+    frames_ctx->sw_format = m_sw_pix_fmt;
     frames_ctx->width     = m_input_width;
     frames_ctx->height    = m_input_height;
-    frames_ctx->initial_pool_size = 20;
+    frames_ctx->initial_pool_size = m_frame_buffers;
 
     // Initialize frames context
     if ((ret = av_hwframe_ctx_init(ost->hw_frames_ctx)) < 0)
@@ -1512,6 +1522,7 @@ bool OutputTS::init_intel_hw(const string & type,
         return false;
     }
 
+    // Initialize HW encoder with HW frame context.
     ost->enc->hw_frames_ctx = av_buffer_ref(ost->hw_frames_ctx);
     if (!ost->enc->hw_frames_ctx)
     {
@@ -1541,22 +1552,20 @@ bool OutputTS::init_intel_hw(const string & type,
     for (int idx = 0; idx < ost->frames_total; ++idx)
     {
         ost->frames[idx].frame = alloc_hw_picture(ost->hw_frames_ctx,
-                                                  frames_ctx->sw_format,
-                                                  frames_ctx->width,
-                                                  frames_ctx->height);
+                                                  m_sw_pix_fmt,
+                                                  m_input_width,
+                                                  m_input_height);
         if (!ost->frames[idx].frame)
         {
             clog << lock_ios()
-                 << "ERROR: Could not allocate " << type << " video frame["
-                 << idx << "]" << endl;
-            Shutdown();
-            return false;
+                 << "WARNING: Could not allocate " << type << " video frame["
+                 << idx << "]\n";
+            cerr.flush();
+            ost->frames_total = idx + 1;
         }
     }
 
-    ost->tmp_frame = alloc_picture(frames_ctx->sw_format,
-                                   frames_ctx->width,
-                                   frames_ctx->height);
+    ost->tmp_frame = alloc_picture(m_sw_pix_fmt, m_input_width, m_input_height);
 
     return true;
 }
@@ -1574,7 +1583,6 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
 {
     int ret;
     AVDictionary* opt = nullptr;
-    AVHWFramesContext* frames_ctx = nullptr;
 
     av_dict_copy(&opt, opt_arg, 0);
 
@@ -1619,23 +1627,20 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
                  << "Using VAAPI driver '" << *Idriver << "'\n";
     }
 
-    // Create hardware frames context
-    if (!(ost->hw_frames_ctx = av_hwframe_ctx_alloc(ost->hw_device_ctx)))
+    if (ost->hw_frames_ctx == nullptr)
     {
-        clog << lock_ios()
-             << "ERROR: Failed to create VAAPI frame context." << endl;
-        Shutdown();
-        return false;
+        // Create hardware frames context
+        if (!(ost->hw_frames_ctx = av_hwframe_ctx_alloc(ost->hw_device_ctx)))
+        {
+            clog << lock_ios()
+                 << "ERROR: Failed to create VAAPI frame context." << endl;
+            Shutdown();
+            return false;
+        }
     }
-    frames_ctx = reinterpret_cast<AVHWFramesContext* >(ost->hw_frames_ctx->data);
 
-    // Set frame format
-    frames_ctx->sw_format = m_sw_pix_fmt;
-
-    frames_ctx->format    = AV_PIX_FMT_VAAPI;
     ost->enc->pix_fmt     = AV_PIX_FMT_VAAPI;
-
-    return init_intel_hw("VAAPI", codec, opt, ost, frames_ctx);
+    return init_intel_hw("VAAPI", codec, opt, ost);
 }
 
 /**
@@ -1652,7 +1657,6 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     int    ret;
 
     AVDictionary* opt = nullptr;
-    AVHWFramesContext* frames_ctx = nullptr;
 
     av_dict_copy(&opt, opt_arg, 0);
 
@@ -1711,23 +1715,8 @@ bool OutputTS::open_qsv(const AVCodec* codec,
                  << "Using QSV\n";
     }
 
-    // Create hardware frames context
-    if (!(ost->hw_frames_ctx = av_hwframe_ctx_alloc(ost->hw_device_ctx)))
-    {
-        clog << lock_ios()
-             << "ERROR: Failed to create QSV frame context." << endl;
-        Shutdown();
-        return false;
-    }
-    frames_ctx = reinterpret_cast<AVHWFramesContext* >(ost->hw_frames_ctx->data);
-
-    // Set frame format
-    frames_ctx->sw_format = m_sw_pix_fmt;
-
-    frames_ctx->format    = AV_PIX_FMT_QSV;
-    ost->enc->pix_fmt     = AV_PIX_FMT_QSV;
-
-    return init_intel_hw("QSV", codec, opt, ost, frames_ctx);
+    ost->enc->pix_fmt = AV_PIX_FMT_QSV;
+    return init_intel_hw("QSV", codec, opt, ost);
 }
 
 /**
@@ -1903,16 +1892,22 @@ void OutputTS::mux(void)
 /**
  * @brief hard reset all resources
  */
-void OutputTS::HardReset(const string& why)
+void OutputTS::HardReset(const string& why, bool force_damage)
 {
-    if (m_video_stream.frames_written > 1800)
+    if (force_damage || m_video_stream.frames_written > 1800)
         clog << "DAMAGED: " << why << ". Resetting." << endl;
     else if (m_verbose > 0)
-        clog << "WARNING: " << why << ". Resetting." << endl;
+        clog << "WARNING: " << why << ". Resetting.\n";
+    cerr.flush();
     m_audioIO->Reset(why);
     f_reset();
+
+#if 1
     ClearVideoPool();
     ClearImageQueue();
+#else
+    DiscardImages(!m_no_audio);
+#endif
 }
 
 /**
