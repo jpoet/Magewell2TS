@@ -25,9 +25,6 @@
  */
 class Magewell
 {
-    // Constants
-    static const int k_min_video_buffers = 20;  ///< Minimum number of video buffers to maintain
-
     // Type definitions
     using imageset_t = std::set<uint8_t*>;     ///< Set of image buffers
     using imageque_t = std::deque<uint8_t*>;   ///< Queue of available image buffers
@@ -269,6 +266,8 @@ private:
 private:
     // Audio buffer parameters
     int m_audio_buf_frames {12288};  ///< Audio buffer frames
+    int m_video_buffers {10};  ///< number of video buffers to maintain
+
 
     // Capture components
     OutputTS*            m_out2ts  {nullptr};  ///< Output TS handler

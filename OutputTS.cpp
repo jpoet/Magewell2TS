@@ -32,7 +32,7 @@
  * @file OutputTS.cpp
  * @brief Implementation of Transport Stream output functionality for video/audio encoding
  * @author John Patrick Poet
- * @date 2022-2025
+ * @date 2022-2026
  */
 
 #include <csignal>
@@ -225,7 +225,8 @@ void OutputTS::Shutdown(void)
     if (m_running.exchange(false))
     {
         f_shutdown();
-        m_audioIO->Shutdown();
+        if (m_audioIO)
+            m_audioIO->Shutdown();
     }
 }
 
@@ -562,6 +563,10 @@ bool OutputTS::open_audio(void)
 bool OutputTS::open_video(void)
 {
     close_encoder(&m_video_stream);
+
+    if (m_verbose > 1)
+        clog << "Opening video.\n";
+    m_video_stream.name = "video";
 
     // Reset reusable frames
     if (m_video_stream.frames != nullptr)
@@ -932,7 +937,8 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     m_input_frame_duration = frame_duration;
     m_input_frame_rate = frame_rate;
     m_isHDR = is_hdr;
-    m_frame_buffers = 40;
+    m_frame_buffers = 5 *
+                      (3 + (m_input_height > 1080) + (m_isHDR || m_p010));
 
     if (m_p010 || m_isHDR)
         m_sw_pix_fmt = AV_PIX_FMT_P010;
@@ -992,17 +998,43 @@ void OutputTS::close_encoder(OutputStream* ost)
     if (!ost->enc)
         return;
 
-    // Free encoder hardware frames context
-    av_buffer_unref(&ost->enc->hw_frames_ctx);
-    ost->enc->hw_frames_ctx = nullptr;
-    ost->hw_device = false;
+    if (m_verbose > 1)
+        clog << lock_ios() << "Closing " << ost->name << " encoder.\n";
 
-    // Free temporary frame
-    if (ost->tmp_frame /*  && ost->tmp_frame->data[0] */)
+    // Free encoder hardware frames context
+    if (ost->hw_frames_ctx)
+    {
+        // Unreference the hardware frames context
+        av_buffer_unref(&ost->hw_frames_ctx);
+    }
+
+    if (ost->enc && ost->enc->hw_frames_ctx)
+    {
+        // Unreference the hardware frames context from encoder
+        av_buffer_unref(&ost->enc->hw_frames_ctx);
+    }
+
+    if (ost->frames)
+    {
+        // Free allocated frames
+        for (int idx = 0; idx < ost->frames_total; ++idx)
+        {
+            if (ost->frames[idx].frame)
+            {
+                av_frame_free(&ost->frames[idx].frame);
+            }
+        }
+        delete[] ost->frames;
+        ost->frames = nullptr;
+    }
+
+    if (ost->tmp_frame)
     {
         av_frame_free(&ost->tmp_frame);
-        ost->tmp_frame = nullptr;
     }
+
+    // Reset flags
+    ost->hw_device = false;
 
     // Free resampler context
     if (ost->swr_ctx)
@@ -1411,6 +1443,9 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
     AVCodecContext* ctx = ost->enc;
     AVDictionary* opt = NULL;
 
+    if (m_verbose > 1)
+        clog << "Opening nVidia encoder.\n";
+
     av_dict_copy(&opt, opt_arg, 0);
 
     // Set encoder options
@@ -1492,6 +1527,9 @@ bool OutputTS::init_intel_hw(const string & type,
                              OutputStream*  ost)
 {
     int    ret;
+
+    if (m_verbose > 0)
+        clog << "Initializing Intel GPU\n";
 
     // Create hardware frames context
     if (!(ost->hw_frames_ctx = av_hwframe_ctx_alloc(ost->hw_device_ctx)))
@@ -1584,6 +1622,9 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     int ret;
     AVDictionary* opt = nullptr;
 
+    if (m_verbose > 1)
+        clog << "Opening VAAPI encoder.\n";
+
     av_dict_copy(&opt, opt_arg, 0);
 
     // Set encoder options
@@ -1657,6 +1698,9 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     int    ret;
 
     AVDictionary* opt = nullptr;
+
+    if (m_verbose > 1)
+        clog << "Opening QSV encoder.\n";
 
     av_dict_copy(&opt, opt_arg, 0);
 
@@ -1741,15 +1785,12 @@ bool OutputTS::nv_encode(void)
  */
 bool OutputTS::qsv_vaapi_encode(void)
 {
-    int    ret;
     OutputStream* ost   = &m_video_stream;
 
     ost->next_pts = m_video_stream.timestamp + 1;
 
-    ret = write_frame(m_output_format_context,
+    return write_frame(m_output_format_context,
                       ost->enc, ost->frame, ost);
-
-    return ret;
 }
 
 /**
@@ -1765,7 +1806,8 @@ void OutputTS::mux(void)
         // Handle audio codec changes
         if (m_audioIO && m_audioIO->CodecChanged())
         {
-            clog << lock_ios() << " Audio changing: closing audio encoder\n";
+            if (m_verbose > 0)
+                clog << "Audio changing: closing audio encoder\n";
             if (!open_audio())
             {
                 clog << lock_ios()

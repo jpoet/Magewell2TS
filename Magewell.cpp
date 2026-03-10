@@ -1748,8 +1748,8 @@ void Magewell::free_image_buffers(void)
     unique_lock<mutex> lock(m_image_buffer_mutex);
 
     // Wait for all buffers to be returned from output thread
-    m_image_returned.wait_for(lock, chrono::milliseconds(m_frame_ms),
-                              [this]{return m_image_buffers_inflight == 0;});
+    while (m_image_buffers_inflight)
+        m_image_returned.wait_for(lock, chrono::milliseconds(m_frame_ms));
 
     // Free ECO buffers if using ECO mode
     if (m_isEco)
@@ -1780,7 +1780,7 @@ void Magewell::free_image_buffers(void)
     // Reset buffer counters
     m_image_buffer_avail = 0;
     m_image_buffer_total = 0;
-    m_image_buffers_desired = k_min_video_buffers;
+    m_image_buffers_desired = m_video_buffers;
 }
 
 /**
@@ -2273,6 +2273,11 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                         }
                         else
                         {
+                            clog << lock_ios()
+                                 << "Nudging TS from " << timestamp
+                                 << " to " << expected_ts
+                                 << " diff " << expected_ts - timestamp
+                                 << "\n";
                             timestamp = expected_ts;
                         }
                     }
@@ -2283,17 +2288,16 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         expected_ts = timestamp + eco_params.llFrameDuration;
 
         // Get available buffer
-        m_image_buffer_mutex.lock();
-        if (m_avail_image_buffers.empty())
         {
             unique_lock<mutex> lock(m_image_buffer_mutex);
-            m_image_returned.wait_for(lock, chrono::milliseconds(m_frame_ms),
-                                      [this]{return !m_image_buffers.empty();});
+            while (m_avail_image_buffers.empty())
+            {
+                m_image_returned.wait_for(lock,
+                                          chrono::milliseconds(4));
+            }
+            pbImage = m_avail_image_buffers.front();
+            m_avail_image_buffers.pop_front();
         }
-
-        pbImage = m_avail_image_buffers.front();
-        m_avail_image_buffers.pop_front();
-        m_image_buffer_mutex.unlock();
 
         // Capture frame to virtual address
         result = MWCaptureVideoFrameToVirtualAddress
@@ -2574,6 +2578,9 @@ bool Magewell::capture_video(void)
             params_changed = true;
         }
 
+        m_video_buffers = 5 *
+                          (3 + (eco_params.cy > 1080) + (m_isHDR || m_p010));
+
         if (params_changed || color_changed)
         {
             color_changed = false;
@@ -2661,7 +2668,7 @@ bool Magewell::capture_video(void)
                     Shutdown();
                 else
                 {
-                    m_image_buffers_desired = k_min_video_buffers;
+                    m_image_buffers_desired = m_video_buffers;
                     for (idx = 0; idx < m_image_buffers_desired; ++idx)
                     {
                         if (!add_eco_image_buffer())
@@ -2675,7 +2682,7 @@ bool Magewell::capture_video(void)
             else
             {
                 free_image_buffers();
-                m_image_buffers_desired = k_min_video_buffers;
+                m_image_buffers_desired = m_video_buffers;
                 for (idx = 0; idx < m_image_buffers_desired; ++idx)
                 {
                     if (!add_pro_image_buffer())
