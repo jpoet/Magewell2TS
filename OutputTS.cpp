@@ -47,6 +47,8 @@
 #include <cstdlib>
 #include <fcntl.h>
 #include <chrono>
+#include <algorithm>
+#include <array>
 
 extern "C" {
 #include <libavutil/avassert.h>
@@ -869,7 +871,7 @@ bool OutputTS::setAudioParams(int num_channels, bool is_lpcm,
 {
     if (m_audioIO == nullptr)
     {
-        m_audioIO = new AudioIO([=](bool val) { this->DiscardImages(val); },
+        m_audioIO = new AudioIO([=,this](bool val) { this->DiscardImages(val); },
                                 m_verbose);
         if (m_audioIO == nullptr)
         {
@@ -937,8 +939,14 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     m_input_frame_duration = frame_duration;
     m_input_frame_rate = frame_rate;
     m_isHDR = is_hdr;
-    m_frame_buffers = 5 *
+
+    // Minimum 16 needed for reasons I don't understand, or resulting
+    // video is wacked.
+    m_frame_buffers = 30;
+/*
+5 *
                       (3 + (m_input_height > 1080) + (m_isHDR || m_p010));
+*/
 
     if (m_p010 || m_isHDR)
         m_sw_pix_fmt = AV_PIX_FMT_P010;
@@ -1933,6 +1941,7 @@ void OutputTS::mux(void)
             }
             m_videopool_avail.notify_one();
         }
+        this_thread::yield();
     }
 }
 
@@ -2027,15 +2036,19 @@ void OutputTS::copy_to_frame(void)
     int      prev_idx = -1;
     int      ret = 0;
 
-    int      avg_vidpool_used = 0;
-    int      avg_vidpool_samples = 0;
-    int      max_vidpool_used = 0;
-    int      avg_vidpool_5m_used = 0;
-    int      avg_vidpool_5m_samples = 0;
-    int      max_vidpool_5m_used = 0;
+    int            vidpool_used_1m  {0};
+    array<int, 5>  vidpool_used_5m  {0};
+    array<int, 10> vidpool_used_10m {0};
+    int            vidpool_5m_idx   {0};
+    int            vidpool_10m_idx  {0};
+    array<int, 5>::iterator  vidpool_5m_max;
+    array<int, 10>::iterator vidpool_10m_max;
+
+    int used = 0;
 
     chrono::steady_clock::time_point current_tm;
-    chrono::steady_clock::time_point avg_vidpool_tm = chrono::steady_clock::now();
+    chrono::steady_clock::time_point vidpool_tm = chrono::steady_clock::now();
+    int duration;
 
     while (m_running.load() == true)
     {
@@ -2076,29 +2089,6 @@ void OutputTS::copy_to_frame(void)
 
             if (++m_video_stream.frames_idx_in == m_video_stream.frames_total)
                 m_video_stream.frames_idx_in = 0;
-        }
-
-        if (m_verbose > 0)
-        {
-            current_tm = chrono::steady_clock::now();
-            if (chrono::duration_cast<chrono::seconds>
-                (current_tm - avg_vidpool_tm).count() > 300)
-            {
-                clog << lock_ios() << "Frame pool avg:"
-                     << avg_vidpool_used / avg_vidpool_samples
-                     << "/" << m_video_stream.frames_total
-                     << ", max:" << max_vidpool_used
-                     << ", 5min avg:"
-                     << avg_vidpool_5m_used / avg_vidpool_5m_samples
-                     << "/" << m_video_stream.frames_total
-                     << ", max:" << max_vidpool_5m_used
-                     << endl;
-                cerr.flush();
-                avg_vidpool_tm = current_tm;
-                avg_vidpool_5m_samples = 0;
-                avg_vidpool_5m_used = 0;
-                max_vidpool_5m_used = 0;
-            }
         }
 
         m_video_stream.frames[m_video_stream.frames_idx_in]
@@ -2178,19 +2168,52 @@ void OutputTS::copy_to_frame(void)
 
         {
             std::unique_lock<std::mutex> lock(m_videopool_mutex);
-
-            ++m_video_stream.frames_used;
-
-            avg_vidpool_used += m_video_stream.frames_used;
-            ++avg_vidpool_samples;
-            avg_vidpool_5m_used += m_video_stream.frames_used;
-            ++avg_vidpool_5m_samples;
-            if (max_vidpool_used < m_video_stream.frames_used)
-                max_vidpool_used = m_video_stream.frames_used;
-            if (max_vidpool_5m_used < m_video_stream.frames_used)
-                max_vidpool_5m_used = m_video_stream.frames_used;
+            used = ++m_video_stream.frames_used;
         }
+
         m_videopool_ready.notify_one();
+
+        if (m_verbose > 0)
+        {
+            if (vidpool_used_1m < used)
+                vidpool_used_1m = used;
+            if (vidpool_used_5m[vidpool_5m_idx] < used)
+                vidpool_used_5m[vidpool_5m_idx] = used;
+            if (vidpool_used_10m[vidpool_10m_idx] < used)
+                vidpool_used_10m[vidpool_10m_idx] = used;
+
+            current_tm = chrono::steady_clock::now();
+            duration = chrono::duration_cast<chrono::seconds>
+                       (current_tm - vidpool_tm).count();
+
+            if (duration >= 60)
+            {
+                vidpool_5m_max  = ranges::max_element(vidpool_used_5m);
+                vidpool_10m_max = ranges::max_element(vidpool_used_10m);
+
+                clog << lock_ios()
+                     << "Warning: GPU frame pool used 1m:"
+                     << vidpool_used_1m
+                     << " 5m:"   << *vidpool_5m_max
+                     << " 10m:" << *vidpool_10m_max
+                     << "\n";
+                cerr.flush();
+
+                vidpool_used_1m = 0;
+
+                ++vidpool_5m_idx;
+                vidpool_5m_idx %= 5;
+                vidpool_used_5m[vidpool_5m_idx] = 0;
+
+                ++vidpool_10m_idx;
+                vidpool_10m_idx %= 10;
+                vidpool_used_10m[vidpool_10m_idx] = 0;
+
+                vidpool_tm = current_tm;
+            }
+        }
+
+        this_thread::yield();
     }
 }
 

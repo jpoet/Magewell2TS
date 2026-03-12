@@ -43,6 +43,9 @@
 #include <iostream>
 #include <iomanip>
 #include <cstring>
+#include <algorithm>
+#include <array>
+#include <limits>
 
 #include <MWFOURCC.h>
 #include <LibMWCapture/MWCapture.h>
@@ -2108,8 +2111,9 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     uint8_t* pbImage = nullptr;
     int64_t  timestamp = -1;
     int64_t  expected_ts = -1;
-    int64_t  frame_ts    = -1;
+    int64_t  desired_ts  = -1;
     uint     skipped_frame_cnt = 0;
+    uint     skipped = 0;
 
     int      quarter_dur = eco_params.llFrameDuration / 4;
 
@@ -2118,11 +2122,25 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     MWCAP_VIDEO_SIGNAL_STATUS videoSignalStatus;
     MW_RESULT result;
 
+    int            vidpool_used_1m  {0};
+    array<int, 5>  vidpool_used_5m  {0};
+    array<int, 10> vidpool_used_10m {0};
+    int            vidpool_5m_idx   {0};
+    int            vidpool_10m_idx  {0};
+    array<int, 5>::iterator  vidpool_5m_max;
+    array<int, 10>::iterator vidpool_10m_max;
+
+    int used = 0;
+
+    chrono::steady_clock::time_point current_tm;
+    chrono::steady_clock::time_point vidpool_tm = chrono::steady_clock::now();
+    int duration;
+
     // Main capture loop
     while (m_running.load() == true)
     {
         // Wait for notification
-        if (MWWaitEvent(notify_event, 250) <= 0)
+        if (MWWaitEvent(notify_event, 8) <= 0)
         {
             if (m_verbose > 1)
                 clog << lock_ios()
@@ -2182,33 +2200,33 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         if ((ullStatusBits & event_mask) == 0)
             continue;
 
-        // Get buffer info
-        if (MW_SUCCEEDED != MWGetVideoBufferInfo(m_channel,
-                                                 &videoBufferInfo))
+        do
         {
-            if (m_verbose > 0)
+            // Get buffer info
+            if (MW_SUCCEEDED != MWGetVideoBufferInfo(m_channel,
+                                                     &videoBufferInfo))
             {
-                clog << lock_ios()
-                     << "WARNING: Failed to get video buffer info (frame "
-                     << frame_cnt << ")\n";
-                cerr.flush();
+                if (m_verbose > 0)
+                {
+                    clog << lock_ios()
+                         << "WARNING: Failed to get video buffer info (frame "
+                         << frame_cnt << ")\n";
+                    cerr.flush();
+                }
+                continue;
             }
-            continue;
-        }
 
-        // Manage frame index
-        if (frame_idx == -1)
-        {
-            frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
-        }
-        else
-        {
-            if (++frame_idx == frame_wrap_idx)
-                frame_idx = 0;
-        }
+            // Manage frame index
+            if (frame_idx == -1)
+            {
+                frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
+            }
+            else
+            {
+                if (++frame_idx == frame_wrap_idx)
+                    frame_idx = 0;
+            }
 
-        for (;;)
-        {
             // Get frame info
             if (MWGetVideoFrameInfo(m_channel, frame_idx,
                                     &videoFrameInfo) != MW_SUCCEEDED)
@@ -2216,139 +2234,199 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 if (m_verbose > 0)
                 {
                     clog << lock_ios()
-                         << "WARNING: Failed to get video frame info (frame "
-                         << frame_cnt << ")\n";
+                         << "WARNING: Failed to get video frame info "
+                         << "(frame " << frame_cnt << ")\n";
                     cerr.flush();
                 }
                 continue;
             }
 
-            frame_ts = videoFrameInfo.allFieldBufferedTimes[0];
-            if (frame_ts == -1)
+            timestamp = videoFrameInfo.allFieldBufferedTimes[0];
+            if (timestamp == -1 ||
+                (timestamp < expected_ts - quarter_dur ||
+                            expected_ts + quarter_dur < timestamp))
             {
-                /**
-                 * TS will be -1 if MW has started to write a new frame there.
-                 * This means the frame we wanted is being clobbered :(
-                 */
-                if (skipped_frame_cnt++ % 1800 == 0)
+                if (expected_ts >= 0)
                 {
-                    clog << "DAMAGED: Magewell driver has dropped "
-                         << skipped_frame_cnt << " frames.\n";
-                    cerr.flush();
-                }
-                if (++frame_idx == frame_wrap_idx)
-                    frame_idx = 0;
-                expected_ts += eco_params.llFrameDuration;
-                continue;
-            }
-            else
-            {
-                timestamp = frame_ts;
-
-                if (timestamp < expected_ts - quarter_dur ||
-                    expected_ts + quarter_dur < timestamp)
-                {
-                    if (expected_ts >= 0)
+                    if (timestamp == -1)
                     {
-                        if (timestamp > expected_ts)
-                        {
-                            /* We have effectively lost two
-                             frames. The current frame has been
-                             overwritten and the next frame is *being*
-                             overwritten. */
-                            if (skipped_frame_cnt % 1800 == 0)
-                            {
-                                clog << "DAMAGED: Magewell driver has dropped "
-                                     << skipped_frame_cnt + 1 << " frames.\n";
-                                cerr.flush();
-                            }
-                            skipped_frame_cnt += 2;
+                        clog << "MW (desired) Frame " << frame_idx << " is invalid.\n";
+                        timestamp = numeric_limits<int64_t>::max();
+                    }
 
-                            // MW will be writing to the next frame,
-                            //    so get the one after it.
-                            frame_idx = videoBufferInfo.iNewestBufferedFullFrame + 2;
-                            frame_idx %= frame_wrap_idx;
-                            expected_ts += eco_params.llFrameDuration;
-                            continue;
-                        }
-                        else
+                    if (timestamp > expected_ts)
+                    {
+                        desired_ts = expected_ts - quarter_dur;
+                        int min_idx = frame_idx;
+                        for (int i = 0; i < frame_wrap_idx; ++i)
                         {
-                            clog << lock_ios()
-                                 << "Nudging TS from " << timestamp
-                                 << " to " << expected_ts
-                                 << " diff " << expected_ts - timestamp
-                                 << "\n";
-                            timestamp = expected_ts;
+                            if (i == frame_idx)
+                                continue;
+                            // Get frame info
+                            if (MWGetVideoFrameInfo(m_channel, i,
+                                                    &videoFrameInfo) != MW_SUCCEEDED)
+                            {
+                                if (m_verbose > 0)
+                                {
+                                    clog << lock_ios()
+                                         << "WARNING: Failed to get video frame info "
+                                         << "(frame " << i << ")\n";
+                                    cerr.flush();
+                                }
+                                continue;
+                            }
+                            if (videoFrameInfo.allFieldBufferedTimes[0] != -1
+                                && videoFrameInfo.allFieldBufferedTimes[0] > desired_ts &&
+                                videoFrameInfo.allFieldBufferedTimes[0] < timestamp)
+                            {
+                                timestamp = videoFrameInfo.allFieldBufferedTimes[0];
+                                min_idx = i;
+                            }
                         }
+                        if (timestamp == -1)
+                        {
+                            clog << lock_ios() << " WARNING: None of the MW card buffers are valid.\n";
+                            break;
+                        }
+
+                        skipped = (timestamp - expected_ts) / eco_params.llFrameDuration;
+                        skipped_frame_cnt += skipped;
+                        clog << lock_ios()
+                             << "DAMAGED: Magewell lost " << timestamp - expected_ts
+                             << "ms (" << skipped
+                             << " frames)"
+                             << " idx:" << frame_idx << "->" << min_idx
+//                             << " latest:" << int(videoBufferInfo.iNewestBufferedFullFrame)
+                             << " have skipped " << skipped_frame_cnt
+                             << " of " << frame_cnt << "\n";
+
+                        cerr.flush();
+                        frame_idx = min_idx;
+                    }
+                    else
+                    {
+                        clog << lock_ios()
+                             << "Nudging TS from " << timestamp
+                             << " to " << expected_ts
+                             << " diff " << expected_ts - timestamp
+                             << "\n";
+                        timestamp = expected_ts;
                     }
                 }
             }
-            break;
-        }
-        expected_ts = timestamp + eco_params.llFrameDuration;
+            expected_ts = timestamp + eco_params.llFrameDuration;
 
-        // Get available buffer
-        {
-            unique_lock<mutex> lock(m_image_buffer_mutex);
-            while (m_avail_image_buffers.empty())
+            // Get available buffer
             {
-                m_image_returned.wait_for(lock,
-                                          chrono::milliseconds(4));
+                used = m_video_buffers - m_avail_image_buffers.size();
+
+                unique_lock<mutex> lock(m_image_buffer_mutex);
+                if (m_avail_image_buffers.empty())
+                {
+//                    clog << "MAGEWELL waiting for local buffer to write frame into.\n";
+                    while (m_avail_image_buffers.empty())
+                    {
+                        m_image_returned.wait_for(lock,
+                                                  chrono::milliseconds(4));
+                    }
+                }
+                pbImage = m_avail_image_buffers.front();
+                m_avail_image_buffers.pop_front();
             }
-            pbImage = m_avail_image_buffers.front();
-            m_avail_image_buffers.pop_front();
-        }
 
-        // Capture frame to virtual address
-        result = MWCaptureVideoFrameToVirtualAddress
-                 (m_channel,
-                  frame_idx,
-                  reinterpret_cast<MWCAP_PTR>(pbImage),
-                  m_image_size,
-                  m_min_stride,
-                  0,
-                  0,
-                  eco_params.dwFOURCC,
-                  eco_params.cx,
-                  eco_params.cy);
+            // Capture frame to virtual address
+            result = MWCaptureVideoFrameToVirtualAddress
+                     (m_channel,
+                      frame_idx,
+                      reinterpret_cast<MWCAP_PTR>(pbImage),
+                      m_image_size,
+                      m_min_stride,
+                      0,
+                      0,
+                      eco_params.dwFOURCC,
+                      eco_params.cx,
+                      eco_params.cy);
 
-        if (result != MW_SUCCEEDED)
-        {
-            if (m_verbose > 0)
+            if (result != MW_SUCCEEDED)
             {
+                if (m_verbose > 0)
+                {
+                    clog << lock_ios()
+                         << "WARNING: Failed to retrieve frame "
+                         << "(frame " << frame_cnt << ")\n";
+                    cerr.flush();
+                }
+                pro_image_buffer_available(pbImage, nullptr);
+                continue;
+            }
+
+            // Wait for capture completion
+            if (MWWaitEvent(capture_event, -1) <= 0)
+            {
+                if (m_verbose > 0)
+                {
+                    clog << lock_ios()
+                         << "WARNING: wait capture event error or timeout "
+                         << "(frame " << frame_cnt << ")\n";
+                    cerr.flush();
+                }
+                pro_image_buffer_available(pbImage, nullptr);
+                continue;
+            }
+
+            // Get capture status
+            MWCAP_VIDEO_CAPTURE_STATUS captureStatus;
+            MWGetVideoCaptureStatus(m_channel, &captureStatus);
+
+            ++frame_cnt;
+
+            // Add frame to output handler
+            if (!m_out2ts->AddVideoFrame(pbImage, nullptr,
+                                         m_num_pixels, timestamp))
+                Shutdown();
+
+        }
+        while (frame_idx != videoBufferInfo.iNewestBufferedFullFrame);
+
+        if (m_verbose > 0)
+        {
+            if (vidpool_used_1m < used)
+                vidpool_used_1m = used;
+            if (vidpool_used_5m[vidpool_5m_idx] < used)
+                vidpool_used_5m[vidpool_5m_idx] = used;
+            if (vidpool_used_10m[vidpool_10m_idx] < used)
+                vidpool_used_10m[vidpool_10m_idx] = used;
+
+            current_tm = chrono::steady_clock::now();
+            duration = chrono::duration_cast<chrono::seconds>
+                       (current_tm - vidpool_tm).count();
+
+            if (duration >= 60)
+            {
+                vidpool_5m_max  = ranges::max_element(vidpool_used_5m);
+                vidpool_10m_max = ranges::max_element(vidpool_used_10m);
+
                 clog << lock_ios()
-                     << "WARNING: Failed to retrieve frame "
-                     << "(frame " << frame_cnt << ")\n";
+                     << "Warning: Magewell frame pool used 1m:"
+                     << vidpool_used_1m
+                     << " 5m:"   << *vidpool_5m_max
+                     << " 10m:" << *vidpool_10m_max
+                     << "\n";
                 cerr.flush();
+
+                vidpool_used_1m = 0;
+
+                ++vidpool_5m_idx;
+                vidpool_5m_idx %= 5;
+                vidpool_used_5m[vidpool_5m_idx] = 0;
+
+                ++vidpool_10m_idx;
+                vidpool_10m_idx %= 10;
+                vidpool_used_10m[vidpool_10m_idx] = 0;
+
+                vidpool_tm = current_tm;
             }
-            pro_image_buffer_available(pbImage, nullptr);
-            continue;
         }
-
-        // Wait for capture completion
-        if (MWWaitEvent(capture_event, -1) <= 0)
-        {
-            if (m_verbose > 0)
-            {
-                clog << lock_ios()
-                     << "WARNING: wait capture event error or timeout "
-                     << "(frame " << frame_cnt << ")\n";
-                cerr.flush();
-            }
-            pro_image_buffer_available(pbImage, nullptr);
-            continue;
-        }
-
-        // Get capture status
-        MWCAP_VIDEO_CAPTURE_STATUS captureStatus;
-        MWGetVideoCaptureStatus(m_channel, &captureStatus);
-
-        ++frame_cnt;
-
-        // Add frame to output handler
-        if (!m_out2ts->AddVideoFrame(pbImage, nullptr,
-                                     m_num_pixels, timestamp))
-            Shutdown();
     }
 
     return true;
@@ -2578,8 +2656,10 @@ bool Magewell::capture_video(void)
             params_changed = true;
         }
 
+
         m_video_buffers = 5 *
-                          (3 + (eco_params.cy > 1080) + (m_isHDR || m_p010));
+                          (3 + ((((eco_params.cy > 1080) +
+                                 (m_isHDR || m_p010)) * 3)));
 
         if (params_changed || color_changed)
         {
@@ -2807,18 +2887,18 @@ bool Magewell::Capture(const string & video_codec, const string & preset,
     {
         m_out2ts = new OutputTS(m_verbose, video_codec, preset, quality,
                                 look_ahead, p010, gpu_device,
-                                [=](void) { this->Shutdown(); },
-                                [=](void) { this->Reset(); },
-                                [=](uint8_t* ib, void* eb)
+                                [=,this](void) { this->Shutdown(); },
+                                [=,this](void) { this->Reset(); },
+                                [=,this](uint8_t* ib, void* eb)
                                 { this->eco_image_buffer_available(ib, eb); });
     }
     else
     {
         m_out2ts = new OutputTS(m_verbose, video_codec, preset, quality,
                                 look_ahead, p010, gpu_device,
-                                [=](void) { this->Shutdown(); },
-                                [=](void) { this->Reset(); },
-                                [=](uint8_t* ib, void* eb)
+                                [=,this](void) { this->Shutdown(); },
+                                [=,this](void) { this->Reset(); },
+                                [=,this](uint8_t* ib, void* eb)
                                 { this->pro_image_buffer_available(ib, eb); });
     }
 
