@@ -1546,7 +1546,7 @@ bool OutputTS::init_intel_hw(const string & type,
     }
 
     // Intel encoders need a minimum of 16
-    int pool_size = std::max(m_frame_buffers + (m_look_ahead * 2), 16);
+    int pool_size = std::max(m_frame_buffers + m_look_ahead + 4, 16);
 
     AVHWFramesContext* frames_ctx =
         reinterpret_cast<AVHWFramesContext* >(ost->hw_frames_ctx->data);
