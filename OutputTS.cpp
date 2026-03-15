@@ -940,13 +940,10 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     m_input_frame_rate = frame_rate;
     m_isHDR = is_hdr;
 
-    // Minimum 16 needed for reasons I don't understand, or resulting
-    // video is wacked.
-    m_frame_buffers = 30;
-/*
-5 *
-                      (3 + (m_input_height > 1080) + (m_isHDR || m_p010));
-*/
+    m_frame_buffers = 25 + std::pow(max(0, 25 - m_quality), 2.3) +
+                      (((m_input_height > 1080) + (m_isHDR || m_p010)) * 6);
+    clog << lock_ios()
+         << "Using " << m_frame_buffers << " GPU buffers.\n";
 
     if (m_p010 || m_isHDR)
         m_sw_pix_fmt = AV_PIX_FMT_P010;
@@ -1548,6 +1545,9 @@ bool OutputTS::init_intel_hw(const string & type,
         return false;
     }
 
+    // Intel encoders need a minimum of 16
+    int pool_size = std::max(m_frame_buffers + (m_look_ahead * 2), 16);
+
     AVHWFramesContext* frames_ctx =
         reinterpret_cast<AVHWFramesContext* >(ost->hw_frames_ctx->data);
     // Set frame format
@@ -1555,7 +1555,7 @@ bool OutputTS::init_intel_hw(const string & type,
     frames_ctx->sw_format = m_sw_pix_fmt;
     frames_ctx->width     = m_input_width;
     frames_ctx->height    = m_input_height;
-    frames_ctx->initial_pool_size = m_frame_buffers;
+    frames_ctx->initial_pool_size = pool_size;
 
     // Initialize frames context
     if ((ret = av_hwframe_ctx_init(ost->hw_frames_ctx)) < 0)
@@ -1729,16 +1729,24 @@ bool OutputTS::open_qsv(const AVCodec* codec,
 
         av_opt_set(ost->enc->priv_data, "scenario", "livestreaming", 0);
 
-        if (m_look_ahead >= 0)
+        if (m_look_ahead >= 0 &&
+            av_opt_find(ost->enc->priv_data, "look_ahead", NULL,
+                        0, AV_OPT_SEARCH_CHILDREN))
         {
-            if (m_video_codec_name == "hevc_qsv")
-                av_opt_set_int(ost->enc->priv_data, "look_ahead", 1, 0);
+            // Old name?
+            av_opt_set_int(ost->enc->priv_data, "look_ahead", 1, 0);
             av_opt_set_int(ost->enc->priv_data, "look_ahead_depth",
                            m_look_ahead, 0);
-        }
-        av_opt_set_int(ost->enc->priv_data, "extra_hw_frames", m_look_ahead, 0);
-        av_opt_set(ost->enc->priv_data, "skip_frame", "insert_dummy", 0);
 
+            // Current name
+            av_opt_set_int(ost->enc->priv_data, "lookahead", 1, 0);
+            av_opt_set_int(ost->enc->priv_data, "lookahead_depth",
+                           m_look_ahead, 0);
+        }
+        av_opt_set_int(ost->enc->priv_data, "extra_hw_frames",
+                       std::max(m_look_ahead, 4), 0);
+
+        av_opt_set(ost->enc->priv_data, "skip_frame", "insert_dummy", 0);
         av_opt_set(ost->enc->priv_data, "async_depth", "4", 0);
     }
 
@@ -2192,7 +2200,7 @@ void OutputTS::copy_to_frame(void)
                 vidpool_10m_max = ranges::max_element(vidpool_used_10m);
 
                 clog << lock_ios()
-                     << "Warning: GPU frame pool used 1m:"
+                     << "Notice:      GPU frame pool used 1m:"
                      << vidpool_used_1m
                      << " 5m:"   << *vidpool_5m_max
                      << " 10m:" << *vidpool_10m_max

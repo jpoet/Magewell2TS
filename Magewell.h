@@ -255,7 +255,7 @@ private:
      * @brief Main video capture loop
      * @return true always
      */
-    bool capture_video(void);
+    bool capture_video(int quality);
 
     /**
      * @brief Capture audio data
