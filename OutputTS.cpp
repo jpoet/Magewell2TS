@@ -941,8 +941,8 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     m_isHDR = is_hdr;
 
     int base = max(27 - m_quality, 0) +
-               (m_input_height > 1080) +
-               (m_isHDR || m_p010);
+               ((m_input_height > 1080) * 2) +
+               ((m_isHDR || m_p010) * 4);
     m_frame_buffers = 40 + std::pow(base, 2);
 
     if (m_p010 || m_isHDR)
