@@ -1287,7 +1287,7 @@ void Magewell::capture_audio_loop(void)
             // Handle input reset
             if (notify_status & MWCAP_NOTIFY_AUDIO_INPUT_RESET)
             {
-                m_out2ts->SoftReset("Audio input restarting.");
+//                m_out2ts->SoftReset("Audio input restarting.");
                 this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
                 break;
             }
@@ -2665,10 +2665,10 @@ bool Magewell::capture_video(int quality)
             params_changed = true;
         }
 
-        m_video_buffers = 15 +
-                          (((eco_params.cy > 1080) +
-                            (m_isHDR || m_p010)) * 6) +
-                          std::pow(max(0, 24 - quality), 2);
+        int base = max(25 - quality, 3) +
+                   (eco_params.cy > 1080) +
+                   (m_isHDR || m_p010);
+        m_video_buffers = 7 + std::pow(base, 1.5);
 
         if (params_changed || color_changed)
         {

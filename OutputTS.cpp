@@ -940,10 +940,10 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     m_input_frame_rate = frame_rate;
     m_isHDR = is_hdr;
 
-    m_frame_buffers = 25 + std::pow(max(0, 25 - m_quality), 2.3) +
-                      (((m_input_height > 1080) + (m_isHDR || m_p010)) * 6);
-    clog << lock_ios()
-         << "Using " << m_frame_buffers << " GPU buffers.\n";
+    int base = max(27 - m_quality, 0) +
+               (m_input_height > 1080) +
+               (m_isHDR || m_p010);
+    m_frame_buffers = 40 + std::pow(base, 2);
 
     if (m_p010 || m_isHDR)
         m_sw_pix_fmt = AV_PIX_FMT_P010;
@@ -1547,6 +1547,9 @@ bool OutputTS::init_intel_hw(const string & type,
 
     // Intel encoders need a minimum of 16
     int pool_size = std::max(m_frame_buffers + m_look_ahead + 4, 16);
+
+    clog << lock_ios()
+         << "Using " << pool_size << " GPU buffers.\n";
 
     AVHWFramesContext* frames_ctx =
         reinterpret_cast<AVHWFramesContext* >(ost->hw_frames_ctx->data);
