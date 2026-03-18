@@ -1,5 +1,5 @@
 ﻿/*
- * Copyright (c) 2022-2025 John Patrick Poet
+ * Copyright (c) 2022-2026 John Patrick Poet
  *
  * Permission is hereby granted, free of charge, to any person
  * obtaining a copy of this software and associated documentation
@@ -101,16 +101,16 @@ void show_help(string_view app)
          << "\t" << app << " -b 1 -i 1 -m -n -c hevc_qsv | mpv -\n";
 
     clog << "\nIntel GPU Notes:\n"
-         << " * If there are insufficent GPU (VRAM) buffers allocated, it\n"
+         << " * If there are insufficient GPU (VRAM) buffers allocated, it\n"
          << "   can result in video frames being out-of-order.\n"
          << " * The number of GPU video buffers is calculated based on\n"
          << "   quality, video resolution, HDR and whether the card is a\n"
          << "   pro or eco. The result is then squared.\n"
          << "   --gpu-buffer-exp can be used to change the exponent, e.g. 2.1.\n"
-         << " * Instead of just changing the exponent of the forumula, the\n"
+         << " * Instead of just changing the exponent of the formula, the\n"
          << "   total number of GPU buffers can be set with --gpu-buffers.\n"
          << "   extra is always added for lookahead.\n"
-         << " * Insufficent buffers can also result in dropped frames. GPU\n"
+         << " * Insufficient buffers can also result in dropped frames. GPU\n"
          << "   buffers are more important than RAM video buffers, but if\n"
          << "   you don't have enough VRAM, increasing the number of RAM\n"
          << "   buffers may help, either with --video-buffer-exp or \n"

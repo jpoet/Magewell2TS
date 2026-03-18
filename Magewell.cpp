@@ -1,6 +1,6 @@
 ﻿/*
  * magewell2ts
- * Copyright (c) 2022-2025 John Patrick Poet
+ * Copyright (c) 2022-2026 John Patrick Poet
  *
  * Permission is hereby granted, free of charge, to any person
  * obtaining a copy of this software and associated documentation

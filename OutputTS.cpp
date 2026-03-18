@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022 John Patrick Poet
+ * Copyright (c) 2022-2026 John Patrick Poet
  *
  * Based on:
  *     Muxing.c Copyright (c) 2003 Fabrice Bellard
