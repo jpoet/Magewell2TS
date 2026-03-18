@@ -150,7 +150,8 @@ static void log_packet(string where, const AVFormatContext* fmt_ctx,
  */
 OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
                    const string & preset, int quality, int look_ahead,
-                   bool p010, const string & device,
+                   bool p010, bool isEco, const string & device,
+                   float gpu_buffer_exp, int gpu_buffers,
                    ShutdownCallback shutdown, ResetCallback reset,
                    MagCallback image_buffer_avail)
     : m_verbose(verbose_level)
@@ -160,6 +161,9 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     , m_quality(quality)
     , m_look_ahead(look_ahead)
     , m_p010(p010)
+    , m_isEco(isEco)
+    , m_gpu_buffer_exp(gpu_buffer_exp)
+    , m_gpu_buffers(gpu_buffers)
     , f_shutdown(shutdown)
     , f_reset(reset)
     , f_image_buffer_available(image_buffer_avail)
@@ -940,10 +944,16 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     m_input_frame_rate = frame_rate;
     m_isHDR = is_hdr;
 
-    int base = max(27 - m_quality, 0) +
-               ((m_input_height > 1080) * 2) +
-               ((m_isHDR || m_p010) * 4);
-    m_frame_buffers = 40 + std::pow(base, 2);
+    if (m_gpu_buffers > 0)
+        m_frame_buffers = m_gpu_buffers;
+    else
+    {
+        int base = max(27 - m_quality, 0) +
+                   ((m_input_height > 1080) * 2) +
+                   ((m_isHDR || m_p010) * 4) +
+                   (m_isEco);
+        m_frame_buffers = 40 + std::pow(base, m_gpu_buffer_exp);
+    }
 
     if (m_p010 || m_isHDR)
         m_sw_pix_fmt = AV_PIX_FMT_P010;
@@ -1548,8 +1558,9 @@ bool OutputTS::init_intel_hw(const string & type,
     // Intel encoders need a minimum of 16
     int pool_size = std::max(m_frame_buffers + m_look_ahead + 4, 16);
 
-    clog << lock_ios()
-         << "Using " << pool_size << " GPU buffers.\n";
+    if (m_verbose > 0)
+        clog << lock_ios()
+             << ">> Using " << pool_size << " GPU buffers.\n";
 
     AVHWFramesContext* frames_ctx =
         reinterpret_cast<AVHWFramesContext* >(ost->hw_frames_ctx->data);
@@ -2073,6 +2084,8 @@ void OutputTS::copy_to_frame(void)
                     m_imagequeue_empty.notify_one();
                     m_imagequeue_ready.wait_for(lock_i,
                         std::chrono::milliseconds(m_input_frame_wait_ms));
+                    if (m_running.load() == false)
+                        return;
                 }
                 else
                 {
@@ -2096,6 +2109,8 @@ void OutputTS::copy_to_frame(void)
                     break;
                 m_videopool_avail.wait_for(lock,
                            std::chrono::milliseconds(m_input_frame_wait_ms));
+                if (m_running.load() == false)
+                    return;
             }
 
             if (++m_video_stream.frames_idx_in == m_video_stream.frames_total)
@@ -2207,6 +2222,7 @@ void OutputTS::copy_to_frame(void)
                      << vidpool_used_1m
                      << " 5m:"   << *vidpool_5m_max
                      << " 10m:" << *vidpool_10m_max
+                     << " / " << m_frame_buffers
                      << "\n";
                 cerr.flush();
 

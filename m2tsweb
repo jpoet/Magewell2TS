@@ -21,7 +21,7 @@ class RootPage:
     @cherrypy.expose
     @cherrypy.tools.allow(methods=['GET', 'HEAD'])
     def stream(self, input='1', codec='hevc_qsv', device='',  board='',
-               noAudio='', lookAhead='', quality='', preset=''):
+               noAudio='', lookAhead='', quality='', preset='', verbose=''):
 
         cherrypy.response.stream = True
         cherrypy.response.headers['Content-Type'] = 'application/octet-stream'
@@ -43,6 +43,8 @@ class RootPage:
             args += ['-q', quality]
         if preset:
             args += ['-p', preset]
+        if verbose:
+            args += ['-v', verbose]
 
         def streamit():
             process = subprocess.Popen(

@@ -117,7 +117,9 @@ public:
      */
     bool Capture(const std::string & video_codec, const std::string & preset,
                  int quality, int look_ahead, bool no_audio, bool p010,
-                 const std::string & gpu_device);
+                 const std::string & gpu_device,
+                 float gpu_buffer_exp, int gpu_buffers,
+                 float video_buffer_exp, int video_buffers);
 
     /**
      * @brief Shutdown the capture process
@@ -266,8 +268,6 @@ private:
 private:
     // Audio buffer parameters
     int m_audio_buf_frames {12288};  ///< Audio buffer frames
-    int m_video_buffers {10};  ///< number of video buffers to maintain
-
 
     // Capture components
     OutputTS*            m_out2ts  {nullptr};  ///< Output TS handler
@@ -282,13 +282,13 @@ private:
     HDMI_HDR_INFOFRAME_PAYLOAD& m_HDRinfo_prev {m_infoPacket_prev.hdrInfoFramePayload};  ///< Previous HDR info
 
     // Buffer management
-    size_t       m_image_buffer_total     {0};  ///< Total image buffers
-    size_t       m_image_buffer_avail     {0};  ///< Available image buffers
-    size_t       m_image_buffers_desired  {6};  ///< Desired image buffers
-    size_t       m_image_buffers_inflight {0};  ///< Buffers in flight
-    imageset_t   m_image_buffers;               ///< Set of image buffers
+    float        m_requested_buffer_exp    {2.0};
+    size_t       m_requested_buffers       {0};
+    size_t       m_image_buffers_total     {0}; ///< Total image buffers
+    size_t       m_image_buffers_avail     {0}; ///< Available image buffers
+    imageset_t   m_pro_image_buffers;           ///< Set of image buffers
     imageque_t   m_avail_image_buffers;         ///< Queue of available buffers
-    ecoque_t     m_eco_buffers;                 ///< Set of ECO buffers
+    ecoque_t     m_eco_image_buffers;           ///< Set of ECO buffers
     std::mutex   m_image_buffer_mutex;          ///< Mutex for buffer access
     std::condition_variable m_image_returned;   ///< Condition variable for buffer return
 

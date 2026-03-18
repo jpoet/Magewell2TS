@@ -29,7 +29,8 @@ class OutputTS
 
     OutputTS(int verbose, const std::string & video_codec_name,
              const std::string & preset, int quality, int look_ahead,
-             bool p010, const std::string & device,
+             bool p010, bool isEco, const std::string & device,
+             float gpu_buffer_exp, int gpu_buffers,
              ShutdownCallback shutdown, ResetCallback reset,
              MagCallback image_buffer_avail);
     ~OutputTS(void);
@@ -194,6 +195,9 @@ class OutputTS
 
     enum AVPixelFormat            m_sw_pix_fmt        {AV_PIX_FMT_NV12};
     bool                          m_p010              {false};
+    bool                          m_isEco             {false};
+    float                         m_gpu_buffer_exp    {2.0};
+    int                           m_gpu_buffers       {0};
     int                           m_frame_buffers     {10};
     // HDR
     bool                          m_isHDR             {false};

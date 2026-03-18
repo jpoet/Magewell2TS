@@ -79,6 +79,10 @@ void show_help(string_view app)
          << "--quality (-q)     : quality setting [25]\n"
          << "--preset (-p)      : encoder preset\n"
          << "--p010             : Force p010 (10bit) video format.\n"
+         << "--gpu-buffer-exp   : GPU video buffer count formula exponent [2.0]\n"
+         << "--gpu-buffers      : GPU video buffers count\n"
+         << "--video-buffer-exp : Video buffer count formula exponent [1.25]\n"
+         << "--video-buffers    : Video buffers count (RAM)\n"
          << "--write-edid (-w)  : Write EDID info from file to input\n"
          << "--wait-for         : Wait for given number of inputs to be initialized. 10 second timeout\n";
 
@@ -96,13 +100,43 @@ void show_help(string_view app)
          << "\tUse Intel quick-sync to encode h.265 video and pipe it to mpv:\n"
          << "\t" << app << " -b 1 -i 1 -m -n -c hevc_qsv | mpv -\n";
 
+    clog << "\nIntel GPU Notes:\n"
+         << " * If there are insufficent GPU (VRAM) buffers allocated, it\n"
+         << "   can result in video frames being out-of-order.\n"
+         << " * The number of GPU video buffers is calculated based on\n"
+         << "   quality, video resolution, HDR and whether the card is a\n"
+         << "   pro or eco. The result is then squared.\n"
+         << "   --gpu-buffer-exp can be used to change the exponent, e.g. 2.1.\n"
+         << " * Instead of just changing the exponent of the forumula, the\n"
+         << "   total number of GPU buffers can be set with --gpu-buffers.\n"
+         << "   extra is always added for lookahead.\n"
+         << " * Insufficent buffers can also result in dropped frames. GPU\n"
+         << "   buffers are more important than RAM video buffers, but if\n"
+         << "   you don't have enough VRAM, increasing the number of RAM\n"
+         << "   buffers may help, either with --video-buffer-exp or \n"
+         << "   --video-buffer.\n";
+
     clog << "\nNOTE: setting EDID does not survive a reboot.\n";
 }
 
 bool string_to_int(string_view st, int &value, string_view var)
 {
     auto result = from_chars(st.data(), st.data() + st.size(),
-                                  value);
+                             value);
+    if (result.ec == errc::invalid_argument)
+    {
+        clog << "Invalid " << var << ": " << st << endl;
+        value = -1;
+        return false;
+    }
+
+    return true;
+}
+
+bool string_to_float(string_view st, float &value, string_view var)
+{
+    auto result = from_chars(st.data(), st.data() + st.size(),
+                             value);
     if (result.ec == errc::invalid_argument)
     {
         clog << "Invalid " << var << ": " << st << endl;
@@ -139,6 +173,11 @@ int main(int argc, char* argv[])
     int         look_ahead    = -1;
     bool        no_audio      = false;
     bool        p010          = false;
+
+    float       gpu_buffer_exp = 2.0;
+    int         gpu_buffers = 0;
+    float       video_buffer_exp = 1.25;
+    int         video_buffers = 0;
 
     std::clog << mutex_init_own;
 
@@ -229,6 +268,30 @@ int main(int argc, char* argv[])
         {
             device = *(++iter);
         }
+        else if (*iter == "--gpu-buffer-exp")
+        {
+            if (!string_to_float(*(++iter), gpu_buffer_exp,
+                               "GPU buffer exponent"))
+                exit(1);
+        }
+        else if (*iter == "--gpu-buffers")
+        {
+            if (!string_to_int(*(++iter), gpu_buffers,
+                               "GPU buffers"))
+                exit(1);
+        }
+        else if (*iter == "--video-buffer-exp")
+        {
+            if (!string_to_float(*(++iter), video_buffer_exp,
+                               "Video buffer exponent"))
+                exit(1);
+        }
+        else if (*iter == "--video-buffers")
+        {
+            if (!string_to_int(*(++iter), video_buffers,
+                               "Video buffers"))
+                exit(1);
+        }
         else if (*iter == "--wait-for")
         {
             int input_count;
@@ -290,7 +353,9 @@ int main(int argc, char* argv[])
     if (do_capture)
     {
         if (!g_mw.Capture(video_codec, preset, quality, look_ahead,
-                          no_audio, p010, device))
+                          no_audio, p010, device,
+                          gpu_buffer_exp, gpu_buffers,
+                          video_buffer_exp, video_buffers))
             return -2;
     }
 
