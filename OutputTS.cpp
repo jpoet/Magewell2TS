@@ -151,7 +151,7 @@ static void log_packet(string where, const AVFormatContext* fmt_ctx,
 OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
                    const string & preset, int quality, int look_ahead,
                    bool p010, bool isEco, const string & device,
-                   float gpu_buffer_exp, int gpu_buffers,
+                   int extra_hw_frames, int gpu_buffers,
                    ShutdownCallback shutdown, ResetCallback reset,
                    MagCallback image_buffer_avail)
     : m_verbose(verbose_level)
@@ -162,7 +162,7 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     , m_look_ahead(look_ahead)
     , m_p010(p010)
     , m_isEco(isEco)
-    , m_gpu_buffer_exp(gpu_buffer_exp)
+    , m_extra_hw_frames(extra_hw_frames)
     , m_gpu_buffers(gpu_buffers)
     , f_shutdown(shutdown)
     , f_reset(reset)
@@ -1533,7 +1533,6 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
 bool OutputTS::init_intel_hw(const string & type,
                              const AVCodec* codec,
                              AVDictionary*  opt,
-                             int extra_hw_buffers,
                              OutputStream*  ost)
 {
     int    ret;
@@ -1551,11 +1550,14 @@ bool OutputTS::init_intel_hw(const string & type,
     }
 
     // Intel encoders need a minimum of 16
-    int pool_size = m_frame_buffers + extra_hw_buffers;
+    int pool_size = m_frame_buffers + m_extra_hw_frames + m_look_ahead + 16;
 
     if (m_verbose > 0)
         clog << lock_ios()
-             << ">> Using " << pool_size << " GPU buffers.\n";
+             << ">> Using " << m_frame_buffers << " (requested)"
+             << " + " << m_extra_hw_frames << " (extra_hw_frames)"
+             << " + " << m_look_ahead << " (lookahead) + 16 = "
+             << pool_size << " GPU buffers\n";
 
     AVHWFramesContext* frames_ctx =
         reinterpret_cast<AVHWFramesContext* >(ost->hw_frames_ctx->data);
@@ -1651,11 +1653,8 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     av_opt_set_int(ost->enc->priv_data, "bf", 0, 0);
     av_opt_set_int(ost->enc->priv_data, "qp", 25, 0);
 
-    int extra = ((m_input_height > 1080) * 12) +
-                ((m_isHDR || m_p010) * 12) +
-                ((m_isEco) * 12);
     av_opt_set_int(ost->enc->priv_data, "extra_hw_frames",
-                   std::max(m_look_ahead, 32) + extra, 0);
+                   m_extra_hw_frames + m_look_ahead + 4, 0);
 
     // Create hardware device context
     if (ost->hw_device_ctx == nullptr)
@@ -1704,7 +1703,7 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     }
 
     ost->enc->pix_fmt     = AV_PIX_FMT_VAAPI;
-    return init_intel_hw("VAAPI", codec, opt, extra, ost);
+    return init_intel_hw("VAAPI", codec, opt, ost);
 }
 
 /**
@@ -1762,11 +1761,8 @@ bool OutputTS::open_qsv(const AVCodec* codec,
         av_opt_set(ost->enc->priv_data, "async_depth", "4", 0);
     }
 
-    int extra = ((m_input_height > 1080) * 12) +
-                ((m_isHDR || m_p010) * 12) +
-                ((m_isEco) * 12);
     av_opt_set_int(ost->enc->priv_data, "extra_hw_frames",
-                   std::max(m_look_ahead, 32) + extra, 0);
+                   m_extra_hw_frames + m_look_ahead + 4, 0);
 
     av_opt_set_int(ost->enc->priv_data, "idr_interval", 0, 0);
 
@@ -1794,7 +1790,7 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     }
 
     ost->enc->pix_fmt = AV_PIX_FMT_QSV;
-    return init_intel_hw("QSV", codec, opt, extra, ost);
+    return init_intel_hw("QSV", codec, opt, ost);
 }
 
 /**
@@ -1804,7 +1800,7 @@ bool OutputTS::open_qsv(const AVCodec* codec,
  */
 bool OutputTS::nv_encode(void)
 {
-    OutputStream* ost   = &m_video_stream;
+    OutputStream* ost = &m_video_stream;
 
     ost->next_pts = m_video_stream.timestamp + 1;
 
@@ -2226,7 +2222,7 @@ void OutputTS::copy_to_frame(void)
                      << vidpool_used_1m
                      << " 5m:"   << *vidpool_5m_max
                      << " 10m:" << *vidpool_10m_max
-                     << " / " << m_frame_buffers
+                     << " of " << m_frame_buffers
                      << "\n";
                 cerr.flush();
 

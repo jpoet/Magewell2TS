@@ -2112,7 +2112,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                      << vidpool_used_1m
                      << " 5m:"   << *vidpool_5m_max
                      << " 10m:" << *vidpool_10m_max
-                     << " / " << m_image_buffers_total
+                     << " of " << m_image_buffers_total
                      << "\n";
                 cerr.flush();
 
@@ -2705,15 +2705,7 @@ bool Magewell::capture_video(int quality)
             params_changed = true;
         }
 
-        if (m_requested_buffers > 0)
-            m_image_buffers_total = m_requested_buffers;
-        else
-        {
-            int base = max(25 - quality, 3) +
-                       ((eco_params.cy > 1080) * 2) +
-                       ((m_isHDR || m_p010) * 2);
-            m_image_buffers_total = 7 + std::pow(base, m_requested_buffer_exp);
-        }
+        m_image_buffers_total = m_requested_buffers;
 
         if (m_verbose > 0)
             clog << lock_ios()
@@ -2933,11 +2925,9 @@ bool Magewell::Capture(const string & video_codec,
                        const string & preset, int quality,
                        int look_ahead, bool no_audio,
                        bool p010, const string & gpu_device,
-                       float gpu_buffer_exp, int gpu_buffers,
-                       float video_buffer_exp, int video_buffers)
+                       int extra_hw_frames, int gpu_buffers, int video_buffers)
 {
     m_p010 = p010;
-    m_requested_buffer_exp = video_buffer_exp;
     m_requested_buffers    = video_buffers;
 
     // Display input information if verbose
@@ -2949,7 +2939,7 @@ bool Magewell::Capture(const string & video_codec,
     {
         m_out2ts = new OutputTS(m_verbose, video_codec, preset, quality,
                                 look_ahead, p010, true, gpu_device,
-                                gpu_buffer_exp, gpu_buffers,
+                                extra_hw_frames, gpu_buffers,
                                 [=,this](void) { this->Shutdown(); },
                                 [=,this](void) { this->Reset(); },
                                 [=,this](uint8_t* ib, void* eb)
@@ -2959,7 +2949,7 @@ bool Magewell::Capture(const string & video_codec,
     {
         m_out2ts = new OutputTS(m_verbose, video_codec, preset, quality,
                                 look_ahead, p010, false, gpu_device,
-                                gpu_buffer_exp, gpu_buffers,
+                                extra_hw_frames, gpu_buffers,
                                 [=,this](void) { this->Shutdown(); },
                                 [=,this](void) { this->Reset(); },
                                 [=,this](uint8_t* ib, void* eb)

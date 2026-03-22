@@ -1,5 +1,4 @@
-#ifndef _OutputTS_h_
-#define _OutputTS_h_
+#pragma once
 
 #include <string>
 #include <vector>
@@ -30,7 +29,7 @@ class OutputTS
     OutputTS(int verbose, const std::string & video_codec_name,
              const std::string & preset, int quality, int look_ahead,
              bool p010, bool isEco, const std::string & device,
-             float gpu_buffer_exp, int gpu_buffers,
+             int extra_hw_frames, int gpu_buffers,
              ShutdownCallback shutdown, ResetCallback reset,
              MagCallback image_buffer_avail);
     ~OutputTS(void);
@@ -154,7 +153,6 @@ class OutputTS
     bool init_intel_hw(const std::string & type,
                        const AVCodec* codec,
                        AVDictionary*  opt,
-                       int extra_hw_buffers,
                        OutputStream*  ost);
     bool open_vaapi(const AVCodec* codec, OutputStream* ost,
                     AVDictionary* opt_arg);
@@ -197,8 +195,8 @@ class OutputTS
     enum AVPixelFormat            m_sw_pix_fmt        {AV_PIX_FMT_NV12};
     bool                          m_p010              {false};
     bool                          m_isEco             {false};
-    float                         m_gpu_buffer_exp    {2.0};
-    int                           m_gpu_buffers       {0};
+    int                           m_extra_hw_frames   {-1};
+    int                           m_gpu_buffers       {-1};
     int                           m_frame_buffers     {10};
     // HDR
     bool                          m_isHDR             {false};
@@ -230,5 +228,3 @@ class OutputTS
     std::mutex              m_ready_mutex;
     std::condition_variable m_ready_cond;
 };
-
-#endif

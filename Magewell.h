@@ -1,5 +1,4 @@
-#ifndef Magewell_h_
-#define Magewell_h_
+#pragma once
 
 #include <string>
 #include <deque>
@@ -21,7 +20,7 @@
  * handle HDR information, and manage video buffers for Magewell capture devices.
  *
  * @author John Patrick Poet
- * @date 2022-2025
+ * @date 2022-2026
  */
 class Magewell
 {
@@ -117,9 +116,8 @@ public:
      */
     bool Capture(const std::string & video_codec, const std::string & preset,
                  int quality, int look_ahead, bool no_audio, bool p010,
-                 const std::string & gpu_device,
-                 float gpu_buffer_exp, int gpu_buffers,
-                 float video_buffer_exp, int video_buffers);
+                 const std::string & gpu_device, int extra_hw_frames,
+                 int gpu_buffers, int video_buffers);
 
     /**
      * @brief Shutdown the capture process
@@ -282,7 +280,6 @@ private:
     HDMI_HDR_INFOFRAME_PAYLOAD& m_HDRinfo_prev {m_infoPacket_prev.hdrInfoFramePayload};  ///< Previous HDR info
 
     // Buffer management
-    float        m_requested_buffer_exp    {2.0};
     size_t       m_requested_buffers       {0};
     size_t       m_image_buffers_total     {0}; ///< Total image buffers
     size_t       m_image_buffers_avail     {0}; ///< Available image buffers
@@ -318,5 +315,3 @@ private:
     bool m_fatal   {false};  ///< Fatal error flag
     int  m_verbose {1};      ///< Verbose level
 };
-
-#endif

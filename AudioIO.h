@@ -1,5 +1,4 @@
-#ifndef _AudioIO_h_
-#define _AudioIO_h_
+#pragma once
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -750,5 +749,3 @@ class AudioIO
      */
     int              m_verbose          {1};
 };
-
-#endif

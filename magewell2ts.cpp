@@ -79,10 +79,9 @@ void show_help(string_view app)
          << "--quality (-q)     : quality setting [25]\n"
          << "--preset (-p)      : encoder preset\n"
          << "--p010             : Force p010 (10bit) video format.\n"
-         << "--gpu-buffer-exp   : GPU video buffer count formula exponent [2.0]\n"
-         << "--gpu-buffers      : GPU video buffers count\n"
-         << "--video-buffer-exp : Video buffer count formula exponent [1.25]\n"
-         << "--video-buffers    : Video buffers count (RAM)\n"
+         << "--gpu-buffers      : GPU video buffers count [16]\n"
+         << "--video-buffers    : Video buffers count (RAM) [16]\n"
+         << "--extra-hw-frames  : Extra HW frames used for encoding [32]\n"
          << "--write-edid (-w)  : Write EDID info from file to input\n"
          << "--wait-for         : Wait for given number of inputs to be initialized. 10 second timeout\n";
 
@@ -100,21 +99,26 @@ void show_help(string_view app)
          << "\tUse Intel quick-sync to encode h.265 video and pipe it to mpv:\n"
          << "\t" << app << " -b 1 -i 1 -m -n -c hevc_qsv | mpv -\n";
 
-    clog << "\nIntel GPU Notes:\n"
-         << " * If there are insufficient GPU (VRAM) buffers allocated, it\n"
-         << "   can result in video frames being out-of-order.\n"
-         << " * The number of GPU video buffers is calculated based on\n"
-         << "   quality, video resolution, HDR and whether the card is a\n"
-         << "   pro or eco. The result is then squared.\n"
-         << "   --gpu-buffer-exp can be used to change the exponent, e.g. 2.1.\n"
-         << " * Instead of just changing the exponent of the formula, the\n"
-         << "   total number of GPU buffers can be set with --gpu-buffers.\n"
-         << "   extra is always added for lookahead.\n"
-         << " * Insufficient buffers can also result in dropped frames. GPU\n"
-         << "   buffers are more important than RAM video buffers, but if\n"
-         << "   you don't have enough VRAM, increasing the number of RAM\n"
-         << "   buffers may help, either with --video-buffer-exp or \n"
-         << "   --video-buffer.\n";
+    clog << "\n"
+         << "Video frames are read from the Magewell card and placed on a\n"
+         << "queue in RAM (--video-buffers). Frames from that queue are then\n"
+         << "placed on a queue in VRAM (--gpu-buffers). Frame from the VRAM\n"
+         << "queue are 'sent' to the GPU for encoding. Most of the time, the\n"
+         << "GPU is able to encode faster than 'real time', but some scenes\n"
+         << "can be difficult. The higher the --quality and/or --preset and/or\n"
+         << "--lookahead settings, the more time it will take the encoder to\n"
+         << "encode the scene. HDR or using --p010 doubles that memory size\n"
+         << "which increases the time it takes to transfer frames. Most of the\n"
+         << "time, the buffering (--video-buffers, --gpu-buffers) allows the\n"
+         << "encoder the time it needs for difficult scenes, but if the scene\n"
+         << "is too long, then you will need to increase those sizes.\n";
+
+    clog << "\nIntel notes:\n"
+         << "  --extra-hw-frames is equivalent to passing that argument\n"
+         << "  to ffmpeg. If the value is too low the resulting video can\n"
+         << "  have artifacts and it will usually result in dropped frames.\n"
+         << "  A minimum of 32 is required.\n";
+
 
     clog << "\nNOTE: setting EDID does not survive a reboot.\n";
 }
@@ -174,10 +178,9 @@ int main(int argc, char* argv[])
     bool        no_audio      = false;
     bool        p010          = false;
 
-    float       gpu_buffer_exp = 2.0;
-    int         gpu_buffers = 0;
-    float       video_buffer_exp = 1.25;
-    int         video_buffers = 0;
+    int         gpu_buffers   = 24;
+    int         video_buffers = 24;
+    int         extra_hw_frames = 64;
 
     std::clog << mutex_init_own;
 
@@ -268,28 +271,22 @@ int main(int argc, char* argv[])
         {
             device = *(++iter);
         }
-        else if (*iter == "--gpu-buffer-exp")
-        {
-            if (!string_to_float(*(++iter), gpu_buffer_exp,
-                               "GPU buffer exponent"))
-                exit(1);
-        }
         else if (*iter == "--gpu-buffers")
         {
             if (!string_to_int(*(++iter), gpu_buffers,
                                "GPU buffers"))
                 exit(1);
         }
-        else if (*iter == "--video-buffer-exp")
-        {
-            if (!string_to_float(*(++iter), video_buffer_exp,
-                               "Video buffer exponent"))
-                exit(1);
-        }
         else if (*iter == "--video-buffers")
         {
             if (!string_to_int(*(++iter), video_buffers,
                                "Video buffers"))
+                exit(1);
+        }
+        else if (*iter == "--extra-hw-frames")
+        {
+            if (!string_to_int(*(++iter), extra_hw_frames,
+                               "Extra HW frames"))
                 exit(1);
         }
         else if (*iter == "--wait-for")
@@ -354,8 +351,8 @@ int main(int argc, char* argv[])
     {
         if (!g_mw.Capture(video_codec, preset, quality, look_ahead,
                           no_audio, p010, device,
-                          gpu_buffer_exp, gpu_buffers,
-                          video_buffer_exp, video_buffers))
+                          std::max(extra_hw_frames, 32),
+                          gpu_buffers, video_buffers))
             return -2;
     }
 
