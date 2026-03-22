@@ -2077,6 +2077,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                          << " frames, have skipped " << skipped_frame_cnt
                          << " of " << frame_cnt << "\n";
                     cerr.flush();
+                    timestamp = expected_ts;
                 }
             }
         }
