@@ -947,13 +947,7 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     if (m_gpu_buffers > 0)
         m_frame_buffers = m_gpu_buffers;
     else
-    {
-        int base = max(27 - m_quality, 0) +
-                   ((m_input_height > 1080) * 2) +
-                   ((m_isHDR || m_p010) * 4) +
-                   (m_isEco);
-        m_frame_buffers = 40 + std::pow(base, m_gpu_buffer_exp);
-    }
+        m_frame_buffers = 16;
 
     if (m_p010 || m_isHDR)
         m_sw_pix_fmt = AV_PIX_FMT_P010;
@@ -1539,6 +1533,7 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
 bool OutputTS::init_intel_hw(const string & type,
                              const AVCodec* codec,
                              AVDictionary*  opt,
+                             int extra_hw_buffers,
                              OutputStream*  ost)
 {
     int    ret;
@@ -1556,7 +1551,7 @@ bool OutputTS::init_intel_hw(const string & type,
     }
 
     // Intel encoders need a minimum of 16
-    int pool_size = std::max(m_frame_buffers + m_look_ahead + 4, 16);
+    int pool_size = m_frame_buffers + extra_hw_buffers;
 
     if (m_verbose > 0)
         clog << lock_ios()
@@ -1656,6 +1651,12 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     av_opt_set_int(ost->enc->priv_data, "bf", 0, 0);
     av_opt_set_int(ost->enc->priv_data, "qp", 25, 0);
 
+    int extra = ((m_input_height > 1080) * 12) +
+                ((m_isHDR || m_p010) * 12) +
+                ((m_isEco) * 12);
+    av_opt_set_int(ost->enc->priv_data, "extra_hw_frames",
+                   std::max(m_look_ahead, 32) + extra, 0);
+
     // Create hardware device context
     if (ost->hw_device_ctx == nullptr)
     {
@@ -1703,7 +1704,7 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     }
 
     ost->enc->pix_fmt     = AV_PIX_FMT_VAAPI;
-    return init_intel_hw("VAAPI", codec, opt, ost);
+    return init_intel_hw("VAAPI", codec, opt, extra, ost);
 }
 
 /**
@@ -1757,12 +1758,15 @@ bool OutputTS::open_qsv(const AVCodec* codec,
             av_opt_set_int(ost->enc->priv_data, "lookahead_depth",
                            m_look_ahead, 0);
         }
-        av_opt_set_int(ost->enc->priv_data, "extra_hw_frames",
-                       std::max(m_look_ahead, 4), 0);
-
         av_opt_set(ost->enc->priv_data, "skip_frame", "insert_dummy", 0);
         av_opt_set(ost->enc->priv_data, "async_depth", "4", 0);
     }
+
+    int extra = ((m_input_height > 1080) * 12) +
+                ((m_isHDR || m_p010) * 12) +
+                ((m_isEco) * 12);
+    av_opt_set_int(ost->enc->priv_data, "extra_hw_frames",
+                   std::max(m_look_ahead, 32) + extra, 0);
 
     av_opt_set_int(ost->enc->priv_data, "idr_interval", 0, 0);
 
@@ -1790,7 +1794,7 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     }
 
     ost->enc->pix_fmt = AV_PIX_FMT_QSV;
-    return init_intel_hw("QSV", codec, opt, ost);
+    return init_intel_hw("QSV", codec, opt, extra, ost);
 }
 
 /**

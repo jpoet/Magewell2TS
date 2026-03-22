@@ -154,6 +154,7 @@ class OutputTS
     bool init_intel_hw(const std::string & type,
                        const AVCodec* codec,
                        AVDictionary*  opt,
+                       int extra_hw_buffers,
                        OutputStream*  ost);
     bool open_vaapi(const AVCodec* codec, OutputStream* ost,
                     AVDictionary* opt_arg);
