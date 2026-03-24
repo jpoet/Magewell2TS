@@ -1947,7 +1947,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     int      frame_cnt  = 0;
     int      skipped_frame_cnt = 0;
     int      skipped = 0;
-    int      eighth_dur = eco_params.llFrameDuration / 8;
+    int      quarter_dur = eco_params.llFrameDuration / 4;
 
     MWCAP_VIDEO_ECO_CAPTURE_STATUS eco_status;
     MW_RESULT ret;
@@ -1985,7 +1985,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         }
 
         // Wait for notification
-        if (EcoEventWait(eco_event, 1000) <= 0)
+        if (EcoEventWait(eco_event, eco_params.llFrameDuration) <= 0)
         {
             if (m_verbose > 1)
                 clog << lock_ios()
@@ -2048,8 +2048,8 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         {
             continue;
         }
-        else if (timestamp < expected_ts - eighth_dur ||
-                expected_ts + eighth_dur < timestamp)
+        else if (timestamp < expected_ts - quarter_dur ||
+                 expected_ts + quarter_dur < timestamp)
         {
             if (timestamp < 0)
             {
@@ -2060,13 +2060,21 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             }
             else if (timestamp < expected_ts)
             {
-                clog << "WARNING: Expected ECO timestamp:"
+                int frames = (expected_ts - timestamp)
+                             / eco_params.llFrameDuration;
+                clog << lock_ios()
+                     << "WARNING: Expected ECO timestamp:"
                      << expected_ts << " > " << timestamp << " actual. "
-                     << (expected_ts - timestamp) / eco_params.llFrameDuration
-                     << " 'frames' difference\n";
+                     << frames
+                     << " 'frames' difference " << expected_ts - timestamp
+                     << " / " << eco_params.llFrameDuration
+                     << " (" << frame_cnt << ")\n";
                 cerr.flush();
+
+                if (frames == 1)
+                    timestamp = expected_ts;
             }
-            else
+            else // timestamp > expected_ts
             {
                 /* There can be some WACKY TS from the frame info!
                  */
@@ -2081,7 +2089,6 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                          << " frames, have skipped " << skipped_frame_cnt
                          << " of " << frame_cnt << "\n";
                     cerr.flush();
-                    timestamp = expected_ts;
                 }
             }
         }
@@ -2133,6 +2140,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 vidpool_tm = current_tm;
             }
         }
+        this_thread::yield();
     }
 
     return true;
