@@ -1730,7 +1730,11 @@ void Magewell::free_image_buffers(void)
              [this]{ return m_image_buffers_total > m_image_buffers_avail; });
 
     if (!success)
+    {
         clog << "Gave up waiting for all Magewll buffers to be returned.\n";
+        clog << "Total: " << m_image_buffers_total << " avail: "
+             << m_image_buffers_avail << endl;
+    }
 
     if (m_isEco)
     {
@@ -2351,8 +2355,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 skipped_frame_cnt += skipped;
                 clog << lock_ios()
                      << "DAMAGED: Magewell lost " << skipped
-                     << " frames, idx:" << frame_idx << "->" << min_idx
-                     << " have skipped " << skipped_frame_cnt
+                     << " frames. Have skipped " << skipped_frame_cnt
                      << " of " << frame_cnt << "\n";
 
                 cerr.flush();
@@ -2395,6 +2398,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                       eco_params.cy);
 
             ++frame_cnt;
+            --m_image_buffers_avail;
 
             if (result != MW_SUCCEEDED)
             {

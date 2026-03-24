@@ -56,11 +56,9 @@ class OutputTS
                         AVRational time_base, double frame_duration,
                         AVRational frame_rate, bool is_hdr);
     bool addAudio(AudioBuffer::AudioFrame *& buf, int64_t timestamp);
-    void HardReset(const std::string& why, bool force_damage = false);
-    void SoftReset(const std::string& why);
     void ClearVideoPool(void);
     void ClearImageQueue(void);
-    void DiscardImages(bool val);
+    void DiscardImages(int val, const std::string & why);
     bool AddVideoFrame(uint8_t*  pImage, void* pEco,
                        int imageSize, int64_t timestamp);
 
@@ -171,7 +169,7 @@ class OutputTS
     OutputStream m_audio_stream { 0 };
 
     int              m_verbose;
-    bool             m_discard_images         {false};
+    int              m_discard_images         {0};
 
     std::string      m_filename               {"pipe:1"};
 
@@ -222,6 +220,7 @@ class OutputTS
     std::mutex              m_imagequeue_mutex;
     std::condition_variable m_imagequeue_ready;
     std::condition_variable m_imagequeue_empty;
+    bool                    m_imagequeue_is_empty {true};
 
     std::atomic<bool>       m_running      {true};
     std::atomic<bool>       m_init_needed  {true};

@@ -574,23 +574,6 @@ bool OutputTS::open_video(void)
         clog << "Opening video.\n";
     m_video_stream.name = "video";
 
-    // Reset reusable frames
-    if (m_video_stream.frames != nullptr)
-    {
-        for (int idx = 0; idx < m_video_stream.frames_total; ++idx)
-        {
-            av_frame_free(&m_video_stream.frames[idx].frame);
-            m_video_stream.frames[idx].frame = nullptr;
-        }
-        delete[] m_video_stream.frames;
-        m_video_stream.frames = nullptr;
-    }
-    m_video_stream.frame = nullptr;
-    m_video_stream.frames_idx_in  = -1;
-    m_video_stream.frames_idx_out = -1;
-    m_video_stream.frames_used    = 0;
-    m_video_stream.frames_total   = m_frame_buffers;
-
     AVDictionary* opt = NULL;
     const AVCodec* video_codec =
         avcodec_find_encoder_by_name(m_video_codec_name.c_str());
@@ -694,43 +677,65 @@ bool OutputTS::open_video(void)
              << "\n";
     }
 
-    // Open encoder based on type
-    switch (m_encoderType)
     {
-        case EncoderType::QSV:
-          if (!open_qsv(video_codec, &m_video_stream, opt))
-              return false;
-          break;
-        case EncoderType::VAAPI:
-          if (!open_vaapi(video_codec, &m_video_stream, opt))
-              return false;
-          break;
-        case EncoderType::NV:
-          if (!open_nvidia(video_codec, &m_video_stream, opt))
-              return false;
-          break;
-        default:
-          clog << lock_ios()
-               << "ERROR: Could not determine video encoder type." << endl;
-          return false;
-    }
+        unique_lock<mutex> lock(m_videopool_mutex);
 
-    // Set HDR metadata for frames
-    if (m_isHDR)
-    {
-        for (int idx = 0; idx < m_video_stream.frames_total; ++idx)
+        // Reset reusable frames
+        if (m_video_stream.frames != nullptr)
         {
-            AVFrame* frm = m_video_stream.frames[idx].frame;
+            for (int idx = 0; idx < m_video_stream.frames_total; ++idx)
+            {
+                av_frame_free(&m_video_stream.frames[idx].frame);
+                m_video_stream.frames[idx].frame = nullptr;
+            }
+            delete[] m_video_stream.frames;
+            m_video_stream.frames = nullptr;
+        }
+        m_video_stream.frame = nullptr;
+        m_video_stream.frames_idx_in  = -1;
+        m_video_stream.frames_idx_out = -1;
+        m_video_stream.frames_used    = 0;
+        m_video_stream.frames_total   = m_frame_buffers;
 
-            AVMasteringDisplayMetadata* primaries =
-                av_mastering_display_metadata_create_side_data(frm);
-            *primaries = *m_display_primaries;
-            AVContentLightMetadata* light =
-                av_content_light_metadata_create_side_data(frm);
-            *light = *m_content_light;
+        // Open encoder based on type
+        switch (m_encoderType)
+        {
+            case EncoderType::QSV:
+              if (!open_qsv(video_codec, &m_video_stream, opt))
+                  return false;
+              break;
+            case EncoderType::VAAPI:
+              if (!open_vaapi(video_codec, &m_video_stream, opt))
+                  return false;
+              break;
+            case EncoderType::NV:
+              if (!open_nvidia(video_codec, &m_video_stream, opt))
+                  return false;
+              break;
+            default:
+              clog << lock_ios()
+                   << "ERROR: Could not determine video encoder type." << endl;
+              return false;
+
+              unique_lock<mutex> lock(m_videopool_mutex);
+              // Set HDR metadata for frames
+              if (m_isHDR)
+              {
+                  for (int idx = 0; idx < m_video_stream.frames_total; ++idx)
+                  {
+                      AVFrame* frm = m_video_stream.frames[idx].frame;
+
+                      AVMasteringDisplayMetadata* primaries =
+                          av_mastering_display_metadata_create_side_data(frm);
+                      *primaries = *m_display_primaries;
+                      AVContentLightMetadata* light =
+                          av_content_light_metadata_create_side_data(frm);
+                      *light = *m_content_light;
+                  }
+              }
         }
     }
-
+    DiscardImages(-1, "done initializing video.");
     return true;
 }
 
@@ -875,8 +880,9 @@ bool OutputTS::setAudioParams(int num_channels, bool is_lpcm,
 {
     if (m_audioIO == nullptr)
     {
-        m_audioIO = new AudioIO([=,this](bool val) { this->DiscardImages(val); },
-                                m_verbose);
+        m_audioIO = new AudioIO([=,this](int val, const string & why)
+                              { this->DiscardImages(val, why); },
+                                       m_verbose);
         if (m_audioIO == nullptr)
         {
             clog << "Failed to create Audio handler" << endl;
@@ -917,15 +923,16 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     m_input_frame_wait_ms = frame_duration / 10000 * 2;
 
     // Clear queues before setting new parameters
+    DiscardImages(1, "initializing video.");
     {
         unique_lock<mutex> lock(m_imagequeue_mutex);
-        while (m_running.load() && !m_imagequeue.empty())
+        while (m_running.load() && !m_imagequeue_is_empty)
         {
             m_imagequeue_empty.wait_for(lock,
                          std::chrono::milliseconds(m_input_frame_wait_ms));
         }
+        m_imagequeue_is_empty = false;
     }
-
     {
         std::unique_lock<std::mutex> lock(m_videopool_mutex);
         while (m_running.load() && m_video_stream.frames_used != 0)
@@ -944,10 +951,7 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     m_input_frame_rate = frame_rate;
     m_isHDR = is_hdr;
 
-    if (m_gpu_buffers > 0)
-        m_frame_buffers = m_gpu_buffers;
-    else
-        m_frame_buffers = 16;
+    m_frame_buffers = m_gpu_buffers;
 
     if (m_p010 || m_isHDR)
         m_sw_pix_fmt = AV_PIX_FMT_P010;
@@ -1015,12 +1019,7 @@ void OutputTS::close_encoder(OutputStream* ost)
     {
         // Unreference the hardware frames context
         av_buffer_unref(&ost->hw_frames_ctx);
-    }
-
-    if (ost->enc && ost->enc->hw_frames_ctx)
-    {
-        // Unreference the hardware frames context from encoder
-        av_buffer_unref(&ost->enc->hw_frames_ctx);
+        ost->hw_frames_ctx = nullptr;
     }
 
     if (ost->frames)
@@ -1052,6 +1051,13 @@ void OutputTS::close_encoder(OutputStream* ost)
         ost->swr_ctx = nullptr;
     }
 
+    if (ost->enc->hw_frames_ctx)
+    {
+        // Unreference the hardware frames context from encoder
+        av_buffer_unref(&ost->enc->hw_frames_ctx);
+        ost->enc->hw_frames_ctx = nullptr;
+    }
+
     // Note: FFmpeg docs suggest not to free codec context multiple times
     // This is commented out to avoid double-free issues
 #if 0
@@ -1070,17 +1076,6 @@ void OutputTS::close_stream(OutputStream* ost)
     if (ost == nullptr)
         return;
 
-    // Free hardware device context
-    if (ost->hw_device)
-    {
-        if (ost->hw_frames_ctx)
-            av_buffer_unref(&ost->hw_frames_ctx);
-        if (ost->hw_device_ctx)
-            av_buffer_unref(&ost->hw_device_ctx);
-        av_buffer_unref(&ost->enc->hw_frames_ctx);
-        ost->hw_device = false;
-    }
-
     // Free resampler context
     if (ost->swr_ctx)
     {
@@ -1091,10 +1086,8 @@ void OutputTS::close_stream(OutputStream* ost)
     // Free codec context (commented to avoid double-free)
     if (ost->enc)
     {
-#if 0
         avcodec_free_context(&ost->enc);
         ost->enc = nullptr;
-#endif
     }
 
     // Note: FFmpeg docs suggest not to free stream context here
@@ -1102,6 +1095,12 @@ void OutputTS::close_stream(OutputStream* ost)
     avformat_free_context(&ost->st);
     ost->st = nullptr;
 #endif
+
+    if (ost->hw_device_ctx)
+    {
+        av_buffer_unref(&ost->hw_device_ctx);
+        ost->hw_device_ctx = nullptr;
+    }
 }
 
 /**
@@ -1525,7 +1524,7 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
         }
     }
 
-    ost->tmp_frame = NULL;
+    ost->tmp_frame = nullptr;
 
     return true;
 }
@@ -1540,13 +1539,16 @@ bool OutputTS::init_intel_hw(const string & type,
     if (m_verbose > 0)
         clog << "Initializing Intel GPU\n";
 
-    // Create hardware frames context
-    if (!(ost->hw_frames_ctx = av_hwframe_ctx_alloc(ost->hw_device_ctx)))
+    if (ost->hw_frames_ctx == nullptr)
     {
-        clog << lock_ios()
-             << "ERROR: Failed to create QSV frame context." << endl;
-        Shutdown();
-        return false;
+        // Create hardware frames context
+        if (!(ost->hw_frames_ctx = av_hwframe_ctx_alloc(ost->hw_device_ctx)))
+        {
+            clog << lock_ios()
+                 << "ERROR: Failed to create QSV frame context." << endl;
+            Shutdown();
+            return false;
+        }
     }
 
     // Intel encoders need a minimum of 16
@@ -1622,8 +1624,8 @@ bool OutputTS::init_intel_hw(const string & type,
         }
     }
 
-    ost->tmp_frame = alloc_picture(m_sw_pix_fmt, m_input_width, m_input_height);
-
+    ost->tmp_frame = alloc_picture(m_sw_pix_fmt,
+                                   m_input_width, m_input_height);
     return true;
 }
 
@@ -1688,18 +1690,6 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
         if (m_verbose > 0)
             clog << lock_ios()
                  << "Using VAAPI driver '" << *Idriver << "'\n";
-    }
-
-    if (ost->hw_frames_ctx == nullptr)
-    {
-        // Create hardware frames context
-        if (!(ost->hw_frames_ctx = av_hwframe_ctx_alloc(ost->hw_device_ctx)))
-        {
-            clog << lock_ios()
-                 << "ERROR: Failed to create VAAPI frame context." << endl;
-            Shutdown();
-            return false;
-        }
     }
 
     ost->enc->pix_fmt     = AV_PIX_FMT_VAAPI;
@@ -1868,21 +1858,24 @@ void OutputTS::mux(void)
             }
             else
             {
-                string why;
-                if (m_video_stream.enc == nullptr)
-                    why = " video";
-                if (m_audioIO && m_audio_stream.enc == nullptr)
-                {
-                    if (!why.empty())
-                        why += " &";
-                    why += " audio";
-                }
                 if (m_verbose > 4)
                 {
-                    clog << lock_ios() << "WARNING: New TS needed but"
-                         << why << " encoder is not ready.\n";
-                    cerr.flush();
+                    string why;
+                    if (m_video_stream.enc == nullptr)
+                        why = " video";
+                    if (m_audioIO && m_audio_stream.enc == nullptr)
+                    {
+                        if (!why.empty())
+                            why += " &";
+                        why += " audio";
+                    }
+                    {
+                        clog << lock_ios() << "WARNING: New TS needed but"
+                             << why << " encoder is not ready.\n";
+                        cerr.flush();
+                    }
                 }
+                continue;
             }
         }
 
@@ -1913,13 +1906,6 @@ void OutputTS::mux(void)
             glitch_cnt = 0;
         }
 
-        // Clear queues when needed
-        if (m_audio_stream.next_timestamp == -1)
-        {
-            ClearVideoPool();
-            ClearImageQueue();
-        }
-
         // Process video frames
         while (!m_audio_stream.enc ||
                m_video_stream.timestamp <= m_audio_stream.next_timestamp)
@@ -1934,10 +1920,11 @@ void OutputTS::mux(void)
                         std::chrono::milliseconds(m_input_frame_wait_ms));
                     break;
                 }
-            }
 
-            if (++m_video_stream.frames_idx_out == m_video_stream.frames_total)
-                m_video_stream.frames_idx_out = 0;
+                if (++m_video_stream.frames_idx_out
+                    == m_video_stream.frames_total)
+                    m_video_stream.frames_idx_out = 0;
+            }
 
             m_video_stream.frame = m_video_stream
                        .frames[m_video_stream.frames_idx_out].frame;
@@ -1968,47 +1955,11 @@ void OutputTS::mux(void)
 }
 
 /**
- * @brief hard reset all resources
- */
-void OutputTS::HardReset(const string& why, bool force_damage)
-{
-    if (force_damage || m_video_stream.frames_written > 1800)
-        clog << "DAMAGED: " << why << ". Resetting." << endl;
-    else if (m_verbose > 0)
-        clog << "WARNING: " << why << ". Resetting.\n";
-    cerr.flush();
-    m_audioIO->Reset(why);
-    f_reset();
-
-#if 1
-    ClearVideoPool();
-    ClearImageQueue();
-#else
-    DiscardImages(!m_no_audio);
-#endif
-}
-
-/**
- * @brief soft reset all resources
- */
-void OutputTS::SoftReset(const string& why)
-{
-    if (m_verbose > 0)
-        clog << why << ". Soft reset." << endl;
-#if 0
-    m_audioIO->Reset(why);
-#endif
-    DiscardImages(true);
-}
-
-/**
  * @brief Clear video frame pool
  * @note Resets video frame pool state
  */
 void OutputTS::ClearVideoPool(void)
 {
-    const unique_lock<mutex> lock(m_videopool_mutex);
-
     m_video_stream.frames_idx_in  = -1;
     m_video_stream.frames_idx_out = -1;
     m_video_stream.frames_used = 0;
@@ -2020,7 +1971,6 @@ void OutputTS::ClearVideoPool(void)
  */
 void OutputTS::ClearImageQueue(void)
 {
-    const unique_lock<mutex> lock(m_imagequeue_mutex);
     imageque_t::iterator Iq;
     for (Iq = m_imagequeue.begin(); Iq != m_imagequeue.end(); ++Iq)
         f_image_buffer_available((*Iq).image, (*Iq).pEco);
@@ -2029,15 +1979,29 @@ void OutputTS::ClearImageQueue(void)
 
 /**
  * @brief Set discard images flag
- * @param val Flag to set discard images
+ * @param val ref count increment
  * @note Clears queues when discarding images
  */
-void OutputTS::DiscardImages(bool val)
+void OutputTS::DiscardImages(int val, const string & why)
 {
-    m_discard_images = val;
-    if (val)
+    const unique_lock<mutex> lock(m_imagequeue_mutex);
+
+    m_discard_images += val;
+    if (m_verbose > 2)
     {
-        ClearVideoPool();
+        if (val > 0)
+            clog << "Discarding images while " << why
+                 << " [" << m_discard_images << "]\n";
+        else if (val < 0)
+            clog << "Stopped discard images because " << why
+                 << " [" << m_discard_images << "]\n";
+        else
+            clog << "Clearing image queue because " << why
+                 << " [" << m_discard_images << "]\n";
+    }
+
+    if (val >= 0)
+    {
         ClearImageQueue();
     }
 }
@@ -2081,6 +2045,7 @@ void OutputTS::copy_to_frame(void)
             {
                 if (m_imagequeue.empty())
                 {
+                    m_imagequeue_is_empty = true;
                     m_imagequeue_empty.notify_one();
                     m_imagequeue_ready.wait_for(lock_i,
                         std::chrono::milliseconds(m_input_frame_wait_ms));
@@ -2108,95 +2073,92 @@ void OutputTS::copy_to_frame(void)
                 if (m_video_stream.frames_used < m_video_stream.frames_total)
                     break;
                 m_videopool_avail.wait_for(lock,
-                           std::chrono::milliseconds(m_input_frame_wait_ms));
+                                           std::chrono::milliseconds(m_input_frame_wait_ms));
                 if (m_running.load() == false)
                     return;
             }
 
             if (++m_video_stream.frames_idx_in == m_video_stream.frames_total)
                 m_video_stream.frames_idx_in = 0;
-        }
 
-        m_video_stream.frames[m_video_stream.frames_idx_in]
-                      .timestamp = timestamp;
-        AVFrame* frm = m_video_stream
-                       .frames[m_video_stream.frames_idx_in].frame;
+            m_video_stream.frames[m_video_stream.frames_idx_in]
+                .timestamp = timestamp;
+            AVFrame* frm = m_video_stream
+                           .frames[m_video_stream.frames_idx_in].frame;
 
-        frm->pts = av_rescale_q(timestamp,
-                                m_input_time_base,
-                                m_video_stream.enc->time_base);
+            frm->pts = av_rescale_q(timestamp,
+                                    m_input_time_base,
+                                    m_video_stream.enc->time_base);
 
 #if 1
-        if (frm->pts <= prev_pts)
-        {
-            if (m_verbose > 0)
+            if (frm->pts <= prev_pts)
             {
-                clog << lock_ios()
-                     << "DAMAGED: copy_frame: scaled pts did not increase: "
-                     << "[" << prev_idx << "] -> ["
-                     << m_video_stream.frames_idx_in << "] / "
-                     << m_video_stream.frames_used << "/"
-                     << m_video_stream.frames_total << "; "
-                     << prev_pts << " -> " << frm->pts << ". TS "
-                     << prev_ts << " -> " << timestamp
-                     << " diff:" << timestamp - prev_ts
-                     << " expected: " << m_input_frame_duration
-                     << endl;
+                if (m_verbose > 0)
+                {
+                    clog << lock_ios()
+                         << "DAMAGED: copy_frame: scaled pts did not increase: "
+                         << "[" << prev_idx << "] -> ["
+                         << m_video_stream.frames_idx_in << "] / "
+                         << m_video_stream.frames_used << "/"
+                         << m_video_stream.frames_total << "; "
+                         << prev_pts << " -> " << frm->pts << ". TS "
+                         << prev_ts << " -> " << timestamp
+                         << " diff:" << timestamp - prev_ts
+                         << " expected: " << m_input_frame_duration
+                         << endl;
+                }
             }
-        }
 #endif
 
-        prev_pts = frm->pts;
-        prev_ts = timestamp;
-        prev_idx = m_video_stream.frames_idx_in;
+            prev_pts = frm->pts;
+            prev_ts = timestamp;
+            prev_idx = m_video_stream.frames_idx_in;
 
-        if (m_video_stream.hw_frames_ctx)
-        {
-            // Map hardware frame to temporary frame
-            if ((ret = av_hwframe_map(m_video_stream.tmp_frame, frm,
-                                      AV_HWFRAME_MAP_WRITE |
-                                      AV_HWFRAME_MAP_OVERWRITE)) < 0)
+            if (m_video_stream.hw_frames_ctx)
             {
-                clog << lock_ios()
-                     << "ERROR: Could not map hw frame: "
-                     << AVerr2str(ret) << endl;
-                Shutdown();
-                return;
+                // Map hardware frame to temporary frame
+                if ((ret = av_hwframe_map(m_video_stream.tmp_frame, frm,
+                                          AV_HWFRAME_MAP_WRITE |
+                                          AV_HWFRAME_MAP_OVERWRITE)) < 0)
+                {
+                    clog << lock_ios()
+                         << "ERROR: Could not map hw frame: "
+                         << AVerr2str(ret) << endl;
+                    Shutdown();
+                    return;
+                }
+                dst_frame = m_video_stream.tmp_frame;
+                if (dst_frame == nullptr)
+                    cerr << "Ouch!\n";
             }
-            dst_frame = m_video_stream.tmp_frame;
-        }
-        else
-            dst_frame = frm;
+            else
+                dst_frame = frm;
 
-        // Copy frame data based on pixel format
-        if (m_video_stream.enc->pix_fmt == AV_PIX_FMT_YUV420P)
-        {
-            // YUV 4:2:0
-            memcpy(dst_frame->data[0], pImage, image_size);
-            memcpy(dst_frame->data[1], pImage + image_size, image_size / 4);
-            memcpy(dst_frame->data[2], pImage + image_size * 5 / 4,
-                   image_size / 4);
-        }
-        else
-        {
-            memcpy(dst_frame->data[0], pImage, image_size);
-            memcpy(dst_frame->data[1], pImage + image_size,
-                   image_size / 2);
-        }
+            // Copy frame data based on pixel format
+            if (m_video_stream.enc->pix_fmt == AV_PIX_FMT_YUV420P)
+            {
+                // YUV 4:2:0
+                memcpy(dst_frame->data[0], pImage, image_size);
+                memcpy(dst_frame->data[1], pImage + image_size, image_size / 4);
+                memcpy(dst_frame->data[2], pImage + image_size * 5 / 4,
+                       image_size / 4);
+            }
+            else
+            {
+                memcpy(dst_frame->data[0], pImage, image_size);
+                memcpy(dst_frame->data[1], pImage + image_size,
+                       image_size / 2);
+            }
 
-        if (m_video_stream.hw_frames_ctx)
-        {
-            // Unmap and cleanup
-            av_frame_unref(m_video_stream.tmp_frame);
-        }
+            if (m_video_stream.hw_frames_ctx)
+            {
+                // Unmap and cleanup
+                av_frame_unref(m_video_stream.tmp_frame);
+            }
 
-        f_image_buffer_available(pImage, pEco);
-
-        {
-            std::unique_lock<std::mutex> lock(m_videopool_mutex);
+            f_image_buffer_available(pImage, pEco);
             used = ++m_video_stream.frames_used;
         }
-
         m_videopool_ready.notify_one();
 
         if (m_verbose > 0)
@@ -2258,8 +2220,10 @@ bool OutputTS::AddVideoFrame(uint8_t* pImage, void* pEco,
 {
     const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
 
-    if (m_discard_images)
+    if (m_discard_images > 0)
+    {
         f_image_buffer_available(pImage, pEco);
+    }
     else
     {
         m_imagequeue.push_back(imagepkt_t{timestamp, pImage, pEco, imageSize});

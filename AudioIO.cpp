@@ -1000,8 +1000,8 @@ bool AudioIO::CodecChanged(void)
     }
 
     buffer_que_t::iterator Ibuf = m_buffer_q.begin();
-    if (!(*Ibuf).LPCM())
-        f_discard_images(true);
+
+    f_discard_images(1, "detecting codec.");
 
     // Detect new codec
     if (!(*Ibuf).DetectCodec())
@@ -1014,7 +1014,7 @@ bool AudioIO::CodecChanged(void)
         return false;
     }
 
-    f_discard_images(false);
+    f_discard_images(-1, "detect codec is done.");
 
     // Update codec parameters if changed
     if (m_codec_name != (*Ibuf).CodecName())

@@ -481,7 +481,8 @@ class AudioIO
     /**
      * @brief Type alias for discard image callback function
      */
-    using DiscardImageCallback = std::function<void (bool)>;
+    using DiscardImageCallback = std::function<void (int,
+                                                     const std::string & why)>;
 
     /**
      * @brief Constructor for AudioIO
