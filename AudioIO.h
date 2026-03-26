@@ -14,6 +14,9 @@ extern "C" {
 #include <atomic>
 #include <functional>
 
+#include <spdlog/spdlog.h>
+#include <memory>
+
 /**
  * @brief AudioIO class manages audio buffers for muxing with video
  *
@@ -299,6 +302,9 @@ class AudioBuffer
      * Copies probed frames to main queue and sets initialization state
      */
     void initialized(void);
+
+    // spdlog
+    std::shared_ptr<spdlog::logger> m_log;
 
     /**
      * @brief Structure to hold audio frame data and timestamp
@@ -675,6 +681,9 @@ class AudioIO
     bool    CodecChanged(void);
 
   private:
+    // spdlog
+    std::shared_ptr<spdlog::logger> m_log;
+
     /**
      * @brief Type alias for buffer queue
      */

@@ -63,6 +63,16 @@ if(NOT udev_FOUND)
   message(FATAL_ERROR "udev development headers not found. Maybe try: `sudo apt-get install libudev-dev`")
 endif()
 
+# Find spdlog
+find_package(spdlog QUIET)
+if(NOT spdlog_FOUND)
+  message(WARNING "spdlog library not found. spdlog is required for logging functionality.")
+  message(STATUS "To install spdlog, purhaps try:")
+  message(STATUS "  sudo dnf install spdlog-devel")
+  message(STATUS "  sudo apt install libspdlog-dev")
+  message(FATAL_ERROR "spdlog library not found. Please install it before continuing.")
+endif()
+
 #find_package(FFmpeg COMPONENTS AVCODEC AVFORMAT AVUTIL AVDEVICE REQUIRED)
 
 set(ENV{PKG_CONFIG_PATH} "$ENV{PKG_CONFIG_PATH}:/opt/ffmpeg/lib/pkgconfig")
@@ -112,6 +122,7 @@ target_link_libraries(magewell2ts PRIVATE
   ALSA::ALSA
   Threads::Threads
   PkgConfig::LIBAV
+  spdlog::spdlog
 )
 
 install(TARGETS magewell2ts DESTINATION /usr/local/bin)

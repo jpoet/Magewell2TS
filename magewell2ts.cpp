@@ -26,36 +26,39 @@
 #include <iostream>
 #include <charconv>
 #include <csignal>
+#include <memory>
 
 #include <vector>
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/stdout_sinks.h>
+#include "spdlog/sinks/rotating_file_sink.h"
 
 #include "Magewell.h"
-#include "lock_ios.h"
 #include "version.h"
 
 using namespace std;
-using namespace s6_lock_ios;
 
-Magewell g_mw;
+std::shared_ptr<spdlog::logger> logger;
+Magewell* g_mw;
 
 void Shutdown(void)
 {
-    g_mw.Shutdown();
+    g_mw->Shutdown();
 }
 
 void signal_handler(int signum)
 {
     if (signum == SIGHUP || signum == SIGUSR1)
     {
-        g_mw.Reset();
+        g_mw->Reset();
     }
     else if (signum == SIGINT || signum == SIGTERM)
     {
-        clog << "Received SIGINT/SIGTERM." << endl;
-        g_mw.Shutdown();
+        logger->info("Received SIGINT/SIGTERM.");
+        g_mw->Shutdown();
     }
     else
-        clog << "Unhandled interrupt." << endl;
+        logger->info("Unhandled interrupt.");
 }
 
 void show_help(string_view app)
@@ -73,6 +76,7 @@ void show_help(string_view app)
          << "--mux (-m)         : capture audio and video and mux into TS [false]\n"
          << "--no-audio (-n)    : Only capture video. [false]\n"
          << "--read-edid (-r)   : Read EDID info for input to file\n"
+         << "--logfile          : Also log messages to the given file\n"
          << "--verbose (-v)     : message verbose level. 0=completely quiet [1]\n"
          << "--video-codec (-c) : Video codec name (e.g. hevc_qsv, h264_nvenc) [hevc_nvenc]\n"
          << "--lookahead (-a)   : How many frames to 'look ahead' [35]\n"
@@ -129,7 +133,7 @@ bool string_to_int(string_view st, int &value, string_view var)
                              value);
     if (result.ec == errc::invalid_argument)
     {
-        clog << "Invalid " << var << ": " << st << endl;
+        logger->error("Invalid {}: {}", var, st);
         value = -1;
         return false;
     }
@@ -143,7 +147,7 @@ bool string_to_float(string_view st, float &value, string_view var)
                              value);
     if (result.ec == errc::invalid_argument)
     {
-        clog << "Invalid " << var << ": " << st << endl;
+        logger->error("Invalid {}: {}", var, st);
         value = -1;
         return false;
     }
@@ -151,13 +155,73 @@ bool string_to_float(string_view st, float &value, string_view var)
     return true;
 }
 
+void setup_logging(int verbose_level, const string& logfile)
+{
+    // Create console sink
+    auto console_sink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
+
+    // Set console level based on verbose level
+    if (verbose_level < 1)
+        console_sink->set_level(spdlog::level::off);
+    else if (verbose_level < 4)
+        console_sink->set_level(spdlog::level::info);
+    else if (verbose_level == 4)
+        console_sink->set_level(spdlog::level::debug);
+    else
+        console_sink->set_level(spdlog::level::trace);
+
+    console_sink->set_pattern("%l: %v");
+
+    // Create file sink if logfile is specified
+    std::shared_ptr<spdlog::sinks::sink> file_sink;
+    if (!logfile.empty())
+    {
+        file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>
+                    (logfile, // filename
+                     1024 * 1024 * 10,           // max size (10 MB)
+                     5,                          // max files
+                     false                       // rotate on open (optional, default false)
+                     );
+        file_sink->set_level(spdlog::level::trace);
+        file_sink->set_pattern("%Y-%m-%d %H:%M:%S [%l] %v");
+
+        // Combine sinks into a vector
+        std::vector<spdlog::sink_ptr> sinks {console_sink, file_sink};
+        logger = std::make_shared<spdlog::logger>("app_logger",
+                                                  begin(sinks), end(sinks));
+    }
+    else
+    {
+        logger = std::make_shared<spdlog::logger>("app_logger",
+                      spdlog::sinks_init_list{console_sink});
+    }
+
+    // Set logger level based on verbose level
+    if (verbose_level < 1)
+        logger->set_level(spdlog::level::off);
+    else if (verbose_level < 4)
+        logger->set_level(spdlog::level::info);
+    else if (verbose_level == 4)
+        logger->set_level(spdlog::level::debug);
+    else
+        logger->set_level(spdlog::level::trace);
+
+    spdlog::register_logger(logger);
+    spdlog::flush_on(spdlog::level::warn);
+    spdlog::flush_every(std::chrono::seconds(24)); // Flush every 5 seconds.
+
+    // Set default logger
+    spdlog::set_default_logger(logger);
+}
+
 int main(int argc, char* argv[])
 {
-//    parse_cmd(argc, argv);
-
     int    ret = 0;
     int    boardId  = -1;
     int    devIndex = -1;
+
+    string      logfile;
+    int         verbose_level = 1;
 
     string_view app_name = argv[0];
     string      edid_file;
@@ -174,15 +238,13 @@ int main(int argc, char* argv[])
 
     string      preset;
     int         quality       = 25;
-    int         look_ahead    = -1;
+    int         look_ahead    = 35;
     bool        no_audio      = false;
     bool        p010          = false;
 
     int         gpu_buffers   = 24;
     int         video_buffers = 24;
     int         extra_hw_frames = 64;
-
-    std::clog << mutex_init_own;
 
     vector<string_view> args(argv + 1, argv + argc);
 
@@ -203,6 +265,10 @@ int main(int argc, char* argv[])
         {
             show_help(app_name);
             return 0;
+        }
+        else if (*iter == "--logfile")
+        {
+            logfile = *(++iter);
         }
         else if (*iter == "-l" || *iter == "--list")
         {
@@ -294,7 +360,7 @@ int main(int argc, char* argv[])
             int input_count;
             if (!string_to_int(*(++iter), input_count, "input count"))
                 exit(1);
-            g_mw.WaitForInputs(input_count);
+            g_mw->WaitForInputs(input_count);
         }
         else if (*iter == "-v" || *iter == "--verbose")
         {
@@ -306,55 +372,67 @@ int main(int argc, char* argv[])
                 if (!string_to_int(*(++iter), v, "verbose"))
                     exit(1);
             }
-            g_mw.Verbose(v);
+            verbose_level = v;
         }
         else
         {
-            clog << "Unrecognized option '" << *iter << "'\n";
+            logger->error("Unrecognized option '{}'", *iter);
             exit(1);
         }
     }
 
+    // Initialize logging
+    setup_logging(verbose_level, logfile);
+
+    string argstr;
+    for (int idx = 0; idx < argc; ++idx)
+        argstr += format("{} ", argv[idx]);
+    logger->critical(argstr);
+
+    g_mw = new Magewell;
     if (!g_mw)
         return -1;
+    g_mw->Verbose(verbose_level);
 
     if (list_inputs)
-        g_mw.ListInputs();
+        g_mw->ListInputs();
 
     if (devIndex < 1)
         return 0;
 
-    if (!g_mw.OpenChannel(devIndex - 1, boardId))
+    if (!g_mw->OpenChannel(devIndex - 1, boardId))
         return -1;
 
     if (get_volume)
-        g_mw.DisplayVolume();
+        g_mw->DisplayVolume();
     if (set_volume >= 0)
-        if (!g_mw.SetVolume(set_volume))
+        if (!g_mw->SetVolume(set_volume))
             return -1;
 
     if (!edid_file.empty())
     {
         if (read_edid)
         {
-            if (!g_mw.ReadEDID(edid_file))
+            if (!g_mw->ReadEDID(edid_file))
                 return -1;
         }
         else if (write_edid)
         {
-            if (!g_mw.WriteEDID(edid_file))
+            if (!g_mw->WriteEDID(edid_file))
                 return -1;
         }
     }
 
     if (do_capture)
     {
-        if (!g_mw.Capture(video_codec, preset, quality, look_ahead,
+        if (!g_mw->Capture(video_codec, preset, quality, look_ahead,
                           no_audio, p010, device,
                           std::max(extra_hw_frames, 32),
                           gpu_buffers, video_buffers))
             return -2;
     }
 
+    delete g_mw;
+    spdlog::shutdown();
     return ret;
 }

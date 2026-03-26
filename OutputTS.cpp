@@ -35,6 +35,13 @@
  * @date 2022-2026
  */
 
+#if 0
+#include <string>
+#include <format>
+#include <vector>
+#include <chrono>
+#endif
+
 #include <csignal>
 #include <unistd.h>
 #include <iostream>
@@ -67,10 +74,8 @@ extern "C" {
 #define SYNCWORD2 0x4E1F
 
 #include "OutputTS.h"
-#include "lock_ios.h"
 
 using namespace std;
-using namespace s6_lock_ios;
 
 /**
  * @brief Convert AV timestamp to string representation
@@ -112,26 +117,49 @@ static std::string AVerr2str(int code)
     return string(astr);
 }
 
-/**
- * @brief Log packet information for debugging
- * @param where Location where packet is being logged
- * @param fmt_ctx Format context for packet
- * @param pkt Packet to log
- * @note This function is used for debugging and logging purposes
- */
-static void log_packet(string where, const AVFormatContext* fmt_ctx,
-                       const AVPacket* pkt)
+static string av_dump_format_string(AVFormatContext* ctx)
 {
-    AVRational* time_base = &fmt_ctx->streams[pkt->stream_index]->time_base;
+    if (!ctx)
+    {
+        return std::format("No format context provided\n");
+    }
 
-    clog << lock_ios()
-         << where << "[" << pkt->stream_index << "] pts: " << pkt->pts
-         << " pts_time: " << AV_ts2timestr(pkt->pts, time_base)
-         << " dts: " << AV_ts2str(pkt->dts)
-         << " dts_time: " << AV_ts2timestr(pkt->dts, time_base)
-         << " duration: " << AV_ts2str(pkt->duration)
-         << " duration_time: " << AV_ts2timestr(pkt->duration, time_base)
-         << endl;
+    string result;
+    for (unsigned int idx = 0; idx < ctx->nb_streams; ++idx)
+    {
+        AVStream* stream = ctx->streams[idx];
+        AVCodecParameters* par = stream->codecpar;
+
+        result += std::format("\tStream {}: ", idx);
+        result += std::format("{}: {}, ", av_get_media_type_string(par->codec_type),
+                              avcodec_get_name(par->codec_id));
+
+        if (par->codec_type == AVMEDIA_TYPE_VIDEO)
+        {
+            string pix_name = par->format >= 0 ?
+                              av_get_pix_fmt_name((AVPixelFormat)par->format) : "unknown";
+            double tbn;
+            if (stream->time_base.num)
+                tbn = (double)stream->time_base.den
+                      / (double)stream->time_base.num;
+            else
+                tbn = 0;
+            result += std::format("{}({}), {}x{} {:.2f} tbn\n",
+                                  pix_name,
+                                  av_color_space_name(par->color_space),
+                                  par->width, par->height, tbn);
+        }
+        else if (par->codec_type == AVMEDIA_TYPE_AUDIO)
+        {
+            char layout_name[256];
+            av_channel_layout_describe(&par->ch_layout, layout_name,
+                                       sizeof(layout_name));
+            result += std::format("{} Hz, {}, {} kb/s", par->sample_rate,
+                                  layout_name, par->bit_rate / 1000);
+        }
+    }
+
+    return result;
 }
 
 /**
@@ -168,6 +196,16 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     , f_reset(reset)
     , f_image_buffer_available(image_buffer_avail)
 {
+    m_log = spdlog::get("app_logger");
+    if (!m_log)
+    {
+        // Handle error if logger not found (e.g., create a fallback or throw exception)
+        std::cerr << "OutputTS Error: Logger 'app_logger' not found!" << std::endl;
+        return;
+    }
+
+    av_log_set_level(AV_LOG_QUIET);
+
     // Determine encoder type based on codec name
     if (m_video_codec_name.find("qsv") != string::npos)
         m_encoderType = EncoderType::QSV;
@@ -178,9 +216,7 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     else
     {
         m_encoderType = EncoderType::UNKNOWN;
-        clog << lock_ios()
-             << "ERROR: Codec '" << m_video_codec_name << "' not supported."
-             << endl;
+        m_log->error("Codec '{}' not supported.", m_video_codec_name);
         Shutdown();
     }
 
@@ -219,7 +255,6 @@ OutputTS::~OutputTS(void)
     close_stream(&m_video_stream);
 
     close_stream(&m_audio_stream);
-    close_container();
 }
 
 /**
@@ -234,6 +269,28 @@ void OutputTS::Shutdown(void)
         if (m_audioIO)
             m_audioIO->Shutdown();
     }
+}
+
+/**
+ * @brief Log packet information for debugging
+ * @param where Location where packet is being logged
+ * @param fmt_ctx Format context for packet
+ * @param pkt Packet to log
+ * @note This function is used for debugging and logging purposes
+ */
+void OutputTS::log_packet(string where, const AVFormatContext* fmt_ctx,
+                       const AVPacket* pkt)
+{
+    AVRational* time_base = &fmt_ctx->streams[pkt->stream_index]->time_base;
+
+    m_log->info("{}[{}] pts: {} pts_time: {} dts: {} dts_time: {} duration: {} "
+                "duration_time: {}",
+                where, pkt->stream_index, pkt->pts,
+                AV_ts2timestr(pkt->pts, time_base),
+                AV_ts2str(pkt->dts),
+                AV_ts2timestr(pkt->dts, time_base),
+                AV_ts2str(pkt->duration),
+                AV_ts2timestr(pkt->duration, time_base));
 }
 
 /**
@@ -271,8 +328,7 @@ AVFrame* OutputTS::alloc_audio_frame(enum AVSampleFormat sample_fmt,
     // Check if frame allocation succeeded
     if (!frame)
     {
-        clog << lock_ios()
-             << "ERROR: Failed to allocate an audio frame." << endl;
+        m_log->error("Failed to allocate an audio frame.");
         return nullptr;
     }
 
@@ -288,8 +344,7 @@ AVFrame* OutputTS::alloc_audio_frame(enum AVSampleFormat sample_fmt,
         ret = av_frame_get_buffer(frame, 0);
         if (ret < 0)
         {
-            clog << lock_ios()
-                 << "ERROR: failed to allocate an audio buffer" << endl;
+            m_log->error("Failed to allocate an audio buffer");
             av_frame_free(&frame);
             return nullptr;
         }
@@ -307,13 +362,10 @@ bool OutputTS::open_audio(void)
 {
     close_encoder(&m_audio_stream);
 
-    int idx;
-
     // Log audio stream addition if verbose level is high enough
     if (m_verbose > 1)
     {
-        clog << lock_ios()
-             << "Adding audio stream." << endl;
+        m_log->info("Adding audio stream.");
     }
 
     const AVCodec* audio_codec = nullptr;
@@ -322,10 +374,8 @@ bool OutputTS::open_audio(void)
     audio_codec = avcodec_find_encoder_by_name(m_audioIO->CodecName().c_str());
     if (!audio_codec)
     {
-        clog << lock_ios()
-             << "WARNING: Could not find audio encoder for '"
-             << m_audioIO->CodecName() << "'\n";
-        cerr.flush();
+        m_log->warn("Could not find audio encoder for '{}'",
+                    m_audioIO->CodecName());
         return true;
     }
 
@@ -333,8 +383,7 @@ bool OutputTS::open_audio(void)
     m_audio_stream.tmp_pkt = av_packet_alloc();
     if (!m_audio_stream.tmp_pkt)
     {
-        clog << lock_ios()
-             << "ERROR: Could not allocate AVPacket" << endl;
+        m_log->error("Could not allocate AVPacket");
         return false;
     }
 
@@ -342,8 +391,7 @@ bool OutputTS::open_audio(void)
     m_audio_stream.enc = avcodec_alloc_context3(audio_codec);
     if (!m_audio_stream.enc)
     {
-        clog << lock_ios()
-             << "ERROR: Could not alloc an encoding context" << endl;
+        m_log->error("Could not alloc an encoding context");
         return false;
     }
     m_audio_stream.next_pts = 0;
@@ -362,7 +410,7 @@ bool OutputTS::open_audio(void)
     if (audio_codec->supported_samplerates)
     {
         m_audio_stream.enc->sample_rate = audio_codec->supported_samplerates[0];
-        for (idx = 0; audio_codec->supported_samplerates[idx]; ++idx)
+        for (int idx = 0; audio_codec->supported_samplerates[idx]; ++idx)
         {
             if (audio_codec->supported_samplerates[idx] == m_audioIO->SampleRate())
             {
@@ -404,7 +452,7 @@ bool OutputTS::open_audio(void)
     else
     {
         m_audio_stream.enc->sample_rate = sample_rates[0];
-        for (idx = 0; idx < count; ++idx)
+        for (int idx = 0; idx < count; ++idx)
         {
             if (sample_rates[idx] == m_audioIO->SampleRate())
             {
@@ -425,6 +473,7 @@ bool OutputTS::open_audio(void)
                                  &count);
     if (ch_layouts)
     {
+        int idx;
         for (idx = 0; idx < count; ++idx)
         {
             if (!av_channel_layout_compare(&m_audio_stream.enc->ch_layout,
@@ -435,14 +484,13 @@ bool OutputTS::open_audio(void)
         {
             char buf[512];
             av_channel_layout_describe(&m_audio_stream.enc->ch_layout, buf, sizeof(buf));
-            clog << lock_ios();
-            clog << "Channel layout " << buf << " is not supportr by the "
-                 << m_audio_stream.enc->codec->name << " encoder.\n";
-            clog << m_audio_stream.enc->codec->name << " encoder supports:\n";
+            m_log->error("Channel layout {} is not supported by the {} encoder.",
+                         buf, m_audio_stream.enc->codec->name);
+            m_log->info("Encoder {} supports:", m_audio_stream.enc->codec->name);
             for (idx = 0; idx < count; ++idx)
             {
                 av_channel_layout_describe(&ch_layouts[idx], buf, sizeof(buf));
-                clog << "    " << buf << '\n';
+                m_log->info("    {}", buf);
             }
         }
     }
@@ -453,16 +501,14 @@ bool OutputTS::open_audio(void)
     {
         m_audio_stream.enc->thread_type = FF_THREAD_SLICE;
         if (m_verbose > 1)
-            clog << lock_ios()
-                 << " Audio = THREAD SLICE\n";
+            m_log->info(" Audio = THREAD SLICE");
     }
     else if (m_audio_stream.enc->codec->capabilities &
              AV_CODEC_CAP_FRAME_THREADS)
     {
         m_audio_stream.enc->thread_type = FF_THREAD_FRAME;
         if (m_verbose > 1)
-            clog << lock_ios()
-                 << " Audio = THREAD FRAME\n";
+            m_log->info(" Audio = THREAD FRAME");
     }
 
     const AVCodec* codec = audio_codec;
@@ -473,8 +519,7 @@ bool OutputTS::open_audio(void)
     // Open audio codec
     if ((ret = avcodec_open2(m_audio_stream.enc, codec, &opt)) < 0)
     {
-        clog << lock_ios()
-             << "ERROR: Could not open audio codec: " << AVerr2str(ret) << endl;
+        m_log->error("Could not open audio codec: {}", AVerr2str(ret));
         return false;
     }
 
@@ -512,8 +557,7 @@ bool OutputTS::open_audio(void)
 
     if (m_audio_stream.tmp_frame == nullptr)
     {
-        clog << lock_ios()
-             << "ERROR: Unable to allocate a temporary audio frame." << endl;
+        m_log->error("Unable to allocate a temporary audio frame.");
         Shutdown();
         return false;
     }
@@ -522,8 +566,7 @@ bool OutputTS::open_audio(void)
     m_audio_stream.swr_ctx = swr_alloc();
     if (!m_audio_stream.swr_ctx)
     {
-        clog << lock_ios()
-             << "ERROR: Could not allocate resampler context" << endl;
+        m_log->error("Could not allocate resampler context");
         return false;
     }
 
@@ -553,8 +596,7 @@ bool OutputTS::open_audio(void)
     // Initialize resampler context
     if ((ret = swr_init(m_audio_stream.swr_ctx)) < 0)
     {
-        clog << lock_ios()
-             << "ERROR: Failed to initialize the resampling context" << endl;
+        m_log->error("Failed to initialize the resampling context");
         return false;
     }
 
@@ -571,7 +613,7 @@ bool OutputTS::open_video(void)
     close_encoder(&m_video_stream);
 
     if (m_verbose > 1)
-        clog << "Opening video.\n";
+        m_log->info("Opening video.");
     m_video_stream.name = "video";
 
     AVDictionary* opt = NULL;
@@ -583,18 +625,15 @@ bool OutputTS::open_video(void)
     {
         if (m_verbose > 0)
         {
-            clog << lock_ios()
-                 << "Video codec: " << video_codec->id << " : "
-                 << video_codec->name << " '"
-                 << video_codec->long_name << "' "
-                 << endl;
+            m_log->info("Video codec: {} : {} '{}'",
+                        static_cast<int>(video_codec->id),
+                        string(video_codec->name),
+                        string(video_codec->long_name));
         }
     }
     else
     {
-        clog << lock_ios()
-             << "ERROR: Could not find video encoder for '"
-             << m_video_codec_name << "'" << endl;
+        m_log->error("Could not find video encoder for '{}'", m_video_codec_name);
         return false;
     }
 
@@ -602,8 +641,7 @@ bool OutputTS::open_video(void)
     m_video_stream.tmp_pkt = av_packet_alloc();
     if (!m_video_stream.tmp_pkt)
     {
-        clog << lock_ios()
-             << "ERROR: Could not allocate AVPacket" << endl;
+        m_log->error("Could not allocate AVPacket");
         return false;
     }
 
@@ -611,9 +649,7 @@ bool OutputTS::open_video(void)
     m_video_stream.enc = avcodec_alloc_context3(video_codec);
     if (!m_video_stream.enc)
     {
-        clog << lock_ios()
-             << "ERROR: Could not alloc an encoding context" << endl;
-
+        m_log->error("Could not alloc an encoding context");
         av_packet_free(&m_video_stream.tmp_pkt);
         return false;
     }
@@ -630,8 +666,7 @@ bool OutputTS::open_video(void)
     if (m_isHDR)
     {
         if (m_verbose > 0)
-            clog << lock_ios()
-                 << "Open video stream with HDR.\n";
+            m_log->info("Open video stream with HDR.");
 #if 1
         // Full color range
         m_video_stream.enc->color_range     = AVCOL_RANGE_JPEG;
@@ -652,29 +687,21 @@ bool OutputTS::open_video(void)
     {
         m_video_stream.enc->thread_type = FF_THREAD_SLICE;
         if (m_verbose > 1)
-            clog << lock_ios()
-                 << " Video = THREAD SLICE\n";
+            m_log->info(" Video = THREAD SLICE");
     }
     else if (m_video_stream.enc->codec->capabilities & AV_CODEC_CAP_FRAME_THREADS)
     {
         m_video_stream.enc->thread_type = FF_THREAD_FRAME;
         if (m_verbose > 1)
-            clog << lock_ios()
-                 << " Video = THREAD FRAME\n";
+            m_log->info(" Video = THREAD FRAME");
     }
 
     // Log video parameters
     if (m_verbose > 1)
     {
-        clog << lock_ios()
-             << "Output stream Video: " << m_video_stream.enc->width
-             << "x" << m_video_stream.enc->height
-             << (m_interlaced ? 'i' : 'p')
-#if 0
-             << " time_base: " << m_video_stream.st->time_base.num
-             << "/" << m_video_stream.st->time_base.den
-#endif
-             << "\n";
+        m_log->info("Output stream Video: {}x{}{}",
+                    m_video_stream.enc->width, m_video_stream.enc->height,
+                    m_interlaced ? 'i' : 'p');
     }
 
     {
@@ -713,8 +740,7 @@ bool OutputTS::open_video(void)
                   return false;
               break;
             default:
-              clog << lock_ios()
-                   << "ERROR: Could not determine video encoder type." << endl;
+              m_log->error("Could not determine video encoder type.");
               return false;
 
               unique_lock<mutex> lock(m_videopool_mutex);
@@ -754,19 +780,15 @@ bool OutputTS::open_container(void)
     if (m_running.load() == false)
         return false;
 
-#if 1
     if (m_verbose > 1)
-        clog << lock_ios()
-             << "\n================== open_container begin ==================\n";
-#endif
+        m_log->info("================== open_container begin ==================");
 
     // Allocate output format context
     avformat_alloc_output_context2(&m_output_format_context,
                                    NULL, "mpegts", NULL);
     if (!m_output_format_context)
     {
-        clog << lock_ios()
-             << "ERROR: Could not create output format context." << endl;
+        m_log->error("Could not create output format context.");
         Shutdown();
         return false;
     }
@@ -777,8 +799,7 @@ bool OutputTS::open_container(void)
     m_video_stream.st = avformat_new_stream(m_output_format_context, NULL);
     if (!m_video_stream.st)
     {
-        clog << lock_ios()
-             << "ERROR: Could not allocate video stream" << endl;
+        m_log->error("Could not allocate video stream");
         return false;
     }
     m_video_stream.st->id = 0;
@@ -789,8 +810,7 @@ bool OutputTS::open_container(void)
                                           m_video_stream.enc);
     if (ret < 0)
     {
-        clog << lock_ios()
-             << "ERROR: Could not copy the stream parameters." << endl;
+        m_log->error("Could not copy the stream parameters.");
         Shutdown();
         return false;
     }
@@ -802,42 +822,33 @@ bool OutputTS::open_container(void)
         m_audio_stream.st = avformat_new_stream(m_output_format_context, NULL);
         if (!m_audio_stream.st)
         {
-            clog << lock_ios()
-                 << "ERROR: Could not allocate stream" << endl;
+            m_log->error("Could not allocate stream");
             return false;
         }
         m_audio_stream.st->id = 1;
         m_audio_stream.st->time_base =
             (AVRational){ 1, m_audio_stream.enc->sample_rate };
-        if (m_verbose > 1)
-        {
-            clog << lock_ios()
-                 << "Audio time base " << m_audio_stream.st->time_base.num << "/"
-                 << m_audio_stream.st->time_base.den << "\n";
-        }
+
         // Copy stream parameters
         ret = avcodec_parameters_from_context(m_audio_stream.st->codecpar,
                                               m_audio_stream.enc);
         if (ret < 0)
         {
-            clog << lock_ios()
-                 << "ERROR: Could not copy the stream parameters" << endl;
+            m_log->error("Could not copy the stream parameters");
             return false;
         }
     }
 
     // Dump format information
     if (m_verbose > 0)
-        av_dump_format(m_output_format_context, 0, m_filename.c_str(), 1);
+        m_log->info(av_dump_format_string(m_output_format_context));
 
     // Open output file
     if (!(m_fmt->flags & AVFMT_NOFILE)) {
         ret = avio_open(&m_output_format_context->pb,
                         m_filename.c_str(), AVIO_FLAG_WRITE);
         if (ret < 0) {
-            clog << lock_ios()
-                 << "ERROR: Could not open '" << m_filename << "': "
-                 << AVerr2str(ret) << endl;
+            m_log->error("Could not open '{}': {}", m_filename, AVerr2str(ret));
             Shutdown();
             return false;
         }
@@ -847,18 +858,14 @@ bool OutputTS::open_container(void)
     ret = avformat_write_header(m_output_format_context, &opt);
     if (ret < 0)
     {
-        clog << lock_ios()
-             << "ERROR: Could not open output file: %s\n"
-             << AVerr2str(ret) << endl;
+        m_log->error("Could not open output file: %s", AVerr2str(ret));
         Shutdown();
         return false;
     }
 
-#if 1
     if (m_verbose > 1)
-        clog << lock_ios()
-             << "\n================== open_container end ==================\n";
-#endif
+        m_log->info("================== open_container end ==================");
+
     m_init_needed = false;
     return true;
 }
@@ -885,7 +892,7 @@ bool OutputTS::setAudioParams(int num_channels, bool is_lpcm,
                                        m_verbose);
         if (m_audioIO == nullptr)
         {
-            clog << "Failed to create Audio handler" << endl;
+            m_log->error("Failed to create Audio handler");
             return false;
         }
     }
@@ -897,8 +904,7 @@ bool OutputTS::setAudioParams(int num_channels, bool is_lpcm,
         return false;
 
     if (m_verbose > 2)
-        clog << lock_ios()
-             << "setAudioParams " << (is_lpcm ? "LPCM" : "Bitstream") << endl;
+        m_log->info("setAudioParams {}", is_lpcm ? "LPCM" : "Bitstream");
 
     return true;
 }
@@ -962,13 +968,11 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
 
     if (m_verbose > 0)
     {
-        clog << lock_ios()
-             << "Video: " << width << "x" << height
-             << (m_interlaced ? 'i' : 'p') << fps
-             << (m_isHDR ? " HDR" : "") << endl;
+        m_log->info("Video: {}x{}{}{}{}", width, height,
+                    m_interlaced ? 'i' : 'p', fps,
+                    m_isHDR ? " HDR" : "");
         if (m_verbose > 2)
-            clog << lock_ios()
-                 << "Video Params set\n";
+            m_log->info("Video Params set");
     }
 
     open_video();
@@ -1012,7 +1016,7 @@ void OutputTS::close_encoder(OutputStream* ost)
         return;
 
     if (m_verbose > 1)
-        clog << lock_ios() << "Closing " << ost->name << " encoder.\n";
+        m_log->info("Closing {} encoder.", ost->name);
 
     // Free encoder hardware frames context
     if (ost->hw_frames_ctx)
@@ -1126,10 +1130,8 @@ bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
     {
         if (m_verbose > 0)
         {
-            clog << lock_ios()
-                 << "WARNING: Failed sending a frame to the encoder: "
-                 << AVerr2str(ret) << '\n';
-            cerr.flush();
+            m_log->warn("Failed sending a frame to the encoder: {}",
+                        AVerr2str(ret));
         }
         return false;
     }
@@ -1144,9 +1146,7 @@ bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
         {
             if (m_verbose > 0)
             {
-                clog << lock_ios()
-                     << "WARNING: Failed encoding a frame: AVerr2str(ret)\n";
-                cerr.flush();
+                m_log->warn("Failed encoding a frame: {}", AVerr2str(ret));
             }
             return false;
         }
@@ -1170,23 +1170,17 @@ bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
         {
             if (m_verbose > 0)
             {
-                clog << lock_ios()
-                     << "WARNING: Failed to write packet: " << AVerr2str(ret)
-                     << '\n';
-                cerr.flush();
-            }
-
-            if (m_verbose > 1)
-            {
-                clog << lock_ios()
-                     << "Codec time base " << codec_ctx->time_base.num
-                     << "/" << codec_ctx->time_base.den
-                     << "\n"
-                     << "Stream          " << ost->st->time_base.num
-                     << "/" << ost->st->time_base.den
-                     << "\n";
-
-                log_packet("write_frame", fmt_ctx, pkt);
+                m_log->warn("Failed to write packet: {}", AVerr2str(ret));
+                if (m_verbose > 1)
+                {
+                    m_log->info("Codec time base {}/{}",
+                                codec_ctx->time_base.num,
+                                codec_ctx->time_base.den);
+                    m_log->info("Stream          {}/{}",
+                                ost->st->time_base.num,
+                                ost->st->time_base.den);
+                    log_packet("write_frame", fmt_ctx, pkt);
+                }
             }
             return false;
         }
@@ -1215,8 +1209,7 @@ AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
     if (m_audioIO->Size() < bytes)
     {
         if (m_verbose > 4)
-            clog << lock_ios()
-                 << "Not enough audio data.\n";
+            m_log->trace("Not enough audio data.");
         this_thread::sleep_for(chrono::milliseconds(1));
         return nullptr;
     }
@@ -1265,8 +1258,7 @@ bool OutputTS::write_pcm_frame(AVFormatContext* oc, OutputStream* ost)
     // Make frame writable
     if (0 > av_frame_make_writable(ost->frame))
     {
-        clog << "WARNING: write_pcm_frame: Failed to make frame writable\n";
-        cerr.flush();
+        m_log->warn("write_pcm_frame: Failed to make frame writable");
         return false;
     }
 
@@ -1277,8 +1269,7 @@ bool OutputTS::write_pcm_frame(AVFormatContext* oc, OutputStream* ost)
                       frame->nb_samples);
     if (ret < 0)
     {
-        clog << "WARNING: write_pcm_frame: Error while converting\n";
-        cerr.flush();
+        m_log->warn("write_pcm_frame: Error while converting");
         return false;
     }
 
@@ -1306,7 +1297,7 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
     if (pkt == nullptr)
     {
         if (m_verbose > 2)
-            clog << "Failed to read pkt from S/PDIF" << endl;
+            m_log->info("Failed to read pkt from S/PDIF");
         return false;
     }
 
@@ -1333,10 +1324,7 @@ bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
 
     if (ret < 0)
     {
-        clog << lock_ios()
-             << "WARNING: Failed to write audio packet: " << AVerr2str(ret)
-             << '\n';
-        cerr.flush();
+        m_log->warn("Failed to write audio packet: {}", AVerr2str(ret));
         return false;
     }
 
@@ -1385,11 +1373,8 @@ AVFrame* OutputTS::alloc_picture(enum AVPixelFormat pix_fmt,
     if (ret < 0)
     {
         const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(pix_fmt);
-        clog << lock_ios()
-             << "WARNING: Could not allocate " << desc->name
-             << " video frame of " << width << "x" << height
-             << " : " << AV_ts2str(ret) << '\n';
-        cerr.flush();
+        m_log->warn("Could not allocate {} video frame of {}x{} : {}",
+                    desc->name, width, height, AV_ts2str(ret));
         return nullptr;
     }
 
@@ -1425,11 +1410,8 @@ AVFrame* OutputTS::alloc_hw_picture(AVBufferRef* hw_frames_ctx,
     if (ret < 0)
     {
         const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(pix_fmt);
-        clog << lock_ios()
-             << "WARNING: Could not allocate hw " << desc->name
-             << " video frame of " << width << "x" << height
-             << " : " << AV_ts2str(ret) << '\n';
-        cerr.flush();
+        m_log->warn("Could not allocate hw {} video frame of {}x{} : {}",
+                    desc->name, width, height, AV_ts2str(ret));
         return nullptr;
     }
 
@@ -1452,7 +1434,7 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
     AVDictionary* opt = NULL;
 
     if (m_verbose > 1)
-        clog << "Opening nVidia encoder.\n";
+        m_log->info("Opening nVidia encoder.");
 
     av_dict_copy(&opt, opt_arg, 0);
 
@@ -1461,16 +1443,14 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
     {
         av_opt_set(ctx->priv_data, "preset", m_preset.c_str(), 0);
         if (m_verbose > 0)
-            clog << lock_ios()
-                 << "Using preset " << m_preset << " for "
-                 << m_video_codec_name << endl;
+            m_log->info("Using preset {} for {}", m_preset, m_video_codec_name);
     }
 
     av_opt_set(ctx->priv_data, "tune", "hq", 0);
     av_opt_set(ctx->priv_data, "rc", "constqp", 0);
 
     av_opt_set_int(ctx->priv_data, "cq", m_quality, 0);
-    if (m_look_ahead >= 0)
+    if (m_look_ahead > 0)
     {
         av_opt_set_int(ctx->priv_data, "rc-lookahead", m_look_ahead, 0);
         av_opt_set_int(ctx->priv_data, "surfaces", 50, 0);
@@ -1487,7 +1467,7 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
     if (av_opt_set(ctx->priv_data, "no-open-gop", "1",
                    AV_OPT_SEARCH_CHILDREN) < 0)
         if (m_verbose > 2)
-            clog << "nvenc: Could not set no-open-gop option.\n";
+            m_log->info("nvenc: Could not set no-open-gop option.");
 
     // Set pixel format
     if (m_isHDR || m_p010)
@@ -1500,9 +1480,7 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
     av_dict_free(&opt);
     if (ret < 0)
     {
-        clog << lock_ios()
-             << "ERROR: Could not open video codec: "
-             << AVerr2str(ret) << endl;
+        m_log->error("Could not open video codec: {}", AVerr2str(ret));
         Shutdown();
         return false;
     }
@@ -1516,9 +1494,7 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
                                                ctx->height);
         if (!ost->frames[idx].frame)
         {
-            clog << lock_ios()
-                 << "ERROR: Could not allocate video frame" << endl;
-
+            m_log->error("Could not allocate video frame");
             Shutdown();
             return false;
         }
@@ -1537,15 +1513,14 @@ bool OutputTS::init_intel_hw(const string & type,
     int    ret;
 
     if (m_verbose > 0)
-        clog << "Initializing Intel GPU\n";
+        m_log->info("Initializing Intel GPU");
 
     if (ost->hw_frames_ctx == nullptr)
     {
         // Create hardware frames context
         if (!(ost->hw_frames_ctx = av_hwframe_ctx_alloc(ost->hw_device_ctx)))
         {
-            clog << lock_ios()
-                 << "ERROR: Failed to create QSV frame context." << endl;
+            m_log->error("Failed to create QSV frame context.");
             Shutdown();
             return false;
         }
@@ -1555,11 +1530,9 @@ bool OutputTS::init_intel_hw(const string & type,
     int pool_size = m_frame_buffers + m_extra_hw_frames + m_look_ahead + 16;
 
     if (m_verbose > 0)
-        clog << lock_ios()
-             << ">> Using " << m_frame_buffers << " (requested)"
-             << " + " << m_extra_hw_frames << " (extra_hw_frames)"
-             << " + " << m_look_ahead << " (lookahead) + 16 = "
-             << pool_size << " GPU buffers\n";
+        m_log->info("Using {} (requested) + {} (extra_hw_frames) + {} "
+                    "(lookahead) + 16 = {} GPU buffers",
+                    m_frame_buffers, m_extra_hw_frames, m_look_ahead, pool_size);
 
     AVHWFramesContext* frames_ctx =
         reinterpret_cast<AVHWFramesContext* >(ost->hw_frames_ctx->data);
@@ -1573,9 +1546,8 @@ bool OutputTS::init_intel_hw(const string & type,
     // Initialize frames context
     if ((ret = av_hwframe_ctx_init(ost->hw_frames_ctx)) < 0)
     {
-        clog << lock_ios()
-             << "ERROR: Failed to initialize " << type << " frame context."
-             << "Error code: " << AVerr2str(ret) << endl;
+        m_log->error("Failed to initialize {} frame context. Error code: {}",
+                     type, AVerr2str(ret));
         av_buffer_unref(&ost->hw_frames_ctx);
         Shutdown();
         return false;
@@ -1586,9 +1558,8 @@ bool OutputTS::init_intel_hw(const string & type,
     if (!ost->enc->hw_frames_ctx)
     {
         ret = AVERROR(ENOMEM);
-        clog << lock_ios()
-             << "ERROR: Failed to allocate hw frame buffer. "
-             << "Error code: " << AVerr2str(ret) << endl;
+        m_log->error("Failed to allocate hw frame buffer. Error code: {}",
+                     AVerr2str(ret));
         av_buffer_unref(&ost->hw_frames_ctx);
         Shutdown();
         return false;
@@ -1598,10 +1569,8 @@ bool OutputTS::init_intel_hw(const string & type,
     // Open codec
     if ((ret = avcodec_open2(ost->enc, codec, &opt)) < 0)
     {
-        clog << lock_ios()
-             << "ERROR: Cannot open " << type
-             << " video encoder codec. Error code: "
-             << AVerr2str(ret) << endl;
+        m_log->error("Cannot open {} video encoder codec. Error code: {}",
+                     type, AVerr2str(ret));
         Shutdown();
         return false;
     }
@@ -1616,10 +1585,7 @@ bool OutputTS::init_intel_hw(const string & type,
                                                   m_input_height);
         if (!ost->frames[idx].frame)
         {
-            clog << lock_ios()
-                 << "WARNING: Could not allocate " << type << " video frame["
-                 << idx << "]\n";
-            cerr.flush();
+            m_log->warn("Could not allocate {} video frame[{}]", type, idx);
             ost->frames_total = idx + 1;
         }
     }
@@ -1644,7 +1610,7 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     AVDictionary* opt = nullptr;
 
     if (m_verbose > 1)
-        clog << "Opening VAAPI encoder.\n";
+        m_log->info("Opening VAAPI encoder.");
 
     av_dict_copy(&opt, opt_arg, 0);
 
@@ -1665,31 +1631,30 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
         vector<std::string>::iterator Idriver;
         for (Idriver = drivers.begin(); Idriver != drivers.end(); ++Idriver)
         {
-            static string envstr = "LIBVA_DRIVER_NAME=" + *Idriver;
+            string envstr = "LIBVA_DRIVER_NAME=" + *Idriver;
             char* env = envstr.data();
+            putenv(env);
+            envstr = "LIBVA_MESSAGING_LEVEL=0";
+            env = envstr.data();
             putenv(env);
 
             if ((ret = av_hwdevice_ctx_create(&ost->hw_device_ctx,
                                               AV_HWDEVICE_TYPE_VAAPI,
                                               m_device.c_str(), opt, 0)) < 0)
-                clog << lock_ios()
-                     << "ERROR: Failed to open VAPPI driver '"
-                     << *Idriver << "'" << endl;
+                m_log->error("Failed to open VAPPI driver '{}'", *Idriver);
             else
                 break;
         }
         if (Idriver == drivers.end())
         {
-            clog << lock_ios()
-                 << "ERROR: Failed to create a VAAPI device. Error code: "
-                 << AVerr2str(ret) << endl;
+            m_log->error("Failed to create a VAAPI device. Error code: {}",
+                         AVerr2str(ret));
             Shutdown();
             return false;
         }
 
         if (m_verbose > 0)
-            clog << lock_ios()
-                 << "Using VAAPI driver '" << *Idriver << "'\n";
+            m_log->info("Using VAAPI driver '{}'", *Idriver);
     }
 
     ost->enc->pix_fmt     = AV_PIX_FMT_VAAPI;
@@ -1712,7 +1677,7 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     AVDictionary* opt = nullptr;
 
     if (m_verbose > 1)
-        clog << "Opening QSV encoder.\n";
+        m_log->info("Opening QSV encoder.");
 
     av_dict_copy(&opt, opt_arg, 0);
 
@@ -1726,14 +1691,12 @@ bool OutputTS::open_qsv(const AVCodec* codec,
         {
             av_opt_set(ost->enc->priv_data, "preset", m_preset.c_str(), 0);
             if (m_verbose > 0)
-                clog << lock_ios()
-                     << "Using preset " << m_preset << " for "
-                     << m_video_codec_name << endl;
+                m_log->info("Using preset {} for {}", m_preset, m_video_codec_name);
         }
 
         av_opt_set(ost->enc->priv_data, "scenario", "livestreaming", 0);
 
-        if (m_look_ahead >= 0 &&
+        if (m_look_ahead > 0 &&
             av_opt_find(ost->enc->priv_data, "look_ahead", NULL,
                         0, AV_OPT_SEARCH_CHILDREN))
         {
@@ -1760,23 +1723,24 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     if (ost->hw_device_ctx == nullptr)
     {
         // Make sure env doesn't prevent QSV init.
-        static string envstr = "LIBVA_DRIVER_NAME";
+        string envstr = "LIBVA_DRIVER_NAME";
         char* env = envstr.data();
         unsetenv(env);
+        envstr = "LIBVA_MESSAGING_LEVEL=0";
+        env = envstr.data();
+        putenv(env);
 
         av_dict_set(&opt, "child_device", m_device.c_str(), 0);
         if ((ret = av_hwdevice_ctx_create(&ost->hw_device_ctx,
                                           AV_HWDEVICE_TYPE_QSV,
                                           m_device.c_str(), opt, 0)) != 0)
         {
-            clog << lock_ios()
-                 << "ERROR: Failed to open QSV on " << m_device << endl;
+            m_log->error("Failed to open QSV on {}", m_device);
             return false;
         }
 
         if (m_verbose > 0)
-            clog << lock_ios()
-                 << "Using QSV\n";
+            m_log->info("Using QSV");
     }
 
     ost->enc->pix_fmt = AV_PIX_FMT_QSV;
@@ -1827,11 +1791,10 @@ void OutputTS::mux(void)
         if (m_audioIO && m_audioIO->CodecChanged())
         {
             if (m_verbose > 0)
-                clog << "Audio changing: closing audio encoder\n";
+                m_log->info("Audio changing: closing audio encoder");
             if (!open_audio())
             {
-                clog << lock_ios()
-                     << "ERROR: Failed to create audio stream" << endl;
+                m_log->error("Failed to create audio stream");
                 Shutdown();
                 break;
             }
@@ -1869,11 +1832,8 @@ void OutputTS::mux(void)
                             why += " &";
                         why += " audio";
                     }
-                    {
-                        clog << lock_ios() << "WARNING: New TS needed but"
-                             << why << " encoder is not ready.\n";
-                        cerr.flush();
-                    }
+                    m_log->warn("New TS needed but{} encoder is not ready.",
+                                why);
                 }
                 continue;
             }
@@ -1883,10 +1843,11 @@ void OutputTS::mux(void)
         if (m_audio_stream.enc)
         {
 #if 0
-            clog << lock_ios()
-                 << "Write: video " << m_video_stream.next_pts << "\n"
-                 << "  audio [" << setw(2) << m_audioIO->BufId()
-                 << "] " << m_audio_stream.next_pts << "\n";
+            m_log->info("Write: video {}"
+                        "\n  audio [{}] {}",
+                        m_video_stream.next_pts,
+                        setw(2) << m_audioIO->BufId(),
+                        m_audio_stream.next_pts);
 #endif
             if (!write_audio_frame(m_output_format_context,
                                    &m_audio_stream))
@@ -1896,8 +1857,7 @@ void OutputTS::mux(void)
 #if 0
                     HardReset("Audio glitch");
 #else
-                    clog << "Audio glitch.\n";
-                    cerr.flush();
+                    m_log->info("Audio glitch.");
 #endif
                 }
                 this_thread::sleep_for(chrono::milliseconds(5));
@@ -1939,7 +1899,7 @@ void OutputTS::mux(void)
                 qsv_vaapi_encode();
             else
             {
-                clog << lock_ios() << "ERROR: Unknown encoderType." << endl;
+                m_log->error("Unknown encoderType.");
                 Shutdown();
                 return;
             }
@@ -1990,14 +1950,11 @@ void OutputTS::DiscardImages(int val, const string & why)
     if (m_verbose > 2)
     {
         if (val > 0)
-            clog << "Discarding images while " << why
-                 << " [" << m_discard_images << "]\n";
+            m_log->info("Discarding images while {} [{}]", why, m_discard_images);
         else if (val < 0)
-            clog << "Stopped discard images because " << why
-                 << " [" << m_discard_images << "]\n";
+            m_log->info("Stopped discard images because {} [{}]", why, m_discard_images);
         else
-            clog << "Clearing image queue because " << why
-                 << " [" << m_discard_images << "]\n";
+            m_log->info("Clearing image queue because {} [{}]", why, m_discard_images);
     }
 
     if (val >= 0)
@@ -2095,17 +2052,14 @@ void OutputTS::copy_to_frame(void)
             {
                 if (m_verbose > 0)
                 {
-                    clog << lock_ios()
-                         << "DAMAGED: copy_frame: scaled pts did not increase: "
-                         << "[" << prev_idx << "] -> ["
-                         << m_video_stream.frames_idx_in << "] / "
-                         << m_video_stream.frames_used << "/"
-                         << m_video_stream.frames_total << "; "
-                         << prev_pts << " -> " << frm->pts << ". TS "
-                         << prev_ts << " -> " << timestamp
-                         << " diff:" << timestamp - prev_ts
-                         << " expected: " << m_input_frame_duration
-                         << endl;
+                    m_log->error("copy_frame: scaled pts did not increase: "
+                                 "[{}] -> [{}] / {} / {};"
+                                 " {} -> {} . TS {} -> {} diff:{} expected: {}",
+                                 prev_idx, m_video_stream.frames_idx_in,
+                                 m_video_stream.frames_used,
+                                 m_video_stream.frames_total,
+                                 prev_pts, frm->pts, prev_ts, timestamp,
+                                 timestamp - prev_ts, m_input_frame_duration);
                 }
             }
 #endif
@@ -2121,15 +2075,11 @@ void OutputTS::copy_to_frame(void)
                                           AV_HWFRAME_MAP_WRITE |
                                           AV_HWFRAME_MAP_OVERWRITE)) < 0)
                 {
-                    clog << lock_ios()
-                         << "ERROR: Could not map hw frame: "
-                         << AVerr2str(ret) << endl;
+                    m_log->error("Could not map hw frame: {}", AVerr2str(ret));
                     Shutdown();
                     return;
                 }
                 dst_frame = m_video_stream.tmp_frame;
-                if (dst_frame == nullptr)
-                    cerr << "Ouch!\n";
             }
             else
                 dst_frame = frm;
@@ -2179,14 +2129,10 @@ void OutputTS::copy_to_frame(void)
                 vidpool_5m_max  = ranges::max_element(vidpool_used_5m);
                 vidpool_10m_max = ranges::max_element(vidpool_used_10m);
 
-                clog << lock_ios()
-                     << "Notice:      GPU frame pool used 1m:"
-                     << vidpool_used_1m
-                     << " 5m:"   << *vidpool_5m_max
-                     << " 10m:" << *vidpool_10m_max
-                     << " of " << m_frame_buffers
-                     << "\n";
-                cerr.flush();
+                m_log->info("     GPU frame pool used 1m:{} 5m:{} 10m:{} "
+                            "of {}",
+                            vidpool_used_1m, *vidpool_5m_max, *vidpool_10m_max,
+                            m_frame_buffers);
 
                 vidpool_used_1m = 0;
 

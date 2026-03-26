@@ -36,6 +36,9 @@ class OutputTS
 
     void Shutdown(void);
 
+    void log_packet(std::string where, const AVFormatContext* fmt_ctx,
+                    const AVPacket* pkt);
+
     AVColorSpace getColorSpace(void) const { return m_color_space; }
     AVColorTransferCharacteristic getColorTRC(void) const { return m_color_trc; }
     AVColorPrimaries getColorPrimaries(void) const { return m_color_primaries; }
@@ -65,6 +68,9 @@ class OutputTS
   private:
     void mux(void);
     void copy_to_frame(void);
+
+    // spdlog
+    std::shared_ptr<spdlog::logger> m_log;
 
     // a wrapper around a single output AVStream
     using OutputStream = struct {
@@ -131,9 +137,9 @@ class OutputTS
     bool write_frame(AVFormatContext* fmt_ctx, AVCodecContext* c,
                      AVFrame* frame, OutputStream* ost);
     // Audio output
-    static AVFrame* alloc_audio_frame(enum AVSampleFormat sample_fmt,
-                                  const AVChannelLayout* channel_layout,
-                                  int sample_rate, int nb_samples);
+    AVFrame* alloc_audio_frame(enum AVSampleFormat sample_fmt,
+                               const AVChannelLayout* channel_layout,
+                               int sample_rate, int nb_samples);
     AVFrame* get_pcm_audio_frame(OutputStream* ost);
 
     bool write_pcm_frame(AVFormatContext* oc, OutputStream* ost);
@@ -141,11 +147,11 @@ class OutputTS
     bool write_audio_frame(AVFormatContext* oc, OutputStream* ost);
 
     // Video output
-    static AVFrame* alloc_picture(enum AVPixelFormat pix_fmt,
-                                  int width, int height);
-    static AVFrame* alloc_hw_picture(AVBufferRef* hw_frame_ctx,
-                                     enum AVPixelFormat pix_fmt,
-                                     int width, int height);
+    AVFrame* alloc_picture(enum AVPixelFormat pix_fmt,
+                           int width, int height);
+    AVFrame* alloc_hw_picture(AVBufferRef* hw_frame_ctx,
+                              enum AVPixelFormat pix_fmt,
+                              int width, int height);
     bool open_nvidia(const AVCodec* codec, OutputStream* ost,
                      AVDictionary* opt_arg);
     bool init_intel_hw(const std::string & type,

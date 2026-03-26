@@ -141,7 +141,7 @@ private:
      * @param channel Handle to the channel
      * @return true if successful, false otherwise
      */
-    bool describe_input(HCHANNEL channel);
+    std::string describe_input(HCHANNEL channel);
 
     /**
      * @brief Update HDR color space information
@@ -264,6 +264,9 @@ private:
     void capture_audio(void);
 
 private:
+    // spdlog
+    std::shared_ptr<spdlog::logger> m_log;
+
     // Audio buffer parameters
     int m_audio_buf_frames {12288};  ///< Audio buffer frames
 
