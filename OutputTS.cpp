@@ -841,7 +841,7 @@ bool OutputTS::open_container(void)
 
     // Dump format information
     if (m_verbose > 0)
-        m_log->info(av_dump_format_string(m_output_format_context));
+        m_log->info("\n{}", av_dump_format_string(m_output_format_context));
 
     // Open output file
     if (!(m_fmt->flags & AVFMT_NOFILE)) {
@@ -968,7 +968,7 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
 
     if (m_verbose > 0)
     {
-        m_log->info("Video: {}x{}{}{}{}", width, height,
+        m_log->info("Video: {}x{}{}{:.2f}{}", width, height,
                     m_interlaced ? 'i' : 'p', fps,
                     m_isHDR ? " HDR" : "");
         if (m_verbose > 2)

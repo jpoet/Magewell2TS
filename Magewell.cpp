@@ -1200,7 +1200,7 @@ void Magewell::capture_audio_loop(void)
                 if (EcoEventWait(eco_event, -1) <= 0)
                 {
                     if (m_verbose > 1)
-                        m_log->info("Audio wait notify error or timeout");
+                        m_log->info("Waiting for audio data.");
                     continue;
                 }
             }
@@ -1209,7 +1209,7 @@ void Magewell::capture_audio_loop(void)
                 if (MWWaitEvent(notify_event, -1) <= 0)
                 {
                     if (m_verbose > 1)
-                        m_log->info("Audio wait notify error or timeout");
+                        m_log->info("Waiting for audio data.");
                     continue;
                 }
             }
@@ -1345,7 +1345,7 @@ void Magewell::capture_audio_loop(void)
     }
 
   audio_capture_stoped:
-    m_log->info("\nAudio Capture finished.");
+    m_log->info("Audio Capture finished.");
 
     // Clean up notification resources
     if (notify_audio)
@@ -1929,7 +1929,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         if (EcoEventWait(eco_event, eco_params.llFrameDuration) <= 0)
         {
             if (m_verbose > 1)
-                m_log->info("Video wait notify error or timeout (frame {})",
+                m_log->info("Waiting for video data (frame {})",
                             frame_cnt);
             continue;
         }
@@ -2015,10 +2015,13 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 {
                     skipped = (timestamp - expected_ts) /
                               eco_params.llFrameDuration;
-                    skipped_frame_cnt += skipped;
-                    m_log->error("DAMAGED: Magewell lost {} frames, "
-                                 "have skipped {} of {}",
-                                 skipped, skipped_frame_cnt, frame_cnt);
+                    if (skipped > 0)
+                    {
+                        skipped_frame_cnt += skipped;
+                        m_log->warn("DAMAGED: Magewell lost {} frames, "
+                                    "have skipped {} : {}",
+                                    skipped, skipped_frame_cnt, frame_cnt);
+                    }
                 }
             }
         }
@@ -2136,7 +2139,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         if (MWWaitEvent(notify_event, 8) <= 0)
         {
             if (m_verbose > 1)
-                m_log->info("Video wait notify error or timeout (frame {})",
+                m_log->info("Waiting for video data (frame {})",
                             frame_cnt);
             continue;
         }
@@ -2272,9 +2275,12 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 }
 
                 skipped = (min_ts - expected_ts) / eco_params.llFrameDuration;
-                skipped_frame_cnt += skipped;
-                m_log->error("DAMAGED: Magewell lost {} frames. Have skipped {} of {}",
-                             skipped, skipped_frame_cnt, frame_cnt);
+                if (skipped > 0)
+                {
+                    skipped_frame_cnt += skipped;
+                    m_log->warn("DAMAGED: Magewell lost {} frames. Have skipped {} : {}",
+                                skipped, skipped_frame_cnt, frame_cnt);
+                }
 
                 frame_idx = min_idx;
                 timestamp = min_ts;

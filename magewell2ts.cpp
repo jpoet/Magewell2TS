@@ -183,7 +183,7 @@ void setup_logging(int verbose_level, const string& logfile)
                      false                       // rotate on open (optional, default false)
                      );
         file_sink->set_level(spdlog::level::trace);
-        file_sink->set_pattern("%Y-%m-%d %H:%M:%S [%l] %v");
+        file_sink->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] %v");
 
         // Combine sinks into a vector
         std::vector<spdlog::sink_ptr> sinks {console_sink, file_sink};
@@ -208,7 +208,7 @@ void setup_logging(int verbose_level, const string& logfile)
 
     spdlog::register_logger(logger);
     spdlog::flush_on(spdlog::level::warn);
-    spdlog::flush_every(std::chrono::seconds(24)); // Flush every 5 seconds.
+    spdlog::flush_every(std::chrono::seconds(11)); // Flush every 5 seconds.
 
     // Set default logger
     spdlog::set_default_logger(logger);
@@ -242,9 +242,9 @@ int main(int argc, char* argv[])
     bool        no_audio      = false;
     bool        p010          = false;
 
-    int         gpu_buffers   = 24;
-    int         video_buffers = 24;
-    int         extra_hw_frames = 64;
+    int         gpu_buffers   = 14;
+    int         video_buffers = 14;
+    int         extra_hw_frames = 32;
 
     vector<string_view> args(argv + 1, argv + argc);
 
@@ -376,7 +376,7 @@ int main(int argc, char* argv[])
         }
         else
         {
-            logger->error("Unrecognized option '{}'", *iter);
+            cerr << "Unrecognized option " << *iter << endl;
             exit(1);
         }
     }

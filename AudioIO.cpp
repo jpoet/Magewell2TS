@@ -564,8 +564,7 @@ bool AudioBuffer::open_spdif(void)
 
         m_sample_rate = audio_stream->codecpar->sample_rate;
         if (m_verbose > 1)
-            m_log->info("Bistream sample rate: {}"
-                        "          frame size: {}",
+            m_log->info("Bistream sample rate: {} frame size: {}",
                         m_sample_rate,
                         audio_stream->codecpar->frame_size);
 
@@ -648,7 +647,7 @@ bool AudioBuffer::DetectCodec(void)
     while (m_EoF.load() == false)
     {
         if (m_verbose > 5)
-            m_log->info("\n[{}] Detect codec (try {})", m_id, ++idx);
+            m_log->info("[{}] Detect codec (try {})", m_id, ++idx);
 
         if (open_spdif())
         {
