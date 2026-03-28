@@ -2051,7 +2051,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 vidpool_5m_max  = ranges::max_element(vidpool_used_5m);
                 vidpool_10m_max = ranges::max_element(vidpool_used_10m);
 
-                m_log->info("Magewell frame pool used 1m:{} 5m:{} 10m:{} of {}",
+                m_log->info("Magewell frame pool used 1m:{:<3d} 5m:{:<3d} 10m:{:<3d} of {}",
                             vidpool_used_1m, *vidpool_5m_max,
                             *vidpool_10m_max, m_image_buffers_total);
 
@@ -2378,7 +2378,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 vidpool_5m_max  = ranges::max_element(vidpool_used_5m);
                 vidpool_10m_max = ranges::max_element(vidpool_used_10m);
 
-                m_log->info("Magewell frame pool used 1m:{} 5m:{} 10m:{} of {}",
+                m_log->info("Magewell frame pool used 1m:{:<3d} 5m:{:<3d} 10m:{:<3d} of {}",
                             vidpool_used_1m, *vidpool_5m_max,
                             *vidpool_10m_max, m_image_buffers_total);
 

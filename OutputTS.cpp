@@ -2129,7 +2129,7 @@ void OutputTS::copy_to_frame(void)
                 vidpool_5m_max  = ranges::max_element(vidpool_used_5m);
                 vidpool_10m_max = ranges::max_element(vidpool_used_10m);
 
-                m_log->info("     GPU frame pool used 1m:{} 5m:{} 10m:{} "
+                m_log->info("     GPU frame pool used 1m:{:<3d} 5m:{:<3d} 10m:{:<3d} "
                             "of {}",
                             vidpool_used_1m, *vidpool_5m_max, *vidpool_10m_max,
                             m_frame_buffers);
