@@ -2136,7 +2136,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     while (m_running.load() == true)
     {
         // Wait for notification
-        if (MWWaitEvent(notify_event, 8) <= 0)
+        if (MWWaitEvent(notify_event, eco_params.llFrameDuration) <= 0)
         {
             if (m_verbose > 1)
                 m_log->info("Waiting for video data (frame {})",
@@ -2489,7 +2489,7 @@ bool Magewell::capture_video(int quality)
         if (videoSignalStatus.state == MWCAP_VIDEO_SIGNAL_UNSUPPORTED)
         {
             if (state != videoSignalStatus.state && m_verbose > 0)
-                m_log->warn("Input video signal status: Unsupported");
+                m_log->warn("Damaged: Input video signal status: Unsupported");
             locked = false;
             state = videoSignalStatus.state;
             this_thread::sleep_for(chrono::milliseconds(m_frame_ms * 10));
