@@ -29,7 +29,7 @@ class OutputTS
     OutputTS(int verbose, const std::string & video_codec_name,
              const std::string & preset, int quality, int look_ahead,
              bool p010, bool isEco, const std::string & device,
-             int extra_hw_frames, int gpu_buffers,
+             int extra_hw_frames, int gpu_buffers, float gop_secs,
              ShutdownCallback shutdown, ResetCallback reset,
              MagCallback image_buffer_avail);
     ~OutputTS(void);
@@ -187,6 +187,7 @@ class OutputTS
     std::string      m_preset;
     int              m_quality                {-1};
     int              m_look_ahead             {-1};
+    float            m_gop_secs               {1.5};
     int              m_input_width            {1280};
     int              m_input_height           {720};
     double           m_input_frame_duration   {0};
@@ -202,6 +203,7 @@ class OutputTS
     int                           m_extra_hw_frames   {-1};
     int                           m_gpu_buffers       {-1};
     int                           m_frame_buffers     {10};
+
     // HDR
     bool                          m_isHDR             {false};
     AVColorSpace                  m_color_space       {AVCOL_SPC_NB};

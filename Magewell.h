@@ -116,8 +116,8 @@ public:
      */
     bool Capture(const std::string & video_codec, const std::string & preset,
                  int quality, int look_ahead, bool no_audio, bool p010,
-                 const std::string & gpu_device, int extra_hw_frames,
-                 int gpu_buffers, int video_buffers);
+                 const std::string & gpu_device, float gop_secs,
+                 int extra_hw_frames, int gpu_buffers, int video_buffers);
 
     /**
      * @brief Shutdown the capture process

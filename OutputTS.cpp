@@ -179,7 +179,7 @@ static string av_dump_format_string(AVFormatContext* ctx)
 OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
                    const string & preset, int quality, int look_ahead,
                    bool p010, bool isEco, const string & device,
-                   int extra_hw_frames, int gpu_buffers,
+                   int extra_hw_frames, int gpu_buffers, float gop_secs,
                    ShutdownCallback shutdown, ResetCallback reset,
                    MagCallback image_buffer_avail)
     : m_verbose(verbose_level)
@@ -188,6 +188,7 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     , m_preset(preset)
     , m_quality(quality)
     , m_look_ahead(look_ahead)
+    , m_gop_secs(gop_secs)
     , m_p010(p010)
     , m_isEco(isEco)
     , m_extra_hw_frames(extra_hw_frames)
@@ -723,6 +724,12 @@ bool OutputTS::open_video(void)
         m_video_stream.frames_idx_out = -1;
         m_video_stream.frames_used    = 0;
         m_video_stream.frames_total   = m_frame_buffers;
+
+        m_video_stream.enc->gop_size = (static_cast<double>(m_input_frame_rate.num) /
+                                        static_cast<double>(m_input_frame_rate.den) *
+                                        static_cast<double>(m_gop_secs) + 0.5);
+        if (m_verbose > 1)
+            m_log->info("GOP size set to {} frames.", m_video_stream.enc->gop_size);
 
         // Open encoder based on type
         switch (m_encoderType)
@@ -1463,11 +1470,14 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
     av_opt_set_int(ctx->priv_data, "bf", 0, 0);
     av_opt_set_int(ctx->priv_data, "b_ref_mode", 0, 0);
 
-    ctx->gop_size = 180;
-    if (av_opt_set(ctx->priv_data, "no-open-gop", "1",
-                   AV_OPT_SEARCH_CHILDREN) < 0)
-        if (m_verbose > 2)
-            m_log->info("nvenc: Could not set no-open-gop option.");
+    if (m_gop_secs > 0)
+    {
+        if (av_opt_set(ctx->priv_data, "no-open-gop", "1",
+                       AV_OPT_SEARCH_CHILDREN) < 0)
+        {
+            m_log->warn("nvenc: Could not set no-open-gop option.");
+        }
+    }
 
     // Set pixel format
     if (m_isHDR || m_p010)
@@ -1717,7 +1727,16 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     av_opt_set_int(ost->enc->priv_data, "extra_hw_frames",
                    m_extra_hw_frames + m_look_ahead + 4, 0);
 
-    av_opt_set_int(ost->enc->priv_data, "idr_interval", 0, 0);
+    if (m_gop_secs > 0)
+    {
+        // force I-frames to be encoded as IDR
+        if (av_opt_set_int(ost->enc->priv_data, "forced_idr", 1, 0) < 0)
+            m_log->warn("qsv: failed to set forced_idr");
+
+        // idr_interval == 1 tells it to use gop_size
+        if (av_opt_set_int(ost->enc->priv_data, "idr_interval", 1, 0) < 0)
+            m_log->warn("qsv: failed to set idr_interval for gop");
+    }
 
     // Create hardware device context
     if (ost->hw_device_ctx == nullptr)

@@ -83,6 +83,7 @@ void show_help(string_view app)
          << "--quality (-q)     : quality setting [25]\n"
          << "--preset (-p)      : encoder preset\n"
          << "--p010             : Force p010 (10bit) video format.\n"
+         << "--gop_secs (-g)    : GOP size in seconds [1.5] (-1 to disable)\n"
          << "--gpu-buffers      : GPU video buffers count [16]\n"
          << "--video-buffers    : Video buffers count (RAM) [16]\n"
          << "--extra-hw-frames  : Extra HW frames used for encoding [32]\n"
@@ -239,6 +240,7 @@ int main(int argc, char* argv[])
     string      preset;
     int         quality       = 25;
     int         look_ahead    = 35;
+    float       gop_secs      = 1.5;
     bool        no_audio      = false;
     bool        p010          = false;
 
@@ -286,6 +288,11 @@ int main(int argc, char* argv[])
         else if (*iter == "-a" || *iter == "--lookahead")
         {
             if (!string_to_int(*(++iter), look_ahead, "lookahead"))
+                exit(1);
+        }
+        else if (*iter == "-g" || *iter == "--gop-secs")
+        {
+            if (!string_to_float(*(++iter), gop_secs, "gop-secs"))
                 exit(1);
         }
         else if (*iter == "-m" || *iter == "--mux")
@@ -426,9 +433,9 @@ int main(int argc, char* argv[])
     if (do_capture)
     {
         if (!g_mw->Capture(video_codec, preset, quality, look_ahead,
-                          no_audio, p010, device,
-                          std::max(extra_hw_frames, 32),
-                          gpu_buffers, video_buffers))
+                           no_audio, p010, device, gop_secs,
+                           std::max(extra_hw_frames, 32),
+                           gpu_buffers, video_buffers))
             return -2;
     }
 

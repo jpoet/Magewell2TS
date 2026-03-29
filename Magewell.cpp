@@ -2826,10 +2826,10 @@ bool Magewell::capture_video(int quality)
 bool Magewell::Capture(const string & video_codec,
                        const string & preset, int quality,
                        int look_ahead, bool no_audio,
-                       bool p010, const string & gpu_device,
+                       bool p010, const string & gpu_device, float gop_secs,
                        int extra_hw_frames, int gpu_buffers, int video_buffers)
 {
-    m_p010 = p010;
+    m_p010     = p010;
     m_requested_buffers    = video_buffers;
 
     // Display input information if verbose
@@ -2841,7 +2841,7 @@ bool Magewell::Capture(const string & video_codec,
     {
         m_out2ts = new OutputTS(m_verbose, video_codec, preset, quality,
                                 look_ahead, p010, true, gpu_device,
-                                extra_hw_frames, gpu_buffers,
+                                extra_hw_frames, gpu_buffers, gop_secs,
                                 [=,this](void) { this->Shutdown(); },
                                 [=,this](void) { this->Reset(); },
                                 [=,this](uint8_t* ib, void* eb)
@@ -2851,7 +2851,7 @@ bool Magewell::Capture(const string & video_codec,
     {
         m_out2ts = new OutputTS(m_verbose, video_codec, preset, quality,
                                 look_ahead, p010, false, gpu_device,
-                                extra_hw_frames, gpu_buffers,
+                                extra_hw_frames, gpu_buffers, gop_secs,
                                 [=,this](void) { this->Shutdown(); },
                                 [=,this](void) { this->Reset(); },
                                 [=,this](uint8_t* ib, void* eb)

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 
+import argparse
 import sys
 import cherrypy
 import threading
@@ -20,31 +21,32 @@ class RootPage:
 
     @cherrypy.expose
     @cherrypy.tools.allow(methods=['GET', 'HEAD'])
-    def stream(self, input='1', codec='hevc_qsv', device='',  board='',
-               noAudio='', lookAhead='', quality='', preset='', verbose=''):
+    def stream(self, input=None, board=None, verbose=None, codec=None,
+               device=None, noAudio=None, lookAhead=None, quality=None,
+               gopSize=None, preset=None):
+        def coalesce(opt, arg1, arg2):
+            if arg1 is not None:
+                return [opt, str(arg1)]
+            elif arg2 is not None:
+                return [opt, str(arg2)]
+            return []
 
         cherrypy.response.stream = True
         cherrypy.response.headers['Content-Type'] = 'application/octet-stream'
 
         args = ['magewell2ts', '-m']
-        if input:
-            args += ['-i', input]
-        if codec:
-            args += ['-c', codec]
-        if device:
-            args += ['-d', device]
-        if board:
-            args += ['-b', board]
-        if noAudio:
+        args += coalesce('-i', input, arguments.input)
+        args += coalesce('-b', board, arguments.board)
+        args += coalesce('-v', verbose, arguments.verbose)
+        args += coalesce('-c', codec, arguments.codec)
+        args += coalesce('-d', device, arguments.device)
+        if noAudio or arguments.noAudio:
             args += ['-n']
-        if lookAhead:
-            args += ['-a', lookAhead]
-        if quality:
-            args += ['-q', quality]
-        if preset:
-            args += ['-p', preset]
-        if verbose:
-            args += ['-v', verbose]
+        args += coalesce('-a', lookAhead, arguments.lookAhead)
+        args += coalesce('-q', quality, arguments.quality)
+        args += coalesce('-g', gopSize, arguments.gopSize)
+        args += coalesce('-p', preset, arguments.preset)
+        print(f"args = {args}")
 
         def streamit():
             process = subprocess.Popen(
@@ -73,9 +75,35 @@ class RootPage:
         return streamit()
 
 
+parser = argparse.ArgumentParser(description="Magewell2TS web wrapper.")
+parser.add_argument("-v", "--verbose", type=int, help="Verbosity level",
+                    default=None)
+parser.add_argument("-P", "--port", type=int, help="m2tsweb port nuymber",
+                    default=6502)
+parser.add_argument("-i", "--input", type=int, help="Default input",
+                    default=1)
+parser.add_argument("-b", "--board", type=int, help="Default board",
+                    default=None)
+parser.add_argument("-c", "--codec", type=str, help="Default codec",
+                    default="hevc_qsv")
+parser.add_argument("-d", "--device", type=str, help="Default render device",
+                    default=None)
+parser.add_argument("-n", "--noAudio", action="store_true",
+                    help="Default no audio", default=None)
+parser.add_argument("-a", "--lookAhead", type=int, help="Default look ahead",
+                    default=None)
+parser.add_argument("-q", "--quality", type=int, help="Default quality",
+                    default=None)
+parser.add_argument("-g", "--gopSize", type=float, help="Default GOP size",
+                    default=None)
+parser.add_argument("-p", "--preset", type=str, help="Default preset",
+                    default=None)
+arguments = parser.parse_args()
+
+
 config = { 'global' :
            { 'server.socket_host' : '0.0.0.0',
-             'server.socket_port' : 6502,
+             'server.socket_port' : arguments.port,
              'tools.encode.on' : True,
              'tools.encode.encoding':'utf8',
              'tools.encode.text_only' : False,

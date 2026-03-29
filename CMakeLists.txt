@@ -1,3 +1,6 @@
+include(GNUInstallDirs) # Results in /usr/local being the default.
+set(INSTALL_BIN_DIR ${CMAKE_INSTALL_BINDIR})
+
 macro(print_all_variables)
     message(STATUS "print_all_variables------------------------------------------{")
     get_cmake_property(_variableNames VARIABLES)
@@ -8,6 +11,7 @@ macro(print_all_variables)
 endmacro()
 
 cmake_minimum_required(VERSION 3.10)
+
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/helpers")
 
@@ -125,7 +129,10 @@ target_link_libraries(magewell2ts PRIVATE
   spdlog::spdlog
 )
 
-install(TARGETS magewell2ts DESTINATION /usr/local/bin)
+install(TARGETS magewell2ts DESTINATION ${INSTALL_BIN_DIR})
+
+# Install the m2tsweb script to the same directory as the executable
+install(PROGRAMS m2tsweb DESTINATION ${INSTALL_BIN_DIR})
 
 ADD_CUSTOM_TARGET(debug
   COMMAND ${CMAKE_COMMAND} -DCMAKE_BUILD_TYPE=Debug ${CMAKE_SOURCE_DIR}
