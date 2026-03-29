@@ -1537,11 +1537,11 @@ bool OutputTS::init_intel_hw(const string & type,
     }
 
     // Intel encoders need a minimum of 16
-    int pool_size = m_frame_buffers + m_extra_hw_frames + m_look_ahead + 16;
+    int pool_size = m_frame_buffers + m_extra_hw_frames + m_look_ahead;
 
     if (m_verbose > 0)
         m_log->info("Using {} (requested) + {} (extra_hw_frames) + {} "
-                    "(lookahead) + 16 = {} GPU buffers",
+                    "(lookahead) = {} GPU buffers",
                     m_frame_buffers, m_extra_hw_frames, m_look_ahead, pool_size);
 
     AVHWFramesContext* frames_ctx =

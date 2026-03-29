@@ -120,10 +120,11 @@ void show_help(string_view app)
 
     clog << "\nIntel notes:\n"
          << "  --extra-hw-frames is equivalent to passing that argument\n"
-         << "  to ffmpeg. If the value is too low the resulting video can\n"
-         << "  have artifacts and it will usually result in dropped frames.\n"
-         << "  A minimum of 32 is required.\n";
-
+         << "    to ffmpeg. If the value is too low the resulting video can\n"
+         << "    have artifacts and it will usually result in dropped frames.\n"
+         << "    It is strongly recommended to set this to least 32.\n"
+         << "  --gpu-buffers must be at least 16.\n"
+         << "    More is better if you have the VRAM.\n";
 
     clog << "\nNOTE: setting EDID does not survive a reboot.\n";
 }
@@ -244,8 +245,8 @@ int main(int argc, char* argv[])
     bool        no_audio      = false;
     bool        p010          = false;
 
-    int         gpu_buffers   = 14;
-    int         video_buffers = 14;
+    int         gpu_buffers   = 16;
+    int         video_buffers = 24;
     int         extra_hw_frames = 32;
 
     vector<string_view> args(argv + 1, argv + argc);
@@ -433,9 +434,8 @@ int main(int argc, char* argv[])
     if (do_capture)
     {
         if (!g_mw->Capture(video_codec, preset, quality, look_ahead,
-                           no_audio, p010, device, gop_secs,
-                           std::max(extra_hw_frames, 32),
-                           gpu_buffers, video_buffers))
+                           no_audio, p010, device, gop_secs, extra_hw_frames,
+                           std::max(gpu_buffers, 16), video_buffers))
             return -2;
     }
 
