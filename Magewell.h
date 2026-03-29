@@ -306,7 +306,8 @@ private:
     std::atomic<bool> m_running     {true};  ///< Running flag
     std::atomic<bool> m_reset_audio {true};  ///< Audio reset flag
     std::atomic<bool> m_reset_video {true};  ///< Video reset flag
-    std::chrono::high_resolution_clock::time_point m_last_reset;  ///< Last reset time
+    std::chrono::steady_clock::time_point m_last_reset;  ///< Last reset time
+    std::chrono::steady_clock::time_point m_start_tm;
 
     // Function pointer
     std::function<bool (void)>  f_open_video;  ///< Video open function

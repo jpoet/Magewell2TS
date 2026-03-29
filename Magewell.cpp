@@ -329,7 +329,7 @@ Magewell::Magewell(void)
         m_fatal = true;
     }
     // Initialize last reset time
-    m_last_reset = std::chrono::high_resolution_clock::now();
+    m_last_reset = std::chrono::steady_clock::now();
 }
 
 /**
@@ -1905,6 +1905,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
 
     chrono::steady_clock::time_point current_tm;
     chrono::steady_clock::time_point vidpool_tm = chrono::steady_clock::now();
+    chrono::seconds total_duration;
     int duration;
 
     // Main capture loop
@@ -2046,14 +2047,21 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             duration = chrono::duration_cast<chrono::seconds>
                        (current_tm - vidpool_tm).count();
 
+            total_duration = chrono::duration_cast<chrono::seconds>
+                             (chrono::steady_clock::now() - m_start_tm);
+
             if (duration >= 60)
             {
                 vidpool_5m_max  = ranges::max_element(vidpool_used_5m);
                 vidpool_10m_max = ranges::max_element(vidpool_used_10m);
 
-                m_log->info("Magewell frame pool used 1m:{:<3d} 5m:{:<3d} 10m:{:<3d} of {}",
-                            vidpool_used_1m, *vidpool_5m_max,
-                            *vidpool_10m_max, m_image_buffers_total);
+                // spdlog doesn't support c++20 formatting yet.
+                m_log->info(format("Magewell frame pool used 1m:{:<3d} "
+                                   "5m:{:<3d} 10m:{:<3d} of {} "
+                                   "({:%T} elapsed)",
+                                   vidpool_used_1m, *vidpool_5m_max,
+                                   *vidpool_10m_max, m_image_buffers_total,
+                                   total_duration));
 
                 vidpool_used_1m = 0;
 
@@ -2130,6 +2138,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
 
     chrono::steady_clock::time_point current_tm;
     chrono::steady_clock::time_point vidpool_tm = chrono::steady_clock::now();
+    chrono::seconds total_duration;
     int duration;
 
     // Main capture loop
@@ -2373,14 +2382,21 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             duration = chrono::duration_cast<chrono::seconds>
                        (current_tm - vidpool_tm).count();
 
+            total_duration = chrono::duration_cast<chrono::seconds>
+                             (chrono::steady_clock::now() - m_start_tm);
+
             if (duration >= 60)
             {
                 vidpool_5m_max  = ranges::max_element(vidpool_used_5m);
                 vidpool_10m_max = ranges::max_element(vidpool_used_10m);
 
-                m_log->info("Magewell frame pool used 1m:{:<3d} 5m:{:<3d} 10m:{:<3d} of {}",
-                            vidpool_used_1m, *vidpool_5m_max,
-                            *vidpool_10m_max, m_image_buffers_total);
+                // spdlog doesn't support c++20 formatting yet.
+                m_log->info(format("Magewell frame pool used 1m:{:<3d} "
+                                   "5m:{:<3d} 10m:{:<3d} of {} "
+                                   "({:%T} elapsed)",
+                                   vidpool_used_1m, *vidpool_5m_max,
+                                   *vidpool_10m_max, m_image_buffers_total,
+                                   total_duration));
 
                 vidpool_used_1m = 0;
 
@@ -2433,6 +2449,8 @@ bool Magewell::capture_video(int quality)
     ULONGLONG ullStatusBits = 0;
     size_t    idx;
     bool      rejected = false;
+
+    m_start_tm = chrono::steady_clock::now();
 
 #if 0
     DWORD event_mask = MWCAP_NOTIFY_VIDEO_SAMPLING_PHASE_CHANGE |
@@ -2913,8 +2931,7 @@ void Magewell::Shutdown(void)
  */
 void Magewell::Reset(void)
 {
-    chrono::high_resolution_clock::time_point end =
-        chrono::high_resolution_clock::now();
+    chrono::steady_clock::time_point end = chrono::steady_clock::now();
 
     // Rate limit resets to prevent excessive resets
     if (chrono::duration_cast<chrono::seconds>(end - m_last_reset).count() > 4)
@@ -2923,6 +2940,6 @@ void Magewell::Reset(void)
             m_log->info("Magewell:Reset");
         m_reset_audio.store(true);
         m_reset_video.store(true);
-        m_last_reset = std::chrono::high_resolution_clock::now();
+        m_last_reset = std::chrono::steady_clock::now();
     }
 }
