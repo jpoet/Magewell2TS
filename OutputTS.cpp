@@ -725,11 +725,16 @@ bool OutputTS::open_video(void)
         m_video_stream.frames_used    = 0;
         m_video_stream.frames_total   = m_frame_buffers;
 
-        m_video_stream.enc->gop_size = (static_cast<double>(m_input_frame_rate.num) /
-                                        static_cast<double>(m_input_frame_rate.den) *
-                                        static_cast<double>(m_gop_secs) + 0.5);
-        if (m_verbose > 1)
-            m_log->info("GOP size set to {} frames.", m_video_stream.enc->gop_size);
+        if (m_gop_secs > 0)
+        {
+            m_video_stream.enc->gop_size =
+                (static_cast<double>(m_input_frame_rate.num) /
+                 static_cast<double>(m_input_frame_rate.den) *
+                 static_cast<double>(m_gop_secs) + 0.5);
+            if (m_verbose > 1)
+                m_log->info("GOP size set to {} frames.",
+                            m_video_stream.enc->gop_size);
+        }
 
         // Open encoder based on type
         switch (m_encoderType)

@@ -83,7 +83,7 @@ void show_help(string_view app)
          << "--quality (-q)     : quality setting [25]\n"
          << "--preset (-p)      : encoder preset\n"
          << "--p010             : Force p010 (10bit) video format.\n"
-         << "--gop_secs (-g)    : GOP size in seconds [1.5] (-1 to disable)\n"
+         << "--gop_secs (-g)    : GOP size in seconds [1.5] (0 to disable)\n"
          << "--gpu-buffers      : GPU video buffers count [16]\n"
          << "--video-buffers    : Video buffers count (RAM) [16]\n"
          << "--extra-hw-frames  : Extra HW frames used for encoding [32]\n"
