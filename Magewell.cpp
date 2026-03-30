@@ -1669,15 +1669,17 @@ void Magewell::free_image_buffers(void)
     unique_lock<mutex> lock(m_image_buffer_mutex);
 
     // Wait for all buffers to be returned from output thread
-    // Give up after 2 seconds.
-    bool success = m_image_returned.wait_for(lock, chrono::seconds(2),
-             [this]{ return m_image_buffers_total > m_image_buffers_avail; });
-
-    if (!success)
+    while (m_image_buffers_total > m_image_buffers_avail)
     {
-        m_log->info("Gave up waiting for all Magewll buffers to be returned.");
-        m_log->info("Total: {} avail: {}", m_image_buffers_total,
-                    m_image_buffers_avail);
+        if (m_image_returned.wait_for(lock, chrono::seconds(2))
+            == cv_status::timeout)
+        {
+            if (m_running == false)
+                break;
+            m_log->warn("Still waiting for Magewell buffers to be returned. "
+                        "Total: {} avail: {}", m_image_buffers_total,
+                        m_image_buffers_avail);
+        }
     }
 
     if (m_isEco)
@@ -2723,7 +2725,6 @@ bool Magewell::capture_video(int quality)
             }
             else
             {
-                free_image_buffers();
                 for (idx = 0; idx < m_image_buffers_total; ++idx)
                 {
                     if (!add_pro_image_buffer())
@@ -2794,6 +2795,7 @@ bool Magewell::capture_video(int quality)
     }
     else
     {
+        free_image_buffers();
         MWStopVideoCapture(m_channel);
         if (video_notify)
             MWUnregisterNotify(m_channel, video_notify);
