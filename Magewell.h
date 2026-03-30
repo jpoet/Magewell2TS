@@ -296,8 +296,11 @@ private:
     int m_num_pixels         {0};  ///< Number of pixels
     int m_image_size         {0};  ///< Image size in bytes
     int m_min_stride         {0};  ///< Minimum stride
-    int m_frame_ms           {17};  ///< Frame time in milliseconds
-    int m_frame_ms2          {34};  ///< Double frame time
+    int m_frame_ms           {17}; ///< Frame time in milliseconds
+    int m_frame_ms2          {34}; ///< Double frame time
+
+    int     m_frame_cnt      {0};  ///< Number of frames processed
+    int64_t m_expected_ts    {-1}; ///< Expected next timestamp
 
     // Audio thread
     std::thread       m_audio_thread;  ///< Audio capture thread

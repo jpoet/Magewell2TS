@@ -46,13 +46,13 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <unistd.h>
 
 #include <MWFOURCC.h>
 #include <LibMWCapture/MWCapture.h>
 #include "LibMWCapture/MWEcoCapture.h"
 
 #include <sys/eventfd.h>
-#include <unistd.h>
 
 #include "Magewell.h"
 
@@ -1883,9 +1883,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
 {
     uint8_t* pbImage = nullptr;
     int64_t  timestamp;
-    int64_t  expected_ts = -1;
 
-    int      frame_cnt  = 0;
     int      skipped_frame_cnt = 0;
     int      skipped = 0;
     int      quarter_dur = eco_params.llFrameDuration / 4;
@@ -1931,7 +1929,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         {
             if (m_verbose > 1)
                 m_log->info("Waiting for video data (frame {})",
-                            frame_cnt);
+                            m_frame_cnt);
             continue;
         }
 
@@ -1942,7 +1940,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             if (m_verbose > 0)
             {
                 m_log->warn("Failed to get Notify status (frame {})",
-                            frame_cnt);
+                            m_frame_cnt);
             }
             continue;
         }
@@ -1979,54 +1977,54 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         // Process frame
         pbImage = reinterpret_cast<uint8_t *>(eco_status.pvFrame);
         timestamp = eco_status.llTimestamp;
-        ++frame_cnt;
+        ++m_frame_cnt;
         --m_image_buffers_avail;
 
-        if (expected_ts == -1 && timestamp < 0)
+        if (m_expected_ts == -1 && timestamp < 0)
         {
             continue;
         }
-        else if (timestamp < expected_ts - quarter_dur ||
-                 expected_ts + quarter_dur < timestamp)
+        else if (timestamp < m_expected_ts - quarter_dur ||
+                 m_expected_ts + quarter_dur < timestamp)
         {
             if (timestamp < 0)
             {
                 if (m_verbose > 0)
                     m_log->warn("Invalid ECO timestamp: {}", timestamp);
-                timestamp = expected_ts;
+                timestamp = m_expected_ts;
             }
-            else if (timestamp < expected_ts)
+            else if (timestamp < m_expected_ts)
             {
-                int frames = (expected_ts - timestamp)
+                int frames = (m_expected_ts - timestamp)
                              / eco_params.llFrameDuration;
                 m_log->warn("Expected ECO timestamp: {} > {} actual. {} "
                             "'frames' difference {} / {} ({})",
-                            expected_ts, timestamp, frames,
-                            expected_ts - timestamp, eco_params.llFrameDuration,
-                            frame_cnt);
+                            m_expected_ts, timestamp, frames,
+                            m_expected_ts - timestamp, eco_params.llFrameDuration,
+                            m_frame_cnt);
                 if (frames == 1)
-                    timestamp = expected_ts;
+                    timestamp = m_expected_ts;
             }
-            else // timestamp > expected_ts
+            else // timestamp > m_expected_ts
             {
                 /* There can be some WACKY TS from the frame info!
                  */
                 if (timestamp <
-                    (expected_ts + (eco_params.llFrameDuration * 50)))
+                    (m_expected_ts + (eco_params.llFrameDuration * 50)))
                 {
-                    skipped = (timestamp - expected_ts) /
+                    skipped = (timestamp - m_expected_ts) /
                               eco_params.llFrameDuration;
                     if (skipped > 0)
                     {
                         skipped_frame_cnt += skipped;
                         m_log->warn("DAMAGED: Magewell lost {} frames, "
                                     "have skipped {} : {}",
-                                    skipped, skipped_frame_cnt, frame_cnt);
+                                    skipped, skipped_frame_cnt, m_frame_cnt);
                     }
                 }
             }
         }
-        expected_ts = timestamp + eco_params.llFrameDuration;
+        m_expected_ts = timestamp + eco_params.llFrameDuration;
 
         // Add frame to output handler
         if (!m_out2ts->AddVideoFrame(pbImage,
@@ -2107,12 +2105,10 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                                  ULONGLONG ullStatusBits,
                                  bool interlaced)
 {
-    int frame_cnt  = 0;
     int frame_idx  = -1;
 
     uint8_t* pbImage = nullptr;
     int64_t  timestamp = -1;
-    int64_t  expected_ts = -1;
     int64_t  desired_ts  = -1;
     int64_t  min_ts = -1;
     int      min_idx = -1;
@@ -2149,7 +2145,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         {
             if (m_verbose > 1)
                 m_log->info("Waiting for video data (frame {})",
-                            frame_cnt);
+                            m_frame_cnt);
             continue;
         }
 
@@ -2160,7 +2156,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             if (m_verbose > 0)
             {
                 m_log->warn("Failed to get Notify status (frame {})",
-                            frame_cnt);
+                            m_frame_cnt);
             }
             continue;
         }
@@ -2188,7 +2184,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         {
             if (m_verbose > 0)
             {
-                m_log->warn("Video signal lost lock. (frame {})", frame_cnt);
+                m_log->warn("Video signal lost lock. (frame {})", m_frame_cnt);
             }
             this_thread::sleep_for(chrono::milliseconds(5));
             return false;
@@ -2207,7 +2203,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 if (m_verbose > 0)
                 {
                     m_log->warn("Failed to get video buffer info (frame {})",
-                                frame_cnt);
+                                m_frame_cnt);
                 }
                 continue;
             }
@@ -2230,16 +2226,16 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 if (m_verbose > 0)
                 {
                     m_log->warn("Failed to get video frame info (frame {})",
-                                frame_cnt);
+                                m_frame_cnt);
                 }
                 continue;
             }
 
             timestamp = videoFrameInfo.allFieldBufferedTimes[0];
-            if (expected_ts >= 0 &&
+            if (m_expected_ts >= 0 &&
                 (timestamp == -1 ||
-                 (timestamp < expected_ts - eighth_dur ||
-                  expected_ts + eighth_dur < timestamp)))
+                 (timestamp < m_expected_ts - eighth_dur ||
+                  m_expected_ts + eighth_dur < timestamp)))
             {
                 if (timestamp == -1)
                 {
@@ -2251,7 +2247,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                     min_idx = frame_idx;
                     min_ts  = timestamp;
                 }
-                desired_ts = expected_ts - eighth_dur;
+                desired_ts = m_expected_ts - eighth_dur;
 
                 // Find the earliest, valid TS
                 for (int i = 0; i < frame_wrap_idx; ++i)
@@ -2283,18 +2279,18 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                     break;
                 }
 
-                skipped = (min_ts - expected_ts) / eco_params.llFrameDuration;
+                skipped = (min_ts - m_expected_ts) / eco_params.llFrameDuration;
                 if (skipped > 0)
                 {
                     skipped_frame_cnt += skipped;
                     m_log->warn("DAMAGED: Magewell lost {} frames. Have skipped {} : {}",
-                                skipped, skipped_frame_cnt, frame_cnt);
+                                skipped, skipped_frame_cnt, m_frame_cnt);
                 }
 
                 frame_idx = min_idx;
                 timestamp = min_ts;
             }
-            expected_ts = timestamp + eco_params.llFrameDuration;
+            m_expected_ts = timestamp + eco_params.llFrameDuration;
 
             // Get available buffer
             {
@@ -2329,7 +2325,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                       eco_params.cx,
                       eco_params.cy);
 
-            ++frame_cnt;
+            ++m_frame_cnt;
             --m_image_buffers_avail;
 
             if (result != MW_SUCCEEDED)
@@ -2337,7 +2333,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 if (m_verbose > 0)
                 {
                     m_log->warn("Damaged: Failed to retrieve next frame "
-                                "[{}] (processed {})", frame_idx, frame_cnt);
+                                "[{}] (processed {})", frame_idx, m_frame_cnt);
                 }
                 pro_image_buffer_available(pbImage, nullptr);
                 continue;
@@ -2349,7 +2345,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 if (m_verbose > 0)
                 {
                     m_log->warn("wait capture event error or timeout "
-                                "(frame {})", frame_cnt);
+                                "(frame {})", m_frame_cnt);
                 }
                 pro_image_buffer_available(pbImage, nullptr);
                 continue;
@@ -2646,7 +2642,7 @@ bool Magewell::capture_video(int quality)
             color_changed = false;
             params_changed = false;
 
-            if (m_verbose > 1 /* && frame_cnt > 0 */)
+            if (m_verbose > 1 /* && m_frame_cnt > 0 */)
                 m_log->info("Video signal CHANGED.");
 
             m_frame_ms = eco_params.llFrameDuration / 10000;
