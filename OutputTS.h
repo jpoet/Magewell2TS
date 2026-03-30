@@ -62,7 +62,7 @@ class OutputTS
     void ClearVideoPool(void);
     void ClearImageQueue(void);
     void DiscardImages(int val, const std::string & why);
-    bool AddVideoFrame(uint8_t*  pImage, void* pEco,
+    void AddVideoFrame(uint8_t*  pImage, void* pEco,
                        int imageSize, int64_t timestamp);
 
   private:

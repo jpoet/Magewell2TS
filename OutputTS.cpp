@@ -217,7 +217,7 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     else
     {
         m_encoderType = EncoderType::UNKNOWN;
-        m_log->error("Codec '{}' not supported.", m_video_codec_name);
+        m_log->critical("Codec '{}' not supported.", m_video_codec_name);
         Shutdown();
     }
 
@@ -540,6 +540,7 @@ bool OutputTS::open_audio(void)
                                              nb_samples);
     if (m_audio_stream.frame == nullptr)
     {
+        m_log->critical("Failed to allocate audio frame.");
         Shutdown();
         return false;
     }
@@ -558,7 +559,7 @@ bool OutputTS::open_audio(void)
 
     if (m_audio_stream.tmp_frame == nullptr)
     {
-        m_log->error("Unable to allocate a temporary audio frame.");
+        m_log->critical("Unable to allocate a temporary audio frame.");
         Shutdown();
         return false;
     }
@@ -800,8 +801,7 @@ bool OutputTS::open_container(void)
                                    NULL, "mpegts", NULL);
     if (!m_output_format_context)
     {
-        m_log->error("Could not create output format context.");
-        Shutdown();
+        m_log->critical("Could not create output format context.");
         return false;
     }
 
@@ -811,7 +811,7 @@ bool OutputTS::open_container(void)
     m_video_stream.st = avformat_new_stream(m_output_format_context, NULL);
     if (!m_video_stream.st)
     {
-        m_log->error("Could not allocate video stream");
+        m_log->critical("Could not allocate video stream");
         return false;
     }
     m_video_stream.st->id = 0;
@@ -822,8 +822,7 @@ bool OutputTS::open_container(void)
                                           m_video_stream.enc);
     if (ret < 0)
     {
-        m_log->error("Could not copy the stream parameters.");
-        Shutdown();
+        m_log->critical("Could not copy the stream parameters.");
         return false;
     }
 
@@ -834,7 +833,7 @@ bool OutputTS::open_container(void)
         m_audio_stream.st = avformat_new_stream(m_output_format_context, NULL);
         if (!m_audio_stream.st)
         {
-            m_log->error("Could not allocate stream");
+            m_log->critical("Could not allocate stream");
             return false;
         }
         m_audio_stream.st->id = 1;
@@ -846,7 +845,7 @@ bool OutputTS::open_container(void)
                                               m_audio_stream.enc);
         if (ret < 0)
         {
-            m_log->error("Could not copy the stream parameters");
+            m_log->critical("Could not copy the stream parameters");
             return false;
         }
     }
@@ -856,12 +855,14 @@ bool OutputTS::open_container(void)
         m_log->info("\n{}", av_dump_format_string(m_output_format_context));
 
     // Open output file
-    if (!(m_fmt->flags & AVFMT_NOFILE)) {
+    if (!(m_fmt->flags & AVFMT_NOFILE))
+    {
         ret = avio_open(&m_output_format_context->pb,
                         m_filename.c_str(), AVIO_FLAG_WRITE);
-        if (ret < 0) {
-            m_log->error("Could not open '{}': {}", m_filename, AVerr2str(ret));
-            Shutdown();
+        if (ret < 0)
+        {
+            m_log->critical("Could not open '{}': {}",
+                            m_filename, AVerr2str(ret));
             return false;
         }
     }
@@ -870,8 +871,7 @@ bool OutputTS::open_container(void)
     ret = avformat_write_header(m_output_format_context, &opt);
     if (ret < 0)
     {
-        m_log->error("Could not open output file: %s", AVerr2str(ret));
-        Shutdown();
+        m_log->critical("Could not open output file: %s", AVerr2str(ret));
         return false;
     }
 
@@ -1495,7 +1495,7 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
     av_dict_free(&opt);
     if (ret < 0)
     {
-        m_log->error("Could not open video codec: {}", AVerr2str(ret));
+        m_log->critical("Could not open video codec: {}", AVerr2str(ret));
         Shutdown();
         return false;
     }
@@ -1509,7 +1509,7 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
                                                ctx->height);
         if (!ost->frames[idx].frame)
         {
-            m_log->error("Could not allocate video frame");
+            m_log->critical("Could not allocate video frame");
             Shutdown();
             return false;
         }
@@ -1535,7 +1535,7 @@ bool OutputTS::init_intel_hw(const string & type,
         // Create hardware frames context
         if (!(ost->hw_frames_ctx = av_hwframe_ctx_alloc(ost->hw_device_ctx)))
         {
-            m_log->error("Failed to create QSV frame context.");
+            m_log->critical("Failed to create QSV frame context.");
             Shutdown();
             return false;
         }
@@ -1561,7 +1561,7 @@ bool OutputTS::init_intel_hw(const string & type,
     // Initialize frames context
     if ((ret = av_hwframe_ctx_init(ost->hw_frames_ctx)) < 0)
     {
-        m_log->error("Failed to initialize {} frame context. Error code: {}",
+        m_log->critical("Failed to initialize {} frame context. Error code: {}",
                      type, AVerr2str(ret));
         av_buffer_unref(&ost->hw_frames_ctx);
         Shutdown();
@@ -1573,8 +1573,8 @@ bool OutputTS::init_intel_hw(const string & type,
     if (!ost->enc->hw_frames_ctx)
     {
         ret = AVERROR(ENOMEM);
-        m_log->error("Failed to allocate hw frame buffer. Error code: {}",
-                     AVerr2str(ret));
+        m_log->critical("Failed to allocate hw frame buffer. Error code: {}",
+                        AVerr2str(ret));
         av_buffer_unref(&ost->hw_frames_ctx);
         Shutdown();
         return false;
@@ -1584,8 +1584,8 @@ bool OutputTS::init_intel_hw(const string & type,
     // Open codec
     if ((ret = avcodec_open2(ost->enc, codec, &opt)) < 0)
     {
-        m_log->error("Cannot open {} video encoder codec. Error code: {}",
-                     type, AVerr2str(ret));
+        m_log->critical("Cannot open {} video encoder codec. Error code: {}",
+                        type, AVerr2str(ret));
         Shutdown();
         return false;
     }
@@ -1662,7 +1662,7 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
         }
         if (Idriver == drivers.end())
         {
-            m_log->error("Failed to create a VAAPI device. Error code: {}",
+            m_log->critical("Failed to create a VAAPI device. Error code: {}",
                          AVerr2str(ret));
             Shutdown();
             return false;
@@ -1818,7 +1818,7 @@ void OutputTS::mux(void)
                 m_log->info("Audio changing: closing audio encoder");
             if (!open_audio())
             {
-                m_log->error("Failed to create audio stream");
+                m_log->critical("Failed to create audio stream");
                 Shutdown();
                 break;
             }
@@ -1923,7 +1923,7 @@ void OutputTS::mux(void)
                 qsv_vaapi_encode();
             else
             {
-                m_log->error("Unknown encoderType.");
+                m_log->critical("Unknown encoderType.");
                 Shutdown();
                 return;
             }
@@ -2099,7 +2099,8 @@ void OutputTS::copy_to_frame(void)
                                           AV_HWFRAME_MAP_WRITE |
                                           AV_HWFRAME_MAP_OVERWRITE)) < 0)
                 {
-                    m_log->error("Could not map hw frame: {}", AVerr2str(ret));
+                    m_log->critical("Could not map hw frame: {}",
+                                    AVerr2str(ret));
                     Shutdown();
                     return;
                 }
@@ -2185,7 +2186,7 @@ void OutputTS::copy_to_frame(void)
  * @return true always
  * @note Adds video frame to queue for processing
  */
-bool OutputTS::AddVideoFrame(uint8_t* pImage, void* pEco,
+void OutputTS::AddVideoFrame(uint8_t* pImage, void* pEco,
                              int imageSize, int64_t timestamp)
 {
     const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
@@ -2199,6 +2200,4 @@ bool OutputTS::AddVideoFrame(uint8_t* pImage, void* pEco,
         m_imagequeue.push_back(imagepkt_t{timestamp, pImage, pEco, imageSize});
         m_imagequeue_ready.notify_one();
     }
-
-    return true;
 }

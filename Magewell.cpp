@@ -1030,7 +1030,7 @@ void Magewell::capture_audio_loop(void)
         eco_event = eventfd(0, EFD_NONBLOCK);
         if (eco_event < 0)
         {
-            m_log->error("Failed to create eco event.");
+            m_log->critical("Failed to create eco event.");
             Shutdown();
             return;
         }
@@ -1045,7 +1045,7 @@ void Magewell::capture_audio_loop(void)
         notify_event = MWCreateEvent();
         if (notify_event == 0)
         {
-            m_log->error("create notify_event fail.");
+            m_log->critical("create notify_event fail.");
             Shutdown();
             return;
         }
@@ -1179,10 +1179,6 @@ void Magewell::capture_audio_loop(void)
                                      sample_rate,
                                      MWCAP_AUDIO_SAMPLES_PER_FRAME,
                                      frame_size);
-
-            // Handle shutdown if output handler is invalid
-            if (!m_out2ts)
-                Shutdown();
 
             m_reset_audio.store(false);
         }
@@ -1736,7 +1732,7 @@ bool Magewell::add_eco_image_buffer(void)
     // Check if allocation succeeded
     if (reinterpret_cast<uint8_t *>(pBuf->pvFrame) == nullptr)
     {
-        m_log->error("Eco video frame alloc failed.");
+        m_log->critical("Eco video frame alloc failed.");
         return false;
     }
     pBuf->pvContext = reinterpret_cast<MWCAP_PTR>(pBuf);
@@ -1745,7 +1741,7 @@ bool Magewell::add_eco_image_buffer(void)
     // Register buffer with capture system
     if ((xr = MWCaptureSetVideoEcoFrame(m_channel, pBuf)) != MW_SUCCEEDED)
     {
-        m_log->error("MWCaptureSetVideoEcoFrame failed!");
+        m_log->critical("MWCaptureSetVideoEcoFrame failed!");
         return false;
     }
 
@@ -1769,7 +1765,7 @@ bool Magewell::add_pro_image_buffer(void)
     uint8_t* pbImage =  new uint8_t[m_image_size];
     if (pbImage == nullptr)
     {
-        m_log->error("image buffer alloc fail!");
+        m_log->critical("image buffer alloc fail!");
         return false;
     }
 
@@ -1817,7 +1813,10 @@ bool Magewell::open_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN & eco_params)
         this_thread::sleep_for(chrono::milliseconds(100));
     }
     if (idx == 5)
+    {
+        m_log->critical("Gave up trying to open Eco Capture card.");
         return false;
+    }
 
     if (m_verbose > 1)
     {
@@ -2027,11 +2026,10 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         m_expected_ts = timestamp + eco_params.llFrameDuration;
 
         // Add frame to output handler
-        if (!m_out2ts->AddVideoFrame(pbImage,
-                             reinterpret_cast<MWCAP_VIDEO_ECO_CAPTURE_FRAME *>
-                             (eco_status.pvContext),
-                             m_num_pixels, timestamp))
-            Shutdown();
+        m_out2ts->AddVideoFrame(pbImage,
+                        reinterpret_cast<MWCAP_VIDEO_ECO_CAPTURE_FRAME *>
+                                (eco_status.pvContext),
+                                m_num_pixels, timestamp);
 
         if (m_verbose > 0)
         {
@@ -2356,9 +2354,8 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             MWGetVideoCaptureStatus(m_channel, &captureStatus);
 
             // Add frame to output handler
-            if (!m_out2ts->AddVideoFrame(pbImage, nullptr,
-                                         m_num_pixels, timestamp))
-                Shutdown();
+            m_out2ts->AddVideoFrame(pbImage, nullptr,
+                                    m_num_pixels, timestamp);
 
             if (m_verbose > 0)
             {
@@ -2464,7 +2461,7 @@ bool Magewell::capture_video(int quality)
         eco_event = eventfd(0, EFD_NONBLOCK);
         if (eco_event < 0)
         {
-            m_log->error("Unable to create event fd for eco capture.");
+            m_log->critical("Unable to create event fd for eco capture.");
             Shutdown();
         }
     }
@@ -2473,8 +2470,7 @@ bool Magewell::capture_video(int quality)
         capture_event = MWCreateEvent();
         if (capture_event == 0)
         {
-            if (m_verbose > 0)
-                m_log->error("Create timer event error");
+            m_log->critical("Create timer event error");
             Shutdown();
 
         }
@@ -2482,15 +2478,13 @@ bool Magewell::capture_video(int quality)
         notify_event = MWCreateEvent();
         if (notify_event == 0)
         {
-            if (m_verbose > 0)
-                m_log->error("Create notify event error");
+            m_log->critical("Create notify event error");
             Shutdown();
         }
 
         if (MW_SUCCEEDED != MWStartVideoCapture(m_channel, capture_event))
         {
-            if (m_verbose > 0)
-                m_log->error("Start Pro Video Capture error!");
+            m_log->critical("Start Pro Video Capture error!");
             Shutdown();
         }
     }
@@ -2572,7 +2566,7 @@ bool Magewell::capture_video(int quality)
                 eco_params.dwFOURCC = MWFOURCC_I420;
             else
             {
-                m_log->error("Failed to determine best magewell pixel format.");
+                m_log->critical("Failed to determine best magewell pixel format.");
                 Shutdown();
             }
 
@@ -2766,7 +2760,7 @@ bool Magewell::capture_video(int quality)
             video_notify = MWRegisterNotify(m_channel, notify_event, event_mask);
         if (!video_notify)
         {
-            m_log->error("Video: Failed to register notify event.");
+            m_log->critical("Video: Failed to register notify event.");
             Shutdown();
         }
 
@@ -2876,6 +2870,7 @@ bool Magewell::Capture(const string & video_codec,
     // Check if output handler was created successfully
     if (!m_out2ts)
     {
+        m_log->critical("Failed to create OutputTS muxing.");
         Shutdown();
         delete m_out2ts;
         return false;
