@@ -180,9 +180,9 @@ void setup_logging(int verbose_level, const string& logfile)
     {
         file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>
                     (logfile, // filename
-                     1024 * 1024 * 10,           // max size (10 MB)
-                     5,                          // max files
-                     false                       // rotate on open (optional, default false)
+                     1024 * 1024 * 4,  // max size (4 MB)
+                     5,                // max files
+                     false          // rotate on open (optional, default false)
                      );
         file_sink->set_level(spdlog::level::trace);
         file_sink->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] %v");
