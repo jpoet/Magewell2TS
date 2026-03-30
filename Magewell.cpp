@@ -2336,8 +2336,8 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             {
                 if (m_verbose > 0)
                 {
-                    m_log->warn("Failed to retrieve frame (frame {})",
-                                frame_cnt);
+                    m_log->warn("Damaged: Failed to retrieve next frame "
+                                "[{}] (processed {})", frame_idx, frame_cnt);
                 }
                 pro_image_buffer_available(pbImage, nullptr);
                 continue;
@@ -2348,8 +2348,8 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             {
                 if (m_verbose > 0)
                 {
-                    m_log->warn("wait capture event error or timeout (frame {})",
-                                frame_cnt);
+                    m_log->warn("wait capture event error or timeout "
+                                "(frame {})", frame_cnt);
                 }
                 pro_image_buffer_available(pbImage, nullptr);
                 continue;
@@ -2411,6 +2411,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 vidpool_tm = current_tm;
             }
         }
+        this_thread::yield();
     }
 
     return true;
