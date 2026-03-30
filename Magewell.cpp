@@ -1647,7 +1647,9 @@ void Magewell::free_image_buffers(void)
     unique_lock<mutex> lock(m_image_buffer_mutex);
 
     // Wait for all buffers to be returned from output thread
-    while (m_image_buffers_total > m_image_buffers_avail)
+    int idx;
+    for (idx = 0;
+         idx < 3 && m_image_buffers_total > m_image_buffers_avail; ++idx)
     {
         if (m_image_returned.wait_for(lock, chrono::seconds(2))
             == cv_status::timeout)
@@ -1659,6 +1661,8 @@ void Magewell::free_image_buffers(void)
                         m_image_buffers_avail);
         }
     }
+    if (idx == 3)
+        m_log->warn("Gave up waiting for Magewell buffers to be returned.\n");
 
     if (m_isEco)
     {
@@ -1688,6 +1692,7 @@ void Magewell::free_image_buffers(void)
 
     // Reset buffer counters
     m_image_buffers_avail = 0;
+    m_image_buffers_total = 0;
 }
 
 /**
@@ -1728,6 +1733,7 @@ bool Magewell::add_eco_image_buffer(void)
     // Add to buffer set and increment counters
     m_eco_image_buffers.insert(pBuf);
     ++m_image_buffers_avail;
+    ++m_image_buffers_total;
 
     return true;
 }
@@ -1757,6 +1763,7 @@ bool Magewell::add_pro_image_buffer(void)
     m_avail_image_buffers.push_back(pbImage);
 
     ++m_image_buffers_avail;
+    ++m_image_buffers_total;
     return true;
 }
 
@@ -1813,10 +1820,10 @@ bool Magewell::open_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN & eco_params)
  */
 void Magewell::close_eco_video(void)
 {
-    // Stop capture
-    MWStopVideoEcoCapture(m_channel);
     // Free buffers
     free_image_buffers();
+    // Stop capture
+    MWStopVideoEcoCapture(m_channel);
 }
 
 /**
@@ -2606,10 +2613,8 @@ bool Magewell::capture_video(int quality)
             params_changed = true;
         }
 
-        m_image_buffers_total = m_requested_buffers;
-
         if (m_verbose > 0)
-            m_log->info("Using {} RAM frame buffers.", m_image_buffers_total);
+            m_log->info("Using {} RAM frame buffers.", m_requested_buffers);
 
         if (params_changed || color_changed)
         {
@@ -2691,7 +2696,7 @@ bool Magewell::capture_video(int quality)
                     Shutdown();
                 else
                 {
-                    for (idx = 0; idx < m_image_buffers_total; ++idx)
+                    for (idx = 0; idx < m_requested_buffers; ++idx)
                     {
                         if (!add_eco_image_buffer())
                         {
@@ -2703,7 +2708,8 @@ bool Magewell::capture_video(int quality)
             }
             else
             {
-                for (idx = 0; idx < m_image_buffers_total; ++idx)
+                free_image_buffers();
+                for (idx = 0; idx < m_requested_buffers; ++idx)
                 {
                     if (!add_pro_image_buffer())
                     {
