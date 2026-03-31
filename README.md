@@ -1,7 +1,7 @@
 #!/usr/bin/env -S retext --preview
 
 [//]: # (Install retext from your distribution then ./README.md will look prettier.)
- 
+
 # Magewell PRO/ECO capture to Transport Stream
 
 This application reads audio and video from a Magewell PRO or ECO PCIe capture card and muxes them into a Transport Stream.
@@ -13,11 +13,13 @@ Both AC3 and EAC3 (5.1) are supported if the source device outputs them as a bit
 More than two channels of LPCM are not currently supported. Adding such support is possible but I do not have a source device to test with.
 
 The Magewell driver provides V4L2 and ALSA interfaces to the card. This application by-passes those interfaces and talks directly to it via the Magewell API. A big advantage to this is you don't have to figure out which /dev/videoX or ALSA "device" is needed to make it work. The other advantage is that a raw bitstream can be captured. Unfortunately, the Magewell API depends on ALSA so we have to link it even though it is not used.
- 
+
 ----
 ## Caveats
 
 The Magewell PRO and ECO capture cards capture raw audio and video. The video (at least) needs compressed and it is up to the Linux PC to do that. The only practical way of accomplishing this is with GPU assist. Intel QSV and nVidia nvenc are supported. I don't test with nVidia very often, so there may be times when that is broken -- please let me know.
+
+Note that the ECO 4k+ cards claim they can do 60Hz and HDR. In my experience that is true, but not at the same time.
 
 ***
 ## Magewell driver
@@ -93,7 +95,7 @@ If you place the Magewell2TS source somewhere else, you will need to edit Magewe
 ### Dependencies
 #### Fedora:
 ```bash
-sudo dnf install -y cmake gcc gcc-c++ libstdc++-devel libv4l-devel patch kernel-devel alsa-lib-devel libv4l-devel systemd-devel 
+sudo dnf install -y cmake gcc gcc-c++ libstdc++-devel libv4l-devel patch kernel-devel alsa-lib-devel libv4l-devel systemd-devel
 ```
 FFmpeg
 ```bash
@@ -212,7 +214,7 @@ Create a service file (/etc/systemd/system/mythbackend.service):
 [Unit]
 Description=MythTV backend service
 Wants=dev-hvr2250_1.device dev-hvr2250_2.device
-After=full-internet.target mysqld.service dev-hvr2250_1.device dev-hvr2250_2.device 
+After=full-internet.target mysqld.service dev-hvr2250_1.device dev-hvr2250_2.device
 OnFailure=notify-email@%i.service
 
 [Service]
@@ -274,5 +276,3 @@ git clone git://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.
 ```
 
 If you want to update the firmware on the Arc itself, this might help: [https://forum.level1techs.com/t/remember-to-update-your-intel-arc-firmware-on-linux/208736](https://forum.level1techs.com/t/remember-to-update-your-intel-arc-firmware-on-linux/208736)
-
-
