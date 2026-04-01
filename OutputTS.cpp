@@ -489,7 +489,8 @@ bool OutputTS::open_audio(void)
             av_channel_layout_describe(&m_audio_stream.enc->ch_layout, buf, sizeof(buf));
             m_log->error("Channel layout {} is not supported by the {} encoder.",
                          buf, m_audio_stream.enc->codec->name);
-            m_log->info("Encoder {} supports:", m_audio_stream.enc->codec->name);
+            m_log->info("Encoder {} supports:",
+                        m_audio_stream.enc->codec->name);
             for (idx = 0; idx < count; ++idx)
             {
                 av_channel_layout_describe(&ch_layouts[idx], buf, sizeof(buf));
@@ -618,7 +619,6 @@ bool OutputTS::open_video(void)
 
     if (m_verbose > 1)
         m_log->info("Opening video.");
-    m_video_stream.name = "video";
 
     AVDictionary* opt = NULL;
     const AVCodec* video_codec =
@@ -1030,7 +1030,7 @@ void OutputTS::close_encoder(OutputStream* ost)
         return;
 
     if (m_verbose > 1)
-        m_log->info("Closing {} encoder.", ost->name);
+        m_log->info("Closing {} encoder.", ost->enc->codec->long_name);
 
     // Free encoder hardware frames context
     if (ost->hw_frames_ctx)

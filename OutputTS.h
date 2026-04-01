@@ -81,8 +81,6 @@ class OutputTS
         AVStream* st               {nullptr};
         AVCodecContext* enc        {nullptr};
 
-        std::string  name;
-
         /* pts of the next frame that will be generated */
         int64_t next_pts           {-1};
         int64_t timestamp          {-1};
