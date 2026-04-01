@@ -1875,9 +1875,10 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     uint8_t* pbImage = nullptr;
     int64_t  timestamp;
 
-    int      skipped_frame_cnt = 0;
-    int      skipped = 0;
+    float    skipped_frame_cnt = 0;
+    float    skipped = 0;
     int      quarter_dur = eco_params.llFrameDuration / 4;
+    int      eighth_dur  = eco_params.llFrameDuration / 8;
 
     MWCAP_VIDEO_ECO_CAPTURE_STATUS eco_status;
     MW_RESULT ret;
@@ -1890,7 +1891,10 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     array<int, 5>::iterator  vidpool_5m_max;
     array<int, 10>::iterator vidpool_10m_max;
 
-    int used = 0;
+    int64_t timestamp_adj {0};
+    int     short_frame   {-1};
+
+    int used        {0};
 
     chrono::steady_clock::time_point current_tm;
     chrono::steady_clock::time_point vidpool_tm = chrono::steady_clock::now();
@@ -1991,6 +1995,8 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                             "Difference:{} frames ({})",
                             m_expected_ts, timestamp, frames,
                             m_frame_cnt);
+                short_frame = m_frame_cnt;
+                timestamp_adj = eco_params.llFrameDuration;
             }
             else // timestamp > m_expected_ts
             {
@@ -1999,14 +2005,28 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 if (timestamp <
                     (m_expected_ts + (eco_params.llFrameDuration * 32)))
                 {
-                    skipped = (timestamp - m_expected_ts) /
-                              eco_params.llFrameDuration;
-                    if (skipped > 0)
+                    skipped = static_cast<float>(m_expected_ts - timestamp)
+                              / static_cast<float>(eco_params.llFrameDuration);
+                    if (skipped > 0.25)
                     {
-                        skipped_frame_cnt += skipped;
-                        m_log->warn("DAMAGED: Magewell lost {} frames, "
-                                    "have skipped {} : {}",
-                                    skipped, skipped_frame_cnt, m_frame_cnt);
+                        if (short_frame > 0)
+                        {
+                            m_log->info("Allowing long TS after short. "
+                                        "{} -> {}",
+                                        short_frame, m_frame_cnt);
+                            short_frame = -1;
+                            timestamp_adj = 0;
+                        }
+                        else
+                        {
+                            skipped_frame_cnt += skipped;
+                            m_log->warn("DAMAGED: Magewell lost {} frames, "
+                                        "have skipped {} : {}",
+                                        skipped, skipped_frame_cnt,
+                                        m_frame_cnt);
+                            if (skipped > 10)
+                                Reset();
+                        }
                     }
                 }
             }
@@ -2017,7 +2037,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         m_out2ts->AddVideoFrame(pbImage,
                         reinterpret_cast<MWCAP_VIDEO_ECO_CAPTURE_FRAME *>
                                 (eco_status.pvContext),
-                                m_num_pixels, timestamp);
+                                m_num_pixels, timestamp + timestamp_adj);
 
         if (m_verbose > 0)
         {
@@ -2069,7 +2089,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 vidpool_tm = current_tm;
             }
         }
-        this_thread::yield();
+        this_thread::sleep_for(chrono::milliseconds(eighth_dur));
     }
 
     return true;
@@ -2107,8 +2127,8 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     int64_t  desired_ts  = -1;
     int64_t  min_ts = -1;
     int      min_idx = -1;
-    uint     skipped_frame_cnt = 0;
-    uint     skipped = 0;
+    int      skipped_frame_cnt = 0;
+    int      skipped = 0;
 
     int      eighth_dur = eco_params.llFrameDuration / 8;
 
@@ -2279,6 +2299,8 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                     skipped_frame_cnt += skipped;
                     m_log->warn("DAMAGED: Magewell lost {} frames. Have skipped {} : {}",
                                 skipped, skipped_frame_cnt, m_frame_cnt);
+                    if (skipped > frame_wrap_idx)
+                        Reset();
                 }
 
                 frame_idx = min_idx;
