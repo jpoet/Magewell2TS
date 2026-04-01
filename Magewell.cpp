@@ -1878,7 +1878,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     float    skipped_frame_cnt = 0;
     float    skipped = 0;
     int      quarter_dur = eco_params.llFrameDuration / 4;
-    int      eighth_dur  = eco_params.llFrameDuration / 8;
+    int      eighth_ms  = m_frame_ms / 8;
 
     MWCAP_VIDEO_ECO_CAPTURE_STATUS eco_status;
     MW_RESULT ret;
@@ -2089,7 +2089,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 vidpool_tm = current_tm;
             }
         }
-        this_thread::sleep_for(chrono::milliseconds(eighth_dur));
+        this_thread::sleep_for(chrono::milliseconds(eighth_ms));
     }
 
     return true;
@@ -2131,6 +2131,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     int      skipped = 0;
 
     int      eighth_dur = eco_params.llFrameDuration / 8;
+    int      eighth_ms  = m_frame_ms / 8;
 
     MWCAP_VIDEO_BUFFER_INFO   videoBufferInfo;
     MWCAP_VIDEO_FRAME_INFO    videoFrameInfo;
@@ -2431,7 +2432,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 vidpool_tm = current_tm;
             }
         }
-        this_thread::yield();
+        this_thread::sleep_for(chrono::milliseconds(eighth_ms));
     }
 
     return true;
