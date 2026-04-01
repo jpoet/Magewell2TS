@@ -2024,8 +2024,10 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                                         "have skipped {} : {}",
                                         skipped, skipped_frame_cnt,
                                         m_frame_cnt);
+#if 0
                             if (skipped > 10)
                                 Reset();
+#endif
                         }
                     }
                 }
@@ -2300,8 +2302,10 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                     skipped_frame_cnt += skipped;
                     m_log->warn("DAMAGED: Magewell lost {} frames. Have skipped {} : {}",
                                 skipped, skipped_frame_cnt, m_frame_cnt);
+#if 0
                     if (skipped > frame_wrap_idx)
                         Reset();
+#endif
                 }
 
                 frame_idx = min_idx;
@@ -2524,7 +2528,7 @@ bool Magewell::capture_video(int quality)
         if (videoSignalStatus.state == MWCAP_VIDEO_SIGNAL_UNSUPPORTED)
         {
             if (state != videoSignalStatus.state && m_verbose > 0)
-                m_log->warn("Damaged: Input video signal status: Unsupported");
+                m_log->warn("Input video signal status: Unsupported");
             locked = false;
             state = videoSignalStatus.state;
             this_thread::sleep_for(chrono::milliseconds(m_frame_ms * 10));
@@ -2960,4 +2964,7 @@ void Magewell::Reset(void)
         m_reset_video.store(true);
         m_last_reset = std::chrono::steady_clock::now();
     }
+#if 0
+    m_expected_ts = -1;
+#endif
 }
