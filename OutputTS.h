@@ -234,4 +234,6 @@ class OutputTS
     std::atomic<bool>       m_init_needed  {true};
     std::mutex              m_ready_mutex;
     std::condition_variable m_ready_cond;
+
+    std::chrono::steady_clock::time_point m_start_tm;
 };

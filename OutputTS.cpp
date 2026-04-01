@@ -198,6 +198,8 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     , f_image_buffer_available(image_buffer_avail)
 {
     m_log = spdlog::get("app_logger");
+    m_start_tm = chrono::steady_clock::now();
+
     if (!m_log)
     {
         // Handle error if logger not found (e.g., create a fallback or throw exception)
@@ -2007,6 +2009,7 @@ void OutputTS::copy_to_frame(void)
     int            vidpool_10m_idx  {0};
     array<int, 5>::iterator  vidpool_5m_max;
     array<int, 10>::iterator vidpool_10m_max;
+    chrono::seconds total_duration;
 
     int used = 0;
 
@@ -2125,15 +2128,21 @@ void OutputTS::copy_to_frame(void)
             duration = chrono::duration_cast<chrono::seconds>
                        (current_tm - vidpool_tm).count();
 
+            total_duration = chrono::duration_cast<chrono::seconds>
+                             (chrono::steady_clock::now() - m_start_tm);
+
             if (duration >= 60)
             {
                 vidpool_5m_max  = ranges::max_element(vidpool_used_5m);
                 vidpool_10m_max = ranges::max_element(vidpool_used_10m);
 
-                m_log->info("     GPU frame pool used 1m:{:<3d} 5m:{:<3d} 10m:{:<3d} "
-                            "of {}",
-                            vidpool_used_1m, *vidpool_5m_max, *vidpool_10m_max,
-                            m_frame_buffers);
+                // spdlog doesn't support c++20 format yet, so no :%T.
+                m_log->info(format("     GPU frame pool used 1m:{:<3d} "
+                                   "5m:{:<3d} 10m:{:<3d} "
+                                   "of {} ({:%T} elapsed)",
+                                   vidpool_used_1m, *vidpool_5m_max,
+                                   *vidpool_10m_max, m_frame_buffers,
+                                   total_duration));
 
                 vidpool_used_1m = 0;
 
