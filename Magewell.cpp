@@ -1647,10 +1647,15 @@ void Magewell::free_image_buffers(void)
     unique_lock<mutex> lock(m_image_buffer_mutex);
 
     // Wait for all buffers to be returned from output thread
+    //    Note: Can lose 1 somewhere, need to track that down.
     int idx;
     for (idx = 0;
-         idx < 3 && m_image_buffers_total > m_image_buffers_avail; ++idx)
+         idx < 3 && m_image_buffers_total > m_image_buffers_avail + 1;
+         ++idx)
     {
+        m_log->warn("Waiting for Magewell buffers to be returned. "
+                    "Total: {} avail: {}", m_image_buffers_total,
+                    m_image_buffers_avail);
         if (m_image_returned.wait_for(lock, chrono::seconds(2))
             == cv_status::timeout)
         {
