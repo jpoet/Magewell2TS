@@ -245,7 +245,7 @@ int main(int argc, char* argv[])
     bool        no_audio      = false;
     bool        p010          = false;
 
-    int         gpu_buffers   = 16;
+    int         gpu_buffers   = 20;
     int         video_buffers = 24;
     int         extra_hw_frames = 32;
 
