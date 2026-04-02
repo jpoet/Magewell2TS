@@ -1978,8 +1978,9 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         {
             continue;
         }
-        else if (timestamp < m_expected_ts - quarter_dur ||
-                 m_expected_ts + quarter_dur < timestamp)
+        else if (m_expected_ts > 0 &&
+                 (timestamp < m_expected_ts - quarter_dur ||
+                  m_expected_ts + quarter_dur < timestamp))
         {
             if (timestamp < 0)
             {
@@ -1991,10 +1992,9 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             {
                 float frames = static_cast<float>(m_expected_ts - timestamp)
                                / static_cast<float>(eco_params.llFrameDuration);
-                m_log->info("Expected ECO timestamp: {} > {} actual. "
-                            "Difference:{} frames ({})",
-                            m_expected_ts, timestamp, frames,
-                            m_frame_cnt);
+                m_log->info("Timestamp is {:.0f} frame less than "
+                            "expected.    ({}) [Adjusting]",
+                            frames, m_frame_cnt);
                 short_frame = m_frame_cnt;
                 timestamp_adj = eco_params.llFrameDuration;
             }
@@ -2005,23 +2005,24 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 if (timestamp <
                     (m_expected_ts + (eco_params.llFrameDuration * 32)))
                 {
-                    skipped = static_cast<float>(m_expected_ts - timestamp)
+                    skipped = static_cast<float>(timestamp - m_expected_ts)
                               / static_cast<float>(eco_params.llFrameDuration);
-                    if (skipped > 0.25)
+                    if (skipped > 0.5)
                     {
-                        if (short_frame > 0)
+                        if (short_frame > 0 && skipped < 2)
                         {
-                            m_log->info("Allowing long TS after short. "
-                                        "{} -> {}",
-                                        short_frame, m_frame_cnt);
+                            m_log->info("Timestamp is {:.0f} frame greater "
+                                        "than expected. ({}) "
+                                        "[Adjustment cleared]",
+                                        skipped, m_frame_cnt);
                             short_frame = -1;
                             timestamp_adj = 0;
                         }
                         else
                         {
                             skipped_frame_cnt += skipped;
-                            m_log->warn("DAMAGED: Magewell lost {} frames, "
-                                        "have skipped {} : {}",
+                            m_log->warn("DAMAGED: Magewell lost {:.0f} frames, "
+                                        "have skipped {:.0f} : {}",
                                         skipped, skipped_frame_cnt,
                                         m_frame_cnt);
 #if 0
@@ -2030,7 +2031,14 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
 #endif
                         }
                     }
+                    else
+                        m_log->debug("Timestamp {} > {} Expected, but by only "
+                                     "{} frames.", timestamp, m_expected_ts,
+                                     skipped);
                 }
+                else
+                    m_log->warn("timestamp {} >>>> {} expected.",
+                                timestamp, m_expected_ts);
             }
         }
         m_expected_ts = timestamp + eco_params.llFrameDuration;
