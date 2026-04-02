@@ -1653,7 +1653,7 @@ void Magewell::free_image_buffers(void)
          idx < 3 && m_image_buffers_total > m_image_buffers_avail + 1;
          ++idx)
     {
-        m_log->warn("Waiting for Magewell buffers to be returned. "
+        m_log->info("Waiting for Magewell buffers to be returned. "
                     "Total: {} avail: {}", m_image_buffers_total,
                     m_image_buffers_avail);
         if (m_image_returned.wait_for(lock, chrono::seconds(2))
@@ -1661,7 +1661,7 @@ void Magewell::free_image_buffers(void)
         {
             if (m_running == false)
                 break;
-            m_log->warn("Still waiting for Magewell buffers to be returned. "
+            m_log->info("Still waiting for Magewell buffers to be returned. "
                         "Total: {} avail: {}", m_image_buffers_total,
                         m_image_buffers_avail);
         }

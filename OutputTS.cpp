@@ -2035,6 +2035,12 @@ void OutputTS::copy_to_frame(void)
                 }
                 else
                 {
+                    if (m_discard_images)
+                    {
+                        ClearImageQueue();
+                        continue;
+                    }
+
                     pImage     = m_imagequeue.front().image;
                     pEco       = m_imagequeue.front().pEco;
                     image_size = m_imagequeue.front().image_size;
@@ -2054,7 +2060,7 @@ void OutputTS::copy_to_frame(void)
                 if (m_video_stream.frames_used < m_video_stream.frames_total)
                     break;
                 m_videopool_avail.wait_for(lock,
-                                           std::chrono::milliseconds(m_input_frame_wait_ms));
+                            std::chrono::milliseconds(m_input_frame_wait_ms));
                 if (m_running.load() == false)
                     return;
             }
