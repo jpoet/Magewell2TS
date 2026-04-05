@@ -1992,9 +1992,10 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             {
                 float frames = static_cast<float>(m_expected_ts - timestamp)
                                / static_cast<float>(eco_params.llFrameDuration);
-                m_log->info("Timestamp is {:.0f} frame less than "
-                            "expected.    ({}) [Adjusting]",
-                            frames, m_frame_cnt);
+                if (m_verbose > 3)
+                    m_log->info("Timestamp is {:.0f} frame less than "
+                                "expected.    ({}) [Adjusting]",
+                                frames, m_frame_cnt);
                 short_frame = m_frame_cnt;
                 timestamp_adj = eco_params.llFrameDuration;
             }
@@ -2011,10 +2012,11 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                     {
                         if (short_frame > 0 && skipped < 2)
                         {
-                            m_log->info("Timestamp is {:.0f} frame greater "
-                                        "than expected. ({}) "
-                                        "[Adjustment cleared]",
-                                        skipped, m_frame_cnt);
+                            if (m_verbose > 3)
+                                m_log->info("Timestamp is {:.0f} frame greater "
+                                            "than expected. ({}) "
+                                            "[Adjustment cleared]",
+                                            skipped, m_frame_cnt);
                             short_frame = -1;
                             timestamp_adj = 0;
                         }
