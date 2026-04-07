@@ -2,6 +2,7 @@
 
 SET(Magewell_SEARCH_PATHS
   ../Magewell_Capture_SDK_Linux
+  ../Magewell_Capture_SDK_Linux_3.3.1.1515
   ../Magewell_Capture_SDK_Linux_3.3.1.1505
   ../Magewell_Capture_SDK_Linux_3.3.1.1313
   ../
@@ -42,5 +43,5 @@ if(Magewell_FOUND AND NOT TARGET Magewell::Magewell)
     INTERFACE_INCLUDE_DIRECTORIES
       "${Magewell_INCLUDE_DIR}"
       )
-    
+
 endif()
