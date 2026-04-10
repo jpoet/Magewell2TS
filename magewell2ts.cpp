@@ -249,7 +249,15 @@ int main(int argc, char* argv[])
     int         video_buffers = 24;
     int         extra_hw_frames = 32;
 
-    std::setvbuf(stdout, nullptr, _IOFBF, 8192);
+    constexpr size_t BUFFER_SIZE = 100 * 1024 * 1024;
+    std::vector<char> buffer(BUFFER_SIZE);
+
+    // Set stdout to use this buffer (fully buffered)
+    if (std::setvbuf(stdout, buffer.data(), _IOFBF, BUFFER_SIZE) != 0)
+    {
+        cerr << "Failed to allocate large buffer for stdout\n";
+        return 1;
+    }
 
     vector<string_view> args(argv + 1, argv + argc);
 
@@ -440,6 +448,8 @@ int main(int argc, char* argv[])
                            std::max(gpu_buffers, 16), video_buffers))
             return -2;
     }
+
+    std::fflush(stdout);
 
     delete g_mw;
     spdlog::shutdown();
