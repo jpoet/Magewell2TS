@@ -27,7 +27,7 @@ class Magewell
     // Type definitions
     using imageset_t = std::set<uint8_t*>;     ///< Set of image buffers
     using imageque_t = std::deque<uint8_t*>;   ///< Queue of available image buffers
-    using ecoque_t   = std::set<MWCAP_VIDEO_ECO_CAPTURE_FRAME*>; ///< Set of eco capture frames
+    using ecoque_t  = std::vector<std::unique_ptr<MWCAP_VIDEO_ECO_CAPTURE_FRAME>>;
 
 public:
     /**
@@ -162,6 +162,9 @@ private:
      */
     bool update_HDRinfo(void);
 
+    void     AllocateImageBuffer(void);
+    uint8_t* GetFrameImage(size_t frame_idx);
+
     /**
      * @brief Handle available image buffer for PRO capture
      * @param pbImage Pointer to image buffer
@@ -183,10 +186,10 @@ private:
     bool add_pro_image_buffer(void);
 
     /**
-     * @brief Add a new ECO image buffer
+     * @brief Add ECO image buffers
      * @return true if successful, false otherwise
      */
-    bool add_eco_image_buffer(void);
+    bool add_eco_image_buffers(void);
 
     /**
      * @brief Free all image buffers
@@ -282,7 +285,10 @@ private:
     HDMI_INFOFRAME_PACKET m_infoPacket_prev {0};  ///< Previous info packet
     HDMI_HDR_INFOFRAME_PAYLOAD& m_HDRinfo_prev {m_infoPacket_prev.hdrInfoFramePayload};  ///< Previous HDR info
 
-    // Buffer management
+    std::unique_ptr<uint64_t[]> m_image_buffer;
+    size_t                      m_image_size_qwords {0};
+    bool                        m_pinned   {false};
+
     size_t       m_requested_buffers       {0};
     size_t       m_image_buffers_total     {0}; ///< Total image buffers
     size_t       m_image_buffers_avail     {0}; ///< Available image buffers

@@ -47,6 +47,10 @@
 #include <array>
 #include <limits>
 #include <unistd.h>
+#include <cstddef>
+#include <memory>
+#include <sys/resource.h>
+#include <sys/mman.h> // for mlock
 
 #include <MWFOURCC.h>
 #include <LibMWCapture/MWCapture.h>
@@ -1590,6 +1594,64 @@ bool Magewell::update_HDRcolorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status)
     return result;
 }
 
+void Magewell::AllocateImageBuffer(void)
+{
+    m_image_size_qwords = (m_image_size + 7) / 8;
+    size_t total_qwords = m_image_size_qwords * m_requested_buffers;
+
+    m_log->debug("Allocating Magewell frames: {} /8= {} total8 {} for {}KB",
+                 m_image_size, m_image_size_qwords,
+                 total_qwords, total_qwords * 8 / 1024);
+
+    if (m_pinned)
+        munlock(m_image_buffer.get(), total_qwords * sizeof(uint64_t));
+
+    m_image_buffer = std::make_unique<uint64_t[]>(total_qwords);
+    if (mlock(m_image_buffer.get(), total_qwords * sizeof(uint64_t)) != 0)
+    {
+        m_log->warn("Failed to PIN Magewell image buffer memory.");
+        m_log->warn("Perhaps update systemd service file with\n",
+                    "[Service]\n"
+                    "LimitMEMLOCK=infinity");
+        m_log->warn("And/or see /etc/security/limits.conf and set to at least "
+                    "{}KB for this user.",
+                    total_qwords * sizeof(uint64_t) / 1024);
+
+        m_log->warn("Performance may suffer.");
+    }
+    else
+        m_pinned = true;
+
+    if (m_isEco && m_verbose > 3)
+    {
+        struct rlimit rl;
+        if (getrlimit(RLIMIT_MEMLOCK, &rl) == 0)
+        {
+            // RLIMIT_MEMLOCK corresponds to ulimit -l
+            m_log->info("Current soft memory limit (-l): {}",
+                        (rl.rlim_cur == RLIM_INFINITY) ?
+                        "unlimited" : std::to_string(rl.rlim_cur));
+            m_log->info("Current hard memory limit (-l): {}",
+                        (rl.rlim_max == RLIM_INFINITY) ?
+                        "unlimited" : std::to_string(rl.rlim_max));
+        }
+        else
+        {
+            m_log->warn("Failed to check current "
+                        "'maximum locked-in-memory size': {}",
+                        strerror(errno));
+        }
+    }
+}
+
+uint8_t* Magewell::GetFrameImage(size_t frame_index)
+{
+    if (frame_index >= m_requested_buffers)
+        return nullptr;
+    return reinterpret_cast<uint8_t*>
+        (m_image_buffer.get() + (frame_index * m_image_size_qwords));
+}
+
 /**
  * @brief Handle available image buffer for PRO capture
  *
@@ -1627,8 +1689,6 @@ void Magewell::eco_image_buffer_available(uint8_t* pbImage, void* buf)
     {
         m_log->error("buffer_avail: Failed to Q the Eco frame. avail {}",
                      m_image_buffers_avail);
-        delete[] reinterpret_cast<uint8_t *>(pEco->pvFrame);
-        pEco->pvFrame = 0;
         delete pEco;
         pEco = nullptr;
     }
@@ -1647,10 +1707,9 @@ void Magewell::free_image_buffers(void)
     unique_lock<mutex> lock(m_image_buffer_mutex);
 
     // Wait for all buffers to be returned from output thread
-    //    Note: Can lose 1 somewhere, need to track that down.
     int idx;
     for (idx = 0;
-         idx < 3 && m_image_buffers_total > m_image_buffers_avail + 1;
+         idx < 3 && m_image_buffers_total > m_image_buffers_avail;
          ++idx)
     {
         m_log->info("Waiting for Magewell buffers to be returned. "
@@ -1669,19 +1728,7 @@ void Magewell::free_image_buffers(void)
     if (idx == 3)
         m_log->warn("Gave up waiting for Magewell buffers to be returned.\n");
 
-    if (m_isEco)
-    {
-        // Free ECO buffers
-        ecoque_t::iterator Ieco;
-        for (Ieco = m_eco_image_buffers.begin();
-             Ieco != m_eco_image_buffers.end(); ++Ieco)
-        {
-            delete[] reinterpret_cast<uint8_t *>((*Ieco)->pvFrame);
-            (*Ieco)->pvFrame = 0;
-        }
-        m_eco_image_buffers.clear();
-    }
-    else
+    if (!m_isEco)
     {
         // Free PRO buffers
         imageset_t::iterator Iimage;
@@ -1707,38 +1754,44 @@ void Magewell::free_image_buffers(void)
  *
  * @return true if successful, false otherwise
  */
-bool Magewell::add_eco_image_buffer(void)
+bool Magewell::add_eco_image_buffers(void)
 {
     MW_RESULT xr;
-    MWCAP_VIDEO_ECO_CAPTURE_FRAME * pBuf = new MWCAP_VIDEO_ECO_CAPTURE_FRAME;
+    uint      idx;
 
-    // Initialize buffer parameters
-    pBuf->deinterlaceMode = MWCAP_VIDEO_DEINTERLACE_BLEND;
-    pBuf->cbFrame  = m_image_size;
-    pBuf->pvFrame  = reinterpret_cast<MWCAP_PTR>(new uint8_t[m_image_size]);
-    pBuf->cbStride = m_min_stride;
-    pBuf->bBottomUp = false;
-
-    // Check if allocation succeeded
-    if (reinterpret_cast<uint8_t *>(pBuf->pvFrame) == nullptr)
+    if (m_eco_image_buffers.empty())
     {
-        m_log->critical("Eco video frame alloc failed.");
-        return false;
-    }
-    pBuf->pvContext = reinterpret_cast<MWCAP_PTR>(pBuf);
-    memset(reinterpret_cast<uint8_t *>(pBuf->pvFrame), 0, m_image_size);
-
-    // Register buffer with capture system
-    if ((xr = MWCaptureSetVideoEcoFrame(m_channel, pBuf)) != MW_SUCCEEDED)
-    {
-        m_log->critical("MWCaptureSetVideoEcoFrame failed!");
-        return false;
+        for (idx = 0; idx < m_requested_buffers; ++idx)
+        {
+            auto& buf = m_eco_image_buffers.emplace_back
+                        (std::make_unique<MWCAP_VIDEO_ECO_CAPTURE_FRAME>());
+            buf->deinterlaceMode = MWCAP_VIDEO_DEINTERLACE_BLEND;
+            buf->cbFrame  = m_image_size;
+            buf->cbStride = m_min_stride;
+            buf->bBottomUp = false;
+        }
     }
 
-    // Add to buffer set and increment counters
-    m_eco_image_buffers.insert(pBuf);
-    ++m_image_buffers_avail;
-    ++m_image_buffers_total;
+    AllocateImageBuffer();
+
+    ecoque_t::iterator Ibuf;
+    for (Ibuf = m_eco_image_buffers.begin(), idx = 0;
+         Ibuf != m_eco_image_buffers.end(); ++Ibuf, ++idx)
+    {
+        (*Ibuf)->pvFrame = reinterpret_cast<MWCAP_PTR>(GetFrameImage(idx));
+        (*Ibuf)->pvContext = reinterpret_cast<MWCAP_PTR>
+                             (std::to_address(*Ibuf));
+
+        // Register buffer with capture system
+        if ((xr = MWCaptureSetVideoEcoFrame(m_channel,
+                                    std::to_address(*Ibuf))) != MW_SUCCEEDED)
+        {
+            m_log->critical("MWCaptureSetVideoEcoFrame failed!");
+            return false;
+        }
+    }
+
+    m_image_buffers_avail = m_image_buffers_total = m_requested_buffers;
 
     return true;
 }
@@ -1878,7 +1931,6 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     float    skipped_frame_cnt = 0;
     float    skipped = 0;
     int      quarter_dur = eco_params.llFrameDuration / 4;
-    int      eighth_ms  = m_frame_ms / 8;
 
     MWCAP_VIDEO_ECO_CAPTURE_STATUS eco_status;
     MW_RESULT ret;
@@ -1909,7 +1961,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             while (m_image_buffers_avail < 2)
             {
                 m_image_returned.wait_for(lock,
-                                          chrono::milliseconds(4));
+                                          chrono::milliseconds(1));
 
                 if (m_running.load() == false)
                     return true;
@@ -1957,7 +2009,6 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         }
 
         // Get capture status
-        memset(&eco_status, 0, sizeof(eco_status));
         ret = MWGetVideoEcoCaptureStatus(m_channel, &eco_status);
         if (MW_SUCCEEDED != ret
             || eco_status.pvFrame == reinterpret_cast<MWCAP_PTR>(nullptr)
@@ -2108,7 +2159,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 vidpool_tm = current_tm;
             }
         }
-        this_thread::sleep_for(chrono::milliseconds(eighth_ms));
+        this_thread::sleep_for(chrono::milliseconds(1));
     }
 
     return true;
@@ -2757,13 +2808,10 @@ bool Magewell::capture_video(int quality)
                     Shutdown();
                 else
                 {
-                    for (idx = 0; idx < m_requested_buffers; ++idx)
+                    if (!add_eco_image_buffers())
                     {
-                        if (!add_eco_image_buffer())
-                        {
-                            Shutdown();
-                            break;
-                        }
+                        Shutdown();
+                        break;
                     }
                 }
             }

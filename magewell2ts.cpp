@@ -135,7 +135,7 @@ bool string_to_int(string_view st, int &value, string_view var)
                              value);
     if (result.ec == errc::invalid_argument)
     {
-        logger->error("Invalid {}: {}", var, st);
+        cerr << "Invalid " << var << ": " << st << endl;
         value = -1;
         return false;
     }
@@ -149,7 +149,7 @@ bool string_to_float(string_view st, float &value, string_view var)
                              value);
     if (result.ec == errc::invalid_argument)
     {
-        logger->error("Invalid {}: {}", var, st);
+        cerr << "Invalid " << var << ": " << st << endl;
         value = -1;
         return false;
     }
@@ -182,7 +182,7 @@ void setup_logging(int verbose_level, const string& logfile)
                     (logfile, // filename
                      1024 * 1024 * 4,  // max size (4 MB)
                      5,                // max files
-                     false          // rotate on open (optional, default false)
+                     false     // rotate on open (optional, default false)
                      );
         file_sink->set_level(spdlog::level::trace);
         file_sink->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] %v");
