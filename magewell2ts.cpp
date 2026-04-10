@@ -249,6 +249,8 @@ int main(int argc, char* argv[])
     int         video_buffers = 24;
     int         extra_hw_frames = 32;
 
+    std::setvbuf(stdout, nullptr, _IOFBF, 8192);
+
     vector<string_view> args(argv + 1, argv + argc);
 
     {

@@ -1599,9 +1599,11 @@ void Magewell::AllocateImageBuffer(void)
     m_image_size_qwords = (m_image_size + 7) / 8;
     size_t total_qwords = m_image_size_qwords * m_requested_buffers;
 
+#if 0
     m_log->debug("Allocating Magewell frames: {} /8= {} total8 {} for {}KB",
                  m_image_size, m_image_size_qwords,
                  total_qwords, total_qwords * 8 / 1024);
+#endif
 
     if (m_pinned)
         munlock(m_image_buffer.get(), total_qwords * sizeof(uint64_t));
@@ -2131,7 +2133,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                     uint temperature;
                     MWGetTemperature(m_channel, &temperature);
                     m_log->info("Magewell frame pool used 1m:{:<3d} "
-                                "5m:{:<3d} 10m:{:<3d} of {} "
+                                "5m:{:<3d} 10m:{:<3d} of {:3d} "
                                 "(Temp {:.1f}ºC)",
                                 vidpool_used_1m, *vidpool_5m_max,
                                 *vidpool_10m_max, m_image_buffers_total,
