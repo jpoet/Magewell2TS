@@ -1594,7 +1594,7 @@ bool Magewell::update_HDRcolorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status)
     return result;
 }
 
-void Magewell::AllocateImageBuffer(void)
+bool Magewell::AllocateImageBuffer(bool pin)
 {
     m_image_size_qwords = (m_image_size + 7) / 8;
     size_t total_qwords = m_image_size_qwords * m_requested_buffers;
@@ -1606,23 +1606,36 @@ void Magewell::AllocateImageBuffer(void)
 #endif
 
     if (m_pinned)
+    {
         munlock(m_image_buffer.get(), total_qwords * sizeof(uint64_t));
+        m_pinned = false;
+    }
 
     m_image_buffer = std::make_unique<uint64_t[]>(total_qwords);
-    if (mlock(m_image_buffer.get(), total_qwords * sizeof(uint64_t)) != 0)
+    if (m_image_buffer == nullptr)
     {
-        m_log->warn("Failed to PIN Magewell image buffer memory.");
-        m_log->warn("Perhaps update systemd service file with\n",
-                    "[Service]\n"
-                    "LimitMEMLOCK=infinity");
-        m_log->warn("And/or see /etc/security/limits.conf and set to at least "
-                    "{}KB for this user.",
-                    total_qwords * sizeof(uint64_t) / 1024);
-
-        m_log->warn("Performance may suffer.");
+        m_log->critical("Failed to allocate {} for Magewell image buffer",
+                        total_qwords * sizeof(uint64_t));
+        return false;
     }
-    else
-        m_pinned = true;
+
+    if (pin)
+    {
+        if (mlock(m_image_buffer.get(), total_qwords * sizeof(uint64_t)) != 0)
+        {
+            m_log->warn("Failed to PIN Magewell image buffer memory.");
+            m_log->warn("Perhaps update systemd service file with\n",
+                        "[Service]\n"
+                        "LimitMEMLOCK=infinity");
+            m_log->warn("And/or see /etc/security/limits.conf and set "
+                        "to at least {}KB for this user.",
+                        total_qwords * sizeof(uint64_t) / 1024);
+
+            m_log->warn("Performance may suffer.");
+        }
+        else
+            m_pinned = true;
+    }
 
     if (m_isEco && m_verbose > 3)
     {
@@ -1644,6 +1657,8 @@ void Magewell::AllocateImageBuffer(void)
                         strerror(errno));
         }
     }
+
+    return true;
 }
 
 uint8_t* Magewell::GetFrameImage(size_t frame_index)
@@ -1732,21 +1747,37 @@ void Magewell::free_image_buffers(void)
 
     if (!m_isEco)
     {
-        // Free PRO buffers
-        imageset_t::iterator Iimage;
-        for (Iimage = m_pro_image_buffers.begin();
-             Iimage != m_pro_image_buffers.end(); ++Iimage)
+        if (m_pinned)
         {
-            MWUnpinVideoBuffer(m_channel, (LPBYTE)(*Iimage));
-            delete[] (*Iimage);
+            MW_RESULT result;
+            uint8_t*  pbImage;
+
+            for (size_t idx = 0; idx < m_requested_buffers; ++idx)
+            {
+                pbImage = GetFrameImage(idx);
+                result = MWUnpinVideoBuffer(m_channel, pbImage);
+                switch (result)
+                {
+                    case MW_SUCCEEDED:
+                      break;
+                    case MW_FAILED:
+                      m_log->warn("Failed to Unpin Magewell frame buffer.");
+                      break;
+                    case MW_INVALID_PARAMS:
+                      m_log->warn("Failed to Unpin Magewell frame buffer. "
+                                  "Invalid arguments.");
+                      break;
+                    case MW_ENODATA:
+                      break;
+                }
+            }
         }
-        m_pro_image_buffers.clear();
         m_avail_image_buffers.clear();
+        m_pinned = false;
     }
 
     // Reset buffer counters
-    m_image_buffers_avail = 0;
-    m_image_buffers_total = 0;
+    m_image_buffers_total = m_image_buffers_avail = 0;
 }
 
 /**
@@ -1774,7 +1805,8 @@ bool Magewell::add_eco_image_buffers(void)
         }
     }
 
-    AllocateImageBuffer();
+    if (!AllocateImageBuffer(true))
+        return false;
 
     ecoque_t::iterator Ibuf;
     for (Ibuf = m_eco_image_buffers.begin(), idx = 0;
@@ -1805,25 +1837,39 @@ bool Magewell::add_eco_image_buffers(void)
  *
  * @return true if successful, false otherwise
  */
-bool Magewell::add_pro_image_buffer(void)
+bool Magewell::add_pro_image_buffers(void)
 {
-    // Allocate memory for image buffer
-    uint8_t* pbImage =  new uint8_t[m_image_size];
-    if (pbImage == nullptr)
-    {
-        m_log->critical("image buffer alloc fail!");
+    if (!AllocateImageBuffer(false))
         return false;
+
+    MW_RESULT result;
+    uint8_t*  pbImage;
+
+    m_pinned = false;
+    for (size_t idx = 0; idx < m_requested_buffers; ++idx)
+    {
+        pbImage = GetFrameImage(idx);
+        m_avail_image_buffers.push_back(pbImage);
+        result = MWPinVideoBuffer(m_channel, (MWCAP_PTR)pbImage, m_image_size);
+        switch (result)
+        {
+            case MW_SUCCEEDED:
+              m_pinned = true;
+              break;
+            case MW_FAILED:
+              m_log->warn("Failed to Pin Magewell frame buffer.");
+              break;
+            case MW_INVALID_PARAMS:
+              m_log->warn("Failed to Pin Magewell frame buffer. "
+                             "Invalid arguments.");
+              break;
+            case MW_ENODATA:
+              break;
+        }
     }
 
-    // Pin buffer to prevent memory movement
-    MWPinVideoBuffer(m_channel, (MWCAP_PTR)pbImage, m_image_size);
+    m_image_buffers_avail = m_image_buffers_total = m_requested_buffers;
 
-    // Add to buffer sets
-    m_pro_image_buffers.insert(pbImage);
-    m_avail_image_buffers.push_back(pbImage);
-
-    ++m_image_buffers_avail;
-    ++m_image_buffers_total;
     return true;
 }
 
@@ -2281,189 +2327,182 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         if ((ullStatusBits & event_mask) == 0)
             continue;
 
-        do
+        // Get buffer info
+        if (MW_SUCCEEDED != MWGetVideoBufferInfo(m_channel,
+                                                 &videoBufferInfo))
         {
-            // Get buffer info
-            if (MW_SUCCEEDED != MWGetVideoBufferInfo(m_channel,
-                                                     &videoBufferInfo))
+            if (m_verbose > 0)
             {
-                if (m_verbose > 0)
-                {
-                    m_log->warn("Failed to get video buffer info (frame {})",
-                                m_frame_cnt);
-                }
-                continue;
+                m_log->warn("Failed to get video buffer info (frame {})",
+                            m_frame_cnt);
             }
+            continue;
+        }
 
-            // Manage frame index
-            if (frame_idx == -1)
+        // Manage frame index
+        if (frame_idx == -1)
+        {
+            frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
+        }
+        else
+        {
+            if (++frame_idx == frame_wrap_idx)
+                frame_idx = 0;
+        }
+
+        // Get frame info
+        if (MWGetVideoFrameInfo(m_channel, frame_idx,
+                                &videoFrameInfo) != MW_SUCCEEDED)
+        {
+            if (m_verbose > 0)
             {
-                frame_idx = videoBufferInfo.iNewestBufferedFullFrame;
+                m_log->warn("Failed to get video frame info (frame {})",
+                            m_frame_cnt);
+            }
+            continue;
+        }
+
+        timestamp = videoFrameInfo.allFieldBufferedTimes[0];
+        if (m_expected_ts >= 0 &&
+            (timestamp == -1 ||
+             (timestamp < m_expected_ts - eighth_dur ||
+              m_expected_ts + eighth_dur < timestamp)))
+        {
+            if (timestamp == -1)
+            {
+                min_idx = -1;
+                min_ts  = numeric_limits<std::int64_t>::max();
             }
             else
             {
-                if (++frame_idx == frame_wrap_idx)
-                    frame_idx = 0;
+                min_idx = frame_idx;
+                min_ts  = timestamp;
             }
+            desired_ts = m_expected_ts - eighth_dur;
 
-            // Get frame info
-            if (MWGetVideoFrameInfo(m_channel, frame_idx,
-                                    &videoFrameInfo) != MW_SUCCEEDED)
+            // Find the earliest, valid TS
+            for (int i = 0; i < frame_wrap_idx; ++i)
             {
-                if (m_verbose > 0)
-                {
-                    m_log->warn("Failed to get video frame info (frame {})",
-                                m_frame_cnt);
-                }
-                continue;
-            }
+                if (i == frame_idx)
+                    continue;
 
-            timestamp = videoFrameInfo.allFieldBufferedTimes[0];
-            if (m_expected_ts >= 0 &&
-                (timestamp == -1 ||
-                 (timestamp < m_expected_ts - eighth_dur ||
-                  m_expected_ts + eighth_dur < timestamp)))
-            {
-                if (timestamp == -1)
+                // Get frame info
+                if (MWGetVideoFrameInfo(m_channel, i,
+                                        &videoFrameInfo) != MW_SUCCEEDED)
                 {
-                    min_idx = -1;
-                    min_ts  = numeric_limits<std::int64_t>::max();
-                }
-                else
-                {
-                    min_idx = frame_idx;
-                    min_ts  = timestamp;
-                }
-                desired_ts = m_expected_ts - eighth_dur;
-
-                // Find the earliest, valid TS
-                for (int i = 0; i < frame_wrap_idx; ++i)
-                {
-                    if (i == frame_idx)
-                        continue;
-
-                    // Get frame info
-                    if (MWGetVideoFrameInfo(m_channel, i,
-                                            &videoFrameInfo) != MW_SUCCEEDED)
+                    if (m_verbose > 0)
                     {
-                        if (m_verbose > 0)
-                        {
-                            m_log->warn("Failed to get video frame info (frame {})",
-                                        i);
-                        }
-                        continue;
+                        m_log->warn("Failed to get video frame info (frame {})",
+                                    i);
                     }
-                    if (videoFrameInfo.allFieldBufferedTimes[0] > desired_ts &&
-                        videoFrameInfo.allFieldBufferedTimes[0] < min_ts)
-                    {
-                        min_ts = videoFrameInfo.allFieldBufferedTimes[0];
-                        min_idx = i;
-                    }
+                    continue;
                 }
-                if (min_ts == numeric_limits<std::int64_t>::max())
+                if (videoFrameInfo.allFieldBufferedTimes[0] > desired_ts &&
+                    videoFrameInfo.allFieldBufferedTimes[0] < min_ts)
                 {
-                    m_log->warn("None of the MW card buffers are valid.");
-                    break;
+                    min_ts = videoFrameInfo.allFieldBufferedTimes[0];
+                    min_idx = i;
                 }
-
-                skipped = (min_ts - m_expected_ts) / eco_params.llFrameDuration;
-                if (skipped > 0)
-                {
-                    skipped_frame_cnt += skipped;
-                    m_log->warn("DAMAGED: Magewell lost {} frames. Have skipped {} : {}",
-                                skipped, skipped_frame_cnt, m_frame_cnt);
-#if 0
-                    if (skipped > frame_wrap_idx)
-                        Reset();
-#endif
-                }
-
-                frame_idx = min_idx;
-                timestamp = min_ts;
             }
-            m_expected_ts = timestamp + eco_params.llFrameDuration;
-
-            // Get available buffer
+            if (min_ts == numeric_limits<std::int64_t>::max())
             {
-                unique_lock<mutex> lock(m_image_buffer_mutex);
-                if (m_avail_image_buffers.empty())
-                {
-//                    m_log->info("MAGEWELL waiting for local buffer to write frame into.");
-                    while (m_avail_image_buffers.empty())
-                    {
-                        m_image_returned.wait_for(lock,
-                                                  chrono::milliseconds(4));
-                        if (m_running.load() == false)
-                            return true;
-                    }
-                }
-                pbImage = m_avail_image_buffers.front();
-                m_avail_image_buffers.pop_front();
-
-                used = m_image_buffers_total - m_avail_image_buffers.size();
+                m_log->warn("None of the MW card buffers are valid.");
+                break;
             }
 
-            // Capture frame to virtual address
-            result = MWCaptureVideoFrameToVirtualAddress
-                     (m_channel,
-                      frame_idx,
-                      reinterpret_cast<MWCAP_PTR>(pbImage),
-                      m_image_size,
-                      m_min_stride,
-                      0,
-                      0,
-                      eco_params.dwFOURCC,
-                      eco_params.cx,
-                      eco_params.cy);
-
-            ++m_frame_cnt;
-            --m_image_buffers_avail;
-
-            if (result != MW_SUCCEEDED)
+            skipped = (min_ts - m_expected_ts) / eco_params.llFrameDuration;
+            if (skipped > 0)
             {
-                if (m_verbose > 0)
+                skipped_frame_cnt += skipped;
+                m_log->warn("DAMAGED: Magewell lost {} frames. "
+                            "Have skipped {} : {}",
+                            skipped, skipped_frame_cnt, m_frame_cnt);
+
+                if (skipped_frame_cnt % 30 == 0)
                 {
-                    m_log->warn("Damaged: Failed to retrieve next frame "
-                                "[{}] (processed {})", frame_idx, m_frame_cnt);
+                    m_log->error("Going nuclear: "
+                                 "purging Magewell image buffers.");
+                    m_out2ts->ClearImageQueue();
                 }
-                pro_image_buffer_available(pbImage, nullptr);
-                continue;
             }
 
-            // Wait for capture completion
-            if (MWWaitEvent(capture_event, -1) <= 0)
+            frame_idx = min_idx;
+            timestamp = min_ts;
+        }
+        m_expected_ts = timestamp + eco_params.llFrameDuration;
+
+        // Get available buffer
+        {
+            unique_lock<mutex> lock(m_image_buffer_mutex);
+            while (m_avail_image_buffers.empty())
             {
-                if (m_verbose > 0)
-                {
-                    m_log->warn("wait capture event error or timeout "
-                                "(frame {})", m_frame_cnt);
-                }
-                pro_image_buffer_available(pbImage, nullptr);
-                continue;
+                m_image_returned.wait_for(lock,
+                                          chrono::milliseconds(4));
+                if (m_running.load() == false)
+                    return true;
             }
+            pbImage = m_avail_image_buffers.front();
+            m_avail_image_buffers.pop_front();
 
-            // Get capture status
-            MWCAP_VIDEO_CAPTURE_STATUS captureStatus;
-            MWGetVideoCaptureStatus(m_channel, &captureStatus);
+            used = m_image_buffers_total - m_avail_image_buffers.size();
+        }
 
-            // Add frame to output handler
-            m_out2ts->AddVideoFrame(pbImage, nullptr,
-                                    m_num_pixels, timestamp);
+        // Capture frame to virtual address
+        result = MWCaptureVideoFrameToVirtualAddress
+                 (m_channel,
+                  frame_idx,
+                  reinterpret_cast<MWCAP_PTR>(pbImage),
+                  m_image_size,
+                  m_min_stride,
+                  0,
+                  0,
+                  eco_params.dwFOURCC,
+                  eco_params.cx,
+                  eco_params.cy);
 
+        ++m_frame_cnt;
+        --m_image_buffers_avail;
+
+        if (result != MW_SUCCEEDED)
+        {
             if (m_verbose > 0)
             {
-                if (vidpool_used_1m < used)
-                    vidpool_used_1m = used;
-                if (vidpool_used_5m[vidpool_5m_idx] < used)
-                    vidpool_used_5m[vidpool_5m_idx] = used;
-                if (vidpool_used_10m[vidpool_10m_idx] < used)
-                    vidpool_used_10m[vidpool_10m_idx] = used;
+                m_log->warn("Damaged: Failed to retrieve next frame "
+                            "[{}] (processed {})", frame_idx, m_frame_cnt);
             }
+            pro_image_buffer_available(pbImage, nullptr);
+            continue;
         }
-        while (frame_idx != videoBufferInfo.iNewestBufferedFullFrame);
+
+        // Wait for capture completion
+        if (MWWaitEvent(capture_event, -1) <= 0)
+        {
+            if (m_verbose > 0)
+            {
+                m_log->warn("wait capture event error or timeout "
+                            "(frame {})", m_frame_cnt);
+            }
+            pro_image_buffer_available(pbImage, nullptr);
+            continue;
+        }
+
+        // Get capture status
+        MWCAP_VIDEO_CAPTURE_STATUS captureStatus;
+        MWGetVideoCaptureStatus(m_channel, &captureStatus);
+
+        // Add frame to output handler
+        m_out2ts->AddVideoFrame(pbImage, nullptr,
+                                m_num_pixels, timestamp);
 
         if (m_verbose > 0)
         {
+            if (vidpool_used_1m < used)
+                vidpool_used_1m = used;
+            if (vidpool_used_5m[vidpool_5m_idx] < used)
+                vidpool_used_5m[vidpool_5m_idx] = used;
+            if (vidpool_used_10m[vidpool_10m_idx] < used)
+                vidpool_used_10m[vidpool_10m_idx] = used;
+
             current_tm = chrono::steady_clock::now();
             duration = chrono::duration_cast<chrono::seconds>
                        (current_tm - vidpool_tm).count();
@@ -2543,7 +2582,6 @@ bool Magewell::capture_video(int quality)
 
     int       bpp = 0;
     ULONGLONG ullStatusBits = 0;
-    size_t    idx;
     bool      rejected = false;
 
 #if 0
@@ -2820,13 +2858,10 @@ bool Magewell::capture_video(int quality)
             else
             {
                 free_image_buffers();
-                for (idx = 0; idx < m_requested_buffers; ++idx)
+                if (!add_pro_image_buffers())
                 {
-                    if (!add_pro_image_buffer())
-                    {
-                        Shutdown();
-                        break;
-                    }
+                    Shutdown();
+                    break;
                 }
             }
 

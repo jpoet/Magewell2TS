@@ -162,7 +162,7 @@ private:
      */
     bool update_HDRinfo(void);
 
-    void     AllocateImageBuffer(void);
+    bool     AllocateImageBuffer(bool pin);
     uint8_t* GetFrameImage(size_t frame_idx);
 
     /**
@@ -183,7 +183,7 @@ private:
      * @brief Add a new PRO image buffer
      * @return true if successful, false otherwise
      */
-    bool add_pro_image_buffer(void);
+    bool add_pro_image_buffers(void);
 
     /**
      * @brief Add ECO image buffers
@@ -292,7 +292,6 @@ private:
     size_t       m_requested_buffers       {0};
     size_t       m_image_buffers_total     {0}; ///< Total image buffers
     size_t       m_image_buffers_avail     {0}; ///< Available image buffers
-    imageset_t   m_pro_image_buffers;           ///< Set of image buffers
     imageque_t   m_avail_image_buffers;         ///< Queue of available buffers
     ecoque_t     m_eco_image_buffers;           ///< Set of ECO buffers
     std::mutex   m_image_buffer_mutex;          ///< Mutex for buffer access
