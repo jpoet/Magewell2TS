@@ -2417,13 +2417,6 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 m_log->warn("DAMAGED: Magewell lost {} frames. "
                             "Have skipped {} : {}",
                             skipped, skipped_frame_cnt, m_frame_cnt);
-
-                if (skipped_frame_cnt % 30 == 0)
-                {
-                    m_log->error("Going nuclear: "
-                                 "purging Magewell image buffers.");
-                    m_out2ts->ClearImageQueue();
-                }
             }
 
             frame_idx = min_idx;
