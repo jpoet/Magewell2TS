@@ -1076,11 +1076,7 @@ void OutputTS::close_encoder(OutputStream* ost)
         ost->enc->hw_frames_ctx = nullptr;
     }
 
-    // Note: FFmpeg docs suggest not to free codec context multiple times
-    // This is commented out to avoid double-free issues
-#if 0
     avcodec_free_context(&ost->enc);
-#endif
     ost->enc = nullptr;
 }
 
