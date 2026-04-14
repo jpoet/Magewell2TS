@@ -1624,8 +1624,7 @@ bool Magewell::AllocateImageBuffer(bool pin)
         if (mlock(m_image_buffer.get(), total_qwords * sizeof(uint64_t)) != 0)
         {
             m_log->warn("Failed to PIN Magewell image buffer memory.");
-            m_log->warn("Perhaps update systemd service file with\n",
-                        "[Service]\n"
+            m_log->warn("Perhaps update systemd service file with: "
                         "LimitMEMLOCK=infinity");
             m_log->warn("And/or see /etc/security/limits.conf and set "
                         "to at least {}KB for this user.",

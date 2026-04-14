@@ -29,6 +29,7 @@
 #include <memory>
 
 #include <vector>
+#include <filesystem>
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_sinks.h>
 #include "spdlog/sinks/rotating_file_sink.h"
@@ -157,7 +158,7 @@ bool string_to_float(string_view st, float &value, string_view var)
     return true;
 }
 
-void setup_logging(int verbose_level, const string& logfile)
+void setup_logging(int verbose_level, const string& logpath)
 {
     // Create console sink
     auto console_sink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
@@ -174,23 +175,34 @@ void setup_logging(int verbose_level, const string& logfile)
 
     console_sink->set_pattern("%l: %v");
 
-    // Create file sink if logfile is specified
+    // Create file sink if logpath is specified
     std::shared_ptr<spdlog::sinks::sink> file_sink;
-    if (!logfile.empty())
+    if (!logpath.empty())
     {
-        file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>
-                    (logfile, // filename
-                     1024 * 1024 * 4,  // max size (4 MB)
-                     5,                // max files
-                     false     // rotate on open (optional, default false)
-                     );
-        file_sink->set_level(spdlog::level::trace);
-        file_sink->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] %v");
+        try
+        {
+            filesystem::path path(logpath);
+            if (!path.parent_path().empty())
+                filesystem::create_directories(path.parent_path());
 
-        // Combine sinks into a vector
-        std::vector<spdlog::sink_ptr> sinks {console_sink, file_sink};
-        logger = std::make_shared<spdlog::logger>("app_logger",
-                                                  begin(sinks), end(sinks));
+            file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>
+                        (logpath, // filename
+                         1024 * 1024 * 3,  // max size (4 MB)
+                         3,                // max files
+                         false     // rotate on open (optional, default false)
+                         );
+            file_sink->set_level(spdlog::level::trace);
+            file_sink->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] %v");
+
+            // Combine sinks into a vector
+            std::vector<spdlog::sink_ptr> sinks {console_sink, file_sink};
+            logger = std::make_shared<spdlog::logger>("app_logger",
+                                                      begin(sinks), end(sinks));
+        }
+        catch (const filesystem::filesystem_error& e)
+        {
+            cerr << "Error creating log file: " << e.what() << '\n';
+        }
     }
     else
     {
@@ -222,7 +234,7 @@ int main(int argc, char* argv[])
     int    boardId  = -1;
     int    devIndex = -1;
 
-    string      logfile;
+    string      logpath;
     int         verbose_level = 1;
 
     string_view app_name = argv[0];
@@ -281,7 +293,7 @@ int main(int argc, char* argv[])
         }
         else if (*iter == "--logfile")
         {
-            logfile = *(++iter);
+            logpath = *(++iter);
         }
         else if (*iter == "-l" || *iter == "--list")
         {
@@ -400,7 +412,7 @@ int main(int argc, char* argv[])
     }
 
     // Initialize logging
-    setup_logging(verbose_level, logfile);
+    setup_logging(verbose_level, logpath);
 
     string argstr;
     for (int idx = 0; idx < argc; ++idx)
