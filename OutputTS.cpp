@@ -367,9 +367,7 @@ bool OutputTS::open_audio(void)
 
     // Log audio stream addition if verbose level is high enough
     if (m_verbose > 1)
-    {
-        m_log->info("Adding audio stream.");
-    }
+        m_log->info("Opening {} encoder", m_audioIO->CodecName());
 
     const AVCodec* audio_codec = nullptr;
 
@@ -618,7 +616,7 @@ bool OutputTS::open_video(void)
     close_encoder(&m_video_stream);
 
     if (m_verbose > 1)
-        m_log->info("Opening video.");
+        m_log->info("Opening {} encoder", m_video_codec_name);
 
     AVDictionary* opt = NULL;
     const AVCodec* video_codec =
@@ -726,7 +724,7 @@ bool OutputTS::open_video(void)
         m_video_stream.frames_idx_in  = -1;
         m_video_stream.frames_idx_out = -1;
         m_video_stream.frames_used    = 0;
-        m_video_stream.frames_total   = m_frame_buffers;
+        m_video_stream.frames_total   = 0;
 
         if (m_gop_secs > 0)
         {
@@ -757,23 +755,22 @@ bool OutputTS::open_video(void)
             default:
               m_log->error("Could not determine video encoder type.");
               return false;
+        }
 
-              unique_lock<mutex> lock(m_videopool_mutex);
-              // Set HDR metadata for frames
-              if (m_isHDR)
-              {
-                  for (int idx = 0; idx < m_video_stream.frames_total; ++idx)
-                  {
-                      AVFrame* frm = m_video_stream.frames[idx].frame;
+        // Set HDR metadata for frames
+        if (m_isHDR)
+        {
+            for (int idx = 0; idx < m_video_stream.frames_total; ++idx)
+            {
+                AVFrame* frm = m_video_stream.frames[idx].frame;
 
-                      AVMasteringDisplayMetadata* primaries =
-                          av_mastering_display_metadata_create_side_data(frm);
-                      *primaries = *m_display_primaries;
-                      AVContentLightMetadata* light =
-                          av_content_light_metadata_create_side_data(frm);
-                      *light = *m_content_light;
-                  }
-              }
+                AVMasteringDisplayMetadata* primaries =
+                    av_mastering_display_metadata_create_side_data(frm);
+                *primaries = *m_display_primaries;
+                AVContentLightMetadata* light =
+                    av_content_light_metadata_create_side_data(frm);
+                *light = *m_content_light;
+            }
         }
     }
     DiscardImages(-1, "done initializing video.");
@@ -1443,9 +1440,6 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
     AVCodecContext* ctx = ost->enc;
     AVDictionary* opt = NULL;
 
-    if (m_verbose > 1)
-        m_log->info("Opening nVidia encoder.");
-
     av_dict_copy(&opt, opt_arg, 0);
 
     // Set encoder options
@@ -1499,6 +1493,7 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
     }
 
     // Allocate reusable frames
+    m_video_stream.frames_total   = m_frame_buffers;
     ost->frames = new OutputStream::FramePool[ost->frames_total];
     for (int idx = 0; idx < ost->frames_total; ++idx)
     {
@@ -1622,9 +1617,6 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     int ret;
     AVDictionary* opt = nullptr;
 
-    if (m_verbose > 1)
-        m_log->info("Opening VAAPI encoder.");
-
     av_dict_copy(&opt, opt_arg, 0);
 
     // Set encoder options
@@ -1688,9 +1680,6 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     int    ret;
 
     AVDictionary* opt = nullptr;
-
-    if (m_verbose > 1)
-        m_log->info("Opening QSV encoder.");
 
     av_dict_copy(&opt, opt_arg, 0);
 
