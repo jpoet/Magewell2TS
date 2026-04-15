@@ -162,7 +162,7 @@ private:
      */
     bool update_HDRinfo(void);
 
-    bool     AllocateImageBuffer(bool pin);
+    size_t   AllocateImageBuffer(void);
     uint8_t* GetFrameImage(size_t frame_idx);
 
     /**

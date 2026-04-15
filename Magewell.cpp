@@ -1594,7 +1594,7 @@ bool Magewell::update_HDRcolorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status)
     return result;
 }
 
-bool Magewell::AllocateImageBuffer(bool pin)
+size_t Magewell::AllocateImageBuffer(void)
 {
     m_image_size_qwords = (m_image_size + 7) / 8;
     size_t total_qwords = m_image_size_qwords * m_requested_buffers;
@@ -1605,59 +1605,15 @@ bool Magewell::AllocateImageBuffer(bool pin)
                  total_qwords, total_qwords * 8 / 1024);
 #endif
 
-    if (m_pinned)
-    {
-        munlock(m_image_buffer.get(), total_qwords * sizeof(uint64_t));
-        m_pinned = false;
-    }
-
     m_image_buffer = std::make_unique<uint64_t[]>(total_qwords);
     if (m_image_buffer == nullptr)
     {
         m_log->critical("Failed to allocate {} for Magewell image buffer",
                         total_qwords * sizeof(uint64_t));
-        return false;
+        return 0;
     }
 
-    if (pin)
-    {
-        if (mlock(m_image_buffer.get(), total_qwords * sizeof(uint64_t)) != 0)
-        {
-            m_log->warn("Failed to PIN Magewell image buffer memory.");
-            m_log->warn("Perhaps update systemd service file with: "
-                        "LimitMEMLOCK=infinity");
-            m_log->warn("And/or see /etc/security/limits.conf and set "
-                        "to at least {}KB for this user.",
-                        total_qwords * sizeof(uint64_t) / 1024);
-
-            m_log->warn("Performance may suffer.");
-        }
-        else
-            m_pinned = true;
-    }
-
-    if (m_isEco && m_verbose > 3)
-    {
-        struct rlimit rl;
-        if (getrlimit(RLIMIT_MEMLOCK, &rl) == 0)
-        {
-            // RLIMIT_MEMLOCK corresponds to ulimit -l
-            m_log->info("Current soft memory limit (-l): {}",
-                        (rl.rlim_cur == RLIM_INFINITY) ?
-                        "unlimited" : std::to_string(rl.rlim_cur));
-            m_log->info("Current hard memory limit (-l): {}",
-                        (rl.rlim_max == RLIM_INFINITY) ?
-                        "unlimited" : std::to_string(rl.rlim_max));
-        }
-        else
-        {
-            m_log->warn("Failed to check current "
-                        "'maximum locked-in-memory size': {}",
-                        strerror(errno));
-        }
-    }
-
-    return true;
+    return total_qwords;
 }
 
 uint8_t* Magewell::GetFrameImage(size_t frame_index)
@@ -1722,6 +1678,7 @@ void Magewell::free_image_buffers(void)
 {
     unique_lock<mutex> lock(m_image_buffer_mutex);
 
+#if 0
     // Wait for all buffers to be returned from output thread
     int idx;
     for (idx = 0;
@@ -1743,8 +1700,18 @@ void Magewell::free_image_buffers(void)
     }
     if (idx == 3)
         m_log->warn("Gave up waiting for Magewell buffers to be returned.\n");
+#endif
 
-    if (!m_isEco)
+    if (m_isEco)
+    {
+        if (m_pinned)
+        {
+            size_t total_qwords = m_image_size_qwords * m_requested_buffers;
+            munlock(m_image_buffer.get(), total_qwords * sizeof(uint64_t));
+            m_pinned = false;
+        }
+    }
+    else
     {
         if (m_pinned)
         {
@@ -1804,8 +1771,44 @@ bool Magewell::add_eco_image_buffers(void)
         }
     }
 
-    if (!AllocateImageBuffer(true))
+    size_t total_qwords = AllocateImageBuffer();
+    if (total_qwords == 0)
         return false;
+
+    if (mlock(m_image_buffer.get(), total_qwords * sizeof(uint64_t)) != 0)
+    {
+        m_log->warn("Failed to PIN Magewell image buffer memory.");
+        m_log->warn("Perhaps update systemd service file with: "
+                    "LimitMEMLOCK=infinity");
+        m_log->warn("And/or see /etc/security/limits.conf and set "
+                    "to at least {}KB for this user.",
+                    total_qwords * sizeof(uint64_t) / 1024);
+
+        m_log->warn("Performance may suffer.");
+    }
+    else
+        m_pinned = true;
+
+    if (m_verbose > 3)
+    {
+        struct rlimit rl;
+        if (getrlimit(RLIMIT_MEMLOCK, &rl) == 0)
+        {
+            // RLIMIT_MEMLOCK corresponds to ulimit -l
+            m_log->info("Current soft memory limit (-l): {}",
+                        (rl.rlim_cur == RLIM_INFINITY) ?
+                        "unlimited" : std::to_string(rl.rlim_cur));
+            m_log->info("Current hard memory limit (-l): {}",
+                        (rl.rlim_max == RLIM_INFINITY) ?
+                        "unlimited" : std::to_string(rl.rlim_max));
+        }
+        else
+        {
+            m_log->warn("Failed to check current "
+                        "'maximum locked-in-memory size': {}",
+                        strerror(errno));
+        }
+    }
 
     ecoque_t::iterator Ibuf;
     for (Ibuf = m_eco_image_buffers.begin(), idx = 0;
@@ -1838,7 +1841,7 @@ bool Magewell::add_eco_image_buffers(void)
  */
 bool Magewell::add_pro_image_buffers(void)
 {
-    if (!AllocateImageBuffer(false))
+    if (AllocateImageBuffer() == 0)
         return false;
 
     MW_RESULT result;
