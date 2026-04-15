@@ -724,7 +724,7 @@ bool OutputTS::open_video(void)
         m_video_stream.frames_idx_in  = -1;
         m_video_stream.frames_idx_out = -1;
         m_video_stream.frames_used    = 0;
-        m_video_stream.frames_total   = 0;
+        m_video_stream.frames_total   = m_frame_buffers;
 
         if (m_gop_secs > 0)
         {
@@ -1493,7 +1493,6 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
     }
 
     // Allocate reusable frames
-    m_video_stream.frames_total   = m_frame_buffers;
     ost->frames = new OutputStream::FramePool[ost->frames_total];
     for (int idx = 0; idx < ost->frames_total; ++idx)
     {
