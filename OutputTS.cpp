@@ -2051,56 +2051,60 @@ void OutputTS::copy_to_frame(void)
 
             if (++m_video_stream.frames_idx_in == m_video_stream.frames_total)
                 m_video_stream.frames_idx_in = 0;
+        }
 
-            m_video_stream.frames[m_video_stream.frames_idx_in]
-                .timestamp = timestamp;
-            AVFrame* frm = m_video_stream
-                           .frames[m_video_stream.frames_idx_in].frame;
+        m_video_stream.frames[m_video_stream.frames_idx_in]
+            .timestamp = timestamp;
+        AVFrame* frm = m_video_stream
+                       .frames[m_video_stream.frames_idx_in].frame;
 
-            frm->pts = av_rescale_q(timestamp,
-                                    m_input_time_base,
-                                    m_video_stream.enc->time_base);
+        frm->pts = av_rescale_q(timestamp,
+                                m_input_time_base,
+                                m_video_stream.enc->time_base);
 
-            if (m_video_stream.hw_frames_ctx)
+        if (m_video_stream.hw_frames_ctx)
+        {
+            // Map hardware frame to temporary frame
+            if ((ret = av_hwframe_map(m_video_stream.tmp_frame, frm,
+                                      AV_HWFRAME_MAP_WRITE |
+                                      AV_HWFRAME_MAP_OVERWRITE)) < 0)
             {
-                // Map hardware frame to temporary frame
-                if ((ret = av_hwframe_map(m_video_stream.tmp_frame, frm,
-                                          AV_HWFRAME_MAP_WRITE |
-                                          AV_HWFRAME_MAP_OVERWRITE)) < 0)
-                {
-                    m_log->critical("Could not map hw frame: {}",
-                                    AVerr2str(ret));
-                    Shutdown();
-                    return;
-                }
-                dst_frame = m_video_stream.tmp_frame;
+                m_log->critical("Could not map hw frame: {}",
+                                AVerr2str(ret));
+                Shutdown();
+                return;
             }
-            else
-                dst_frame = frm;
+            dst_frame = m_video_stream.tmp_frame;
+        }
+        else
+            dst_frame = frm;
 
-            // Copy frame data based on pixel format
-            if (m_video_stream.enc->pix_fmt == AV_PIX_FMT_YUV420P)
-            {
-                // YUV 4:2:0
-                memcpy(dst_frame->data[0], pImage, image_size);
-                memcpy(dst_frame->data[1], pImage + image_size, image_size / 4);
-                memcpy(dst_frame->data[2], pImage + image_size * 5 / 4,
-                       image_size / 4);
-            }
-            else
-            {
-                memcpy(dst_frame->data[0], pImage, image_size);
-                memcpy(dst_frame->data[1], pImage + image_size,
-                       image_size / 2);
-            }
+        // Copy frame data based on pixel format
+        if (m_video_stream.enc->pix_fmt == AV_PIX_FMT_YUV420P)
+        {
+            // YUV 4:2:0
+            memcpy(dst_frame->data[0], pImage, image_size);
+            memcpy(dst_frame->data[1], pImage + image_size, image_size / 4);
+            memcpy(dst_frame->data[2], pImage + image_size * 5 / 4,
+                   image_size / 4);
+        }
+        else
+        {
+            memcpy(dst_frame->data[0], pImage, image_size);
+            memcpy(dst_frame->data[1], pImage + image_size,
+                   image_size / 2);
+        }
 
-            if (m_video_stream.hw_frames_ctx)
-            {
-                // Unmap and cleanup
-                av_frame_unref(m_video_stream.tmp_frame);
-            }
+        if (m_video_stream.hw_frames_ctx)
+        {
+            // Unmap and cleanup
+            av_frame_unref(m_video_stream.tmp_frame);
+        }
 
-            f_image_buffer_available(pImage, pEco);
+        f_image_buffer_available(pImage, pEco);
+
+        {
+            unique_lock<mutex> lock(m_videopool_mutex);
             used = ++m_video_stream.frames_used;
         }
         m_videopool_ready.notify_one();
