@@ -173,7 +173,6 @@ class OutputTS
     OutputStream m_audio_stream { 0 };
 
     int              m_verbose;
-    int              m_discard_images         {0};
 
     std::string      m_filename               {"pipe:1"};
 
@@ -222,10 +221,12 @@ class OutputTS
     std::condition_variable m_videopool_ready;
     std::condition_variable m_videopool_avail;
     std::condition_variable m_videopool_empty;
+    bool                    m_videopool_is_empty {true};
 
     std::mutex              m_imagequeue_mutex;
     std::condition_variable m_imagequeue_ready;
     std::condition_variable m_imagequeue_empty;
+    int                     m_discard_images      {0};
     bool                    m_imagequeue_is_empty {true};
 
     std::atomic<bool>       m_running      {true};

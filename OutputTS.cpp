@@ -706,73 +706,70 @@ bool OutputTS::open_video(void)
                     m_interlaced ? 'i' : 'p');
     }
 
+    // Reset reusable frames
+    if (m_video_stream.frames != nullptr)
     {
-        unique_lock<mutex> lock(m_videopool_mutex);
-
-        // Reset reusable frames
-        if (m_video_stream.frames != nullptr)
+        for (int idx = 0; idx < m_video_stream.frames_total; ++idx)
         {
-            for (int idx = 0; idx < m_video_stream.frames_total; ++idx)
-            {
-                av_frame_free(&m_video_stream.frames[idx].frame);
-                m_video_stream.frames[idx].frame = nullptr;
-            }
-            delete[] m_video_stream.frames;
-            m_video_stream.frames = nullptr;
+            av_frame_free(&m_video_stream.frames[idx].frame);
+            m_video_stream.frames[idx].frame = nullptr;
         }
-        m_video_stream.frame = nullptr;
-        m_video_stream.frames_idx_in  = -1;
-        m_video_stream.frames_idx_out = -1;
-        m_video_stream.frames_used    = 0;
-        m_video_stream.frames_total   = m_frame_buffers;
+        delete[] m_video_stream.frames;
+        m_video_stream.frames = nullptr;
+    }
+    m_video_stream.frame = nullptr;
+    m_video_stream.frames_idx_in  = -1;
+    m_video_stream.frames_idx_out = -1;
+    m_video_stream.frames_used    = 0;
+    m_video_stream.frames_total   = m_frame_buffers;
 
-        if (m_gop_secs > 0)
-        {
-            m_video_stream.enc->gop_size =
-                (static_cast<double>(m_input_frame_rate.num) /
-                 static_cast<double>(m_input_frame_rate.den) *
-                 static_cast<double>(m_gop_secs) + 0.5);
-            if (m_verbose > 1)
-                m_log->info("GOP size set to {} frames.",
-                            m_video_stream.enc->gop_size);
-        }
+    if (m_gop_secs > 0)
+    {
+        m_video_stream.enc->gop_size =
+            (static_cast<double>(m_input_frame_rate.num) /
+             static_cast<double>(m_input_frame_rate.den) *
+             static_cast<double>(m_gop_secs) + 0.5);
+        if (m_verbose > 1)
+            m_log->info("GOP size set to {} frames.",
+                        m_video_stream.enc->gop_size);
+    }
 
-        // Open encoder based on type
-        switch (m_encoderType)
-        {
-            case EncoderType::QSV:
-              if (!open_qsv(video_codec, &m_video_stream, opt))
-                  return false;
-              break;
-            case EncoderType::VAAPI:
-              if (!open_vaapi(video_codec, &m_video_stream, opt))
-                  return false;
-              break;
-            case EncoderType::NV:
-              if (!open_nvidia(video_codec, &m_video_stream, opt))
-                  return false;
-              break;
-            default:
-              m_log->error("Could not determine video encoder type.");
+    // Open encoder based on type
+    switch (m_encoderType)
+    {
+        case EncoderType::QSV:
+          if (!open_qsv(video_codec, &m_video_stream, opt))
               return false;
-        }
+          break;
+        case EncoderType::VAAPI:
+          if (!open_vaapi(video_codec, &m_video_stream, opt))
+              return false;
+          break;
+        case EncoderType::NV:
+          if (!open_nvidia(video_codec, &m_video_stream, opt))
+              return false;
+          break;
+        default:
+          m_log->error("Could not determine video encoder type.");
+          return false;
+    }
 
-        // Set HDR metadata for frames
-        if (m_isHDR)
+    // Set HDR metadata for frames
+    if (m_isHDR)
+    {
+        for (int idx = 0; idx < m_video_stream.frames_total; ++idx)
         {
-            for (int idx = 0; idx < m_video_stream.frames_total; ++idx)
-            {
-                AVFrame* frm = m_video_stream.frames[idx].frame;
+            AVFrame* frm = m_video_stream.frames[idx].frame;
 
-                AVMasteringDisplayMetadata* primaries =
-                    av_mastering_display_metadata_create_side_data(frm);
-                *primaries = *m_display_primaries;
-                AVContentLightMetadata* light =
-                    av_content_light_metadata_create_side_data(frm);
-                *light = *m_content_light;
-            }
+            AVMasteringDisplayMetadata* primaries =
+                av_mastering_display_metadata_create_side_data(frm);
+            *primaries = *m_display_primaries;
+            AVContentLightMetadata* light =
+                av_content_light_metadata_create_side_data(frm);
+            *light = *m_content_light;
         }
     }
+
     DiscardImages(-1, "done initializing video.");
     return true;
 }
@@ -943,21 +940,16 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
     DiscardImages(1, "initializing video.");
     {
         unique_lock<mutex> lock(m_imagequeue_mutex);
-        while (m_running.load() && !m_imagequeue_is_empty)
+        while (m_running.load() &&
+               (!m_imagequeue_is_empty ||
+                !m_videopool_is_empty))
         {
             m_imagequeue_empty.wait_for(lock,
                          std::chrono::milliseconds(m_input_frame_wait_ms));
         }
-        m_imagequeue_is_empty = false;
     }
-    {
-        std::unique_lock<std::mutex> lock(m_videopool_mutex);
-        while (m_running.load() && m_video_stream.frames_used != 0)
-        {
-            m_videopool_empty.wait_for(lock,
-                         std::chrono::milliseconds(m_input_frame_wait_ms));
-        }
-    }
+    if (!m_running.load())
+        return false;
 
     // Update video parameters
     m_input_width = width;
@@ -1894,12 +1886,12 @@ void OutputTS::mux(void)
                 if (++m_video_stream.frames_idx_out
                     == m_video_stream.frames_total)
                     m_video_stream.frames_idx_out = 0;
-            }
 
-            m_video_stream.frame = m_video_stream
-                       .frames[m_video_stream.frames_idx_out].frame;
-            m_video_stream.timestamp = m_video_stream
-                       .frames[m_video_stream.frames_idx_out].timestamp;
+                m_video_stream.frame = m_video_stream
+                                       .frames[m_video_stream.frames_idx_out].frame;
+                m_video_stream.timestamp = m_video_stream
+                                           .frames[m_video_stream.frames_idx_out].timestamp;
+            }
 
             // Encode with appropriate encoder
             if (m_encoderType == EncoderType::NV)
@@ -1968,9 +1960,7 @@ void OutputTS::DiscardImages(int val, const string & why)
     }
 
     if (val >= 0)
-    {
         ClearImageQueue();
-    }
 }
 
 /**
@@ -2004,27 +1994,22 @@ void OutputTS::copy_to_frame(void)
     while (m_running.load() == true)
     {
         {
-            std::unique_lock<std::mutex> lock_i(m_imagequeue_mutex);
+            unique_lock<mutex> lock(m_imagequeue_mutex);
 
             for (;;)
             {
-                if (m_imagequeue.empty())
-                {
-                    m_imagequeue_is_empty = true;
-                    m_imagequeue_empty.notify_one();
-                    m_imagequeue_ready.wait_for(lock_i,
-                        std::chrono::milliseconds(m_input_frame_wait_ms));
-                    if (m_running.load() == false)
-                        return;
-                }
-                else
-                {
-                    if (m_discard_images)
-                    {
-                        ClearImageQueue();
-                        continue;
-                    }
+                m_videopool_is_empty  = (m_video_stream.frames_used == 0);
+                m_imagequeue_is_empty = m_imagequeue.empty();
 
+                if (m_discard_images > 0)
+                {
+                    ClearImageQueue();
+                    if (m_videopool_is_empty && m_imagequeue_is_empty)
+                        m_imagequeue_empty.notify_one();
+                }
+
+                if (!m_imagequeue_is_empty)
+                {
                     pImage     = m_imagequeue.front().image;
                     pEco       = m_imagequeue.front().pEco;
                     image_size = m_imagequeue.front().image_size;
@@ -2033,18 +2018,26 @@ void OutputTS::copy_to_frame(void)
                     m_imagequeue.pop_front();
                     break;
                 }
+
+                m_imagequeue_ready.wait_for(lock,
+                        std::chrono::milliseconds(m_input_frame_wait_ms));
+
+                if (m_running.load() == false)
+                    return;
             }
         }
+
 
         {
             unique_lock<mutex> lock(m_videopool_mutex);
 
             for (;;)
             {
-                if (m_video_stream.frames_used < m_video_stream.frames_total)
+                if (m_video_stream.frames_used
+                    < m_video_stream.frames_total)
                     break;
                 m_videopool_avail.wait_for(lock,
-                            std::chrono::milliseconds(m_input_frame_wait_ms));
+                           std::chrono::milliseconds(m_input_frame_wait_ms));
                 if (m_running.load() == false)
                     return;
             }
@@ -2171,12 +2164,9 @@ void OutputTS::AddVideoFrame(uint8_t* pImage, void* pEco,
     const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
 
     if (m_discard_images > 0)
-    {
         f_image_buffer_available(pImage, pEco);
-    }
     else
-    {
         m_imagequeue.push_back(imagepkt_t{timestamp, pImage, pEco, imageSize});
-        m_imagequeue_ready.notify_one();
-    }
+
+    m_imagequeue_ready.notify_one();
 }
