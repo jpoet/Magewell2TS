@@ -2061,9 +2061,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         // Get capture status
         ret = MWGetVideoEcoCaptureStatus(m_channel, &eco_status);
         if (MW_SUCCEEDED != ret
-            || eco_status.pvFrame == reinterpret_cast<MWCAP_PTR>(nullptr)
-//            || eco_status.llTimestamp < 0
-            )
+            || eco_status.pvFrame == reinterpret_cast<MWCAP_PTR>(nullptr))
         {
             this_thread::sleep_for(chrono::milliseconds(1));
             continue;
@@ -2209,7 +2207,6 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 vidpool_tm = current_tm;
             }
         }
-        this_thread::sleep_for(chrono::milliseconds(1));
     }
 
     return true;
@@ -2539,7 +2536,6 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 vidpool_tm = current_tm;
             }
         }
-        this_thread::sleep_for(chrono::milliseconds(1));
     }
 
     return true;
