@@ -27,6 +27,7 @@
 #include <charconv>
 #include <csignal>
 #include <memory>
+#include <format>
 
 #include <vector>
 #include <filesystem>
@@ -64,7 +65,7 @@ void signal_handler(int signum)
 
 void show_help(string_view app)
 {
-    clog << app << endl;
+    clog << format("{} Version: {}\n", app, project::version::full_version);
 
     clog << "\n"
          << "Defaults in []:\n"
@@ -404,6 +405,11 @@ int main(int argc, char* argv[])
             }
             verbose_level = v;
         }
+        else if (*iter == "--version")
+        {
+            clog << format("Version: {}\n", project::version::full_version);
+            exit(0);
+        }
         else
         {
             cerr << "Unrecognized option " << *iter << endl;
@@ -417,6 +423,7 @@ int main(int argc, char* argv[])
     string argstr;
     for (int idx = 0; idx < argc; ++idx)
         argstr += format("{} ", argv[idx]);
+    argstr += format("[version {}]", project::version::full_version);
     logger->critical(argstr);
 
     g_mw = new Magewell;

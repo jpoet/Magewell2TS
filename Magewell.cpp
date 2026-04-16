@@ -1229,7 +1229,7 @@ void Magewell::capture_audio_loop(void)
             // Handle signal change
             if (!m_isEco)
             {
-                // TODO: Sometime spurious, what to do?
+                // Can be suprious from "bad" devices.
                 if (notify_status & MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE)
                 {
                     if (m_verbose > 0)
@@ -2964,8 +2964,8 @@ bool Magewell::Capture(const string & video_codec,
                        bool p010, const string & gpu_device, float gop_secs,
                        int extra_hw_frames, int gpu_buffers, int video_buffers)
 {
-    m_p010     = p010;
-    m_requested_buffers    = video_buffers;
+    m_p010 = p010;
+    m_requested_buffers = video_buffers;
 
     // Display input information if verbose
     if (m_verbose > 1)

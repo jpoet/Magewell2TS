@@ -1,3 +1,6 @@
-// the configured options and settings for Magewell2ts
-#define magewellpro2ts_VERSION_MAJOR @magewellpro2ts_VERSION_MAJOR@
-#define magewellpro2ts_VERSION_MINOR @magewellpro2ts_VERSION_MINOR@
+#pragma once
+#include <string_view>
+
+namespace project::version {
+    constexpr std::string_view full_version = "@GIT_VERSION@";
+}

@@ -1,6 +1,3 @@
-include(GNUInstallDirs) # Results in /usr/local being the default.
-set(INSTALL_BIN_DIR ${CMAKE_INSTALL_BINDIR})
-
 macro(print_all_variables)
     message(STATUS "print_all_variables------------------------------------------{")
     get_cmake_property(_variableNames VARIABLES)
@@ -21,13 +18,22 @@ SET(CMAKE_COLOR_DIAGNOSTICS ON)
 
 # specify the C++ standard
 set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED True)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 add_compile_options(-Wall -Wreturn-type)
 
 # set the project name
 project(magewell2ts VERSION 3.0)
 
-configure_file(version.h.in version.h)
+include(GNUInstallDirs) # Results in /usr/local being the default.
+set(INSTALL_BIN_DIR ${CMAKE_INSTALL_BINDIR})
+include(GetGitVersion.cmake)
+
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/version.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/version.h"
+)
 
 # add the executable
 add_executable(magewell2ts magewell2ts.cpp Magewell.cpp AudioIO.cpp OutputTS.cpp lock_ios.cpp)
@@ -46,9 +52,10 @@ if(NOT V4L2_FOUND)
 endif()
 
 target_include_directories(magewell2ts PUBLIC
-                           "${PROJECT_BINARY_DIR}"
-			   "${Magewell_INCLUDE_DIR}"
-                           )
+  "${PROJECT_BINARY_DIR}"
+  "${PROJECT_BINARY_DIR}/generated"
+  "${Magewell_INCLUDE_DIR}"
+)
 
 find_package(Magewell REQUIRED)
 if(NOT Magewell_FOUND)
