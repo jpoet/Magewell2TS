@@ -2181,7 +2181,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                     uint temperature;
                     MWGetTemperature(m_channel, &temperature);
                     m_log->info("Magewell frame pool used 1m:{:<3d} "
-                                "5m:{:<3d} 10m:{:<3d} of {:3d} "
+                                "5m:{:<3d} 10m:{:<3d} of {:<3d} "
                                 "(Temp {:.1f}ºC)",
                                 vidpool_used_1m, *vidpool_5m_max,
                                 *vidpool_10m_max, m_image_buffers_total,
@@ -2191,7 +2191,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 else
                 {
                     m_log->info("Magewell frame pool used 1m:{:<3d} "
-                                "5m:{:<3d} 10m:{:<3d} of {}",
+                                "5m:{:<3d} 10m:{:<3d} of {:<3d}",
                                 vidpool_used_1m, *vidpool_5m_max,
                                 *vidpool_10m_max, m_image_buffers_total);
                 }
@@ -2511,7 +2511,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                     uint temperature;
                     MWGetTemperature(m_channel, &temperature);
                     m_log->info("Magewell frame pool used 1m:{:<3d} "
-                                "5m:{:<3d} 10m:{:<3d} of {} "
+                                "5m:{:<3d} 10m:{:<3d} of {:<3d} "
                                 "(Temp {:.1f}ºC)",
                                 vidpool_used_1m, *vidpool_5m_max,
                                 *vidpool_10m_max, m_image_buffers_total,
@@ -2521,7 +2521,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 else
                 {
                     m_log->info("Magewell frame pool used 1m:{:<3d} "
-                                "5m:{:<3d} 10m:{:<3d} of {}",
+                                "5m:{:<3d} 10m:{:<3d} of {:<3d}",
                                 vidpool_used_1m, *vidpool_5m_max,
                                 *vidpool_10m_max, m_image_buffers_total);
                 }

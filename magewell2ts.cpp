@@ -257,8 +257,8 @@ int main(int argc, char* argv[])
     bool        no_audio      = false;
     bool        p010          = false;
 
-    int         gpu_buffers   = 24;
-    int         video_buffers = 12;
+    int         gpu_buffers   = 16;
+    int         video_buffers = 16;
     int         extra_hw_frames = 32;
 
     constexpr size_t BUFFER_SIZE = 100 * 1024 * 1024;
