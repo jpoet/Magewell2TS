@@ -713,16 +713,25 @@ bool Magewell::CloseChannel(void)
 void Magewell::DisplayVolume(void)
 {
     MWCAP_AUDIO_VOLUME volume;
-    _MWCAP_AUDIO_NODE node = MWCAP_AUDIO_EMBEDDED_CAPTURE;
+    /*
+      uint8_t   byChannels
+      uint8_t   byReserved
+      int16_t   sVolumeMin
+      int16_t   sVolumeMax
+      int16_t   sVolumeStep
+      bool_t    abMute [MWCAP_MAX_NUM_AUDIO_CHANNEL]
+      int16_t   asVolume [MWCAP_MAX_NUM_AUDIO_CHANNEL]
+    */
+    MWCAP_AUDIO_NODE node = MWCAP_AUDIO_EMBEDDED_CAPTURE;
     MWGetAudioVolume(m_channel, node, &volume);
 
-    // Lock clog for thread-safe output
     // Display volume range
-    m_log->info("Volume Min:{}, Max:{}, Step{}", volume.sVolumeMin,
+    m_log->info("Volume Channels: {}, Min:{}, Max:{}, Step{}",
+                volume.byChannels, volume.sVolumeMin,
                 volume.sVolumeMax, volume.sVolumeStep);
 
     // Display volume for each channel
-    for (int idx = 0; idx < 8; ++idx)
+    for(int idx=0; idx<MWCAP_MAX_NUM_AUDIO_CHANNEL; ++idx)
     {
         m_log->info("[{}] Mute: {}, Volume: {}", idx,
                     volume.abMute[idx] ? "Yes" : "No",
@@ -746,14 +755,21 @@ bool Magewell::SetVolume(int volume_level)
     // Get current volume settings
     MWGetAudioVolume(m_channel, node, &volume);
 
+#if 0
     // Calculate scaled volume
     float scale = (volume.sVolumeMax - volume.sVolumeMin) / 100;
     int scaled_volume = volume_level * scale;
+#endif
 
     // Apply volume to all channels
-    for(int i=0; i<MWCAP_MAX_NUM_AUDIO_CHANNEL; ++i)
+    for(int idx=0; idx<MWCAP_MAX_NUM_AUDIO_CHANNEL; ++idx)
     {
+        volume.abMute[idx] = false;
+#if 0
         volume.asVolume[i] = scaled_volume + volume.sVolumeMin;
+#else
+        volume.asVolume[idx] = volume_level;
+#endif
     }
 
     // Set new volume

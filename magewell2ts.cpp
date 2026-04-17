@@ -347,11 +347,11 @@ int main(int argc, char* argv[])
             write_edid = true;
             edid_file = *(++iter);
         }
-        else if (*iter == "-g" || *iter == "--get-volume")
+        else if (*iter == "--get-volume")
         {
             get_volume = true;
         }
-        else if (*iter == "-s" || *iter == "--set-volume")
+        else if (*iter == "--set-volume")
         {
             if (!string_to_int(*(++iter), set_volume, "volume"))
                 exit(1);
