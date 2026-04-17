@@ -1974,6 +1974,11 @@ void OutputTS::copy_to_frame(void)
     void*    pEco;
     int      image_size;
     int64_t  timestamp;
+#if 0
+    int64_t  prev_ts = -1;
+    int64_t  prev_pts = -1;
+    int      prev_idx = -1;
+#endif
     int      ret = 0;
 
     int            vidpool_used_1m  {0};
@@ -2054,6 +2059,23 @@ void OutputTS::copy_to_frame(void)
         frm->pts = av_rescale_q(timestamp,
                                 m_input_time_base,
                                 m_video_stream.enc->time_base);
+
+#if 0
+        if (frm->pts <= prev_pts)
+        {
+            m_log->warn("copy_frame: scaled pts did not increase: "
+                        "[{}] -> [{}] / {} / {};"
+                        " {} -> {} . TS {} -> {} diff:{} expected: {}",
+                        prev_idx, m_video_stream.frames_idx_in,
+                        m_video_stream.frames_used,
+                        m_video_stream.frames_total,
+                        prev_pts, frm->pts, prev_ts, timestamp,
+                        timestamp - prev_ts, m_input_frame_duration);
+        }
+        prev_pts = frm->pts;
+        prev_ts = timestamp;
+        prev_idx = m_video_stream.frames_idx_in;
+#endif
 
         if (m_video_stream.hw_frames_ctx)
         {
