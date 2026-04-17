@@ -2365,6 +2365,8 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
              (timestamp < m_expected_ts - eighth_dur ||
               m_expected_ts + eighth_dur < timestamp)))
         {
+            bool found = false;
+
             if (timestamp == -1)
             {
                 min_idx = -1;
@@ -2399,9 +2401,10 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 {
                     min_ts = videoFrameInfo.allFieldBufferedTimes[0];
                     min_idx = i;
+                    found = true;
                 }
             }
-            if (min_ts == numeric_limits<std::int64_t>::max())
+            if (!found)
             {
                 m_log->warn("None of the MW card buffers are valid.");
                 break;
