@@ -2167,7 +2167,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                                 (eco_status.pvContext),
                                 m_num_pixels, timestamp + timestamp_adj);
 
-        if (m_verbose > 0)
+        if (m_verbose > 1)
         {
             if (vidpool_used_1m < used)
                 vidpool_used_1m = used;
@@ -2184,25 +2184,14 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 vidpool_5m_max  = ranges::max_element(vidpool_used_5m);
                 vidpool_10m_max = ranges::max_element(vidpool_used_10m);
 
-                if (m_verbose > 2)
-                {
-                    uint temperature;
-                    MWGetTemperature(m_channel, &temperature);
-                    m_log->info("Magewell frame pool used 1m:{:<3d} "
-                                "5m:{:<3d} 10m:{:<3d} of {:<3d} "
-                                "(Temp {:.1f}ºC)",
-                                vidpool_used_1m, *vidpool_5m_max,
-                                *vidpool_10m_max, m_image_buffers_total,
-                                static_cast<float>(temperature) / 10);
-
-                }
-                else
-                {
-                    m_log->info("Magewell frame pool used 1m:{:<3d} "
-                                "5m:{:<3d} 10m:{:<3d} of {:<3d}",
-                                vidpool_used_1m, *vidpool_5m_max,
-                                *vidpool_10m_max, m_image_buffers_total);
-                }
+                uint temperature;
+                MWGetTemperature(m_channel, &temperature);
+                m_log->info("Magewell frame pool used 1m:{:<3d} "
+                            "5m:{:<3d} 10m:{:<3d} of {:<3d} "
+                            "(Temp {:.1f}ºC)",
+                            vidpool_used_1m, *vidpool_5m_max,
+                            *vidpool_10m_max, m_image_buffers_total,
+                            static_cast<float>(temperature) / 10);
 
                 vidpool_used_1m = 0;
 
@@ -2495,7 +2484,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         m_out2ts->AddVideoFrame(pbImage, nullptr,
                                 m_num_pixels, timestamp);
 
-        if (m_verbose > 0)
+        if (m_verbose > 1)
         {
             if (vidpool_used_1m < used)
                 vidpool_used_1m = used;
@@ -2513,25 +2502,14 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 vidpool_5m_max  = ranges::max_element(vidpool_used_5m);
                 vidpool_10m_max = ranges::max_element(vidpool_used_10m);
 
-                if (m_verbose > 2)
-                {
-                    uint temperature;
-                    MWGetTemperature(m_channel, &temperature);
-                    m_log->info("Magewell frame pool used 1m:{:<3d} "
-                                "5m:{:<3d} 10m:{:<3d} of {:<3d} "
-                                "(Temp {:.1f}ºC)",
-                                vidpool_used_1m, *vidpool_5m_max,
-                                *vidpool_10m_max, m_image_buffers_total,
-                                static_cast<float>(temperature) / 10);
-
-                }
-                else
-                {
-                    m_log->info("Magewell frame pool used 1m:{:<3d} "
-                                "5m:{:<3d} 10m:{:<3d} of {:<3d}",
-                                vidpool_used_1m, *vidpool_5m_max,
-                                *vidpool_10m_max, m_image_buffers_total);
-                }
+                uint temperature;
+                MWGetTemperature(m_channel, &temperature);
+                m_log->info("Magewell frame pool used 1m:{:<3d} "
+                            "5m:{:<3d} 10m:{:<3d} of {:<3d} "
+                            "(Temp {:.1f}ºC)",
+                            vidpool_used_1m, *vidpool_5m_max,
+                            *vidpool_10m_max, m_image_buffers_total,
+                            static_cast<float>(temperature) / 10);
 
                 vidpool_used_1m = 0;
 
@@ -2546,6 +2524,8 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 vidpool_tm = current_tm;
             }
         }
+
+        this_thread::sleep_for(chrono::milliseconds(1));
     }
 
     return true;

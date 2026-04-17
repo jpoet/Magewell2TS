@@ -2102,7 +2102,7 @@ void OutputTS::copy_to_frame(void)
         }
         m_videopool_ready.notify_one();
 
-        if (m_verbose > 0)
+        if (m_verbose > 1)
         {
             if (vidpool_used_1m < used)
                 vidpool_used_1m = used;
