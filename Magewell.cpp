@@ -968,9 +968,7 @@ int EcoEventWait(mw_event_t event, int timeout/*ms*/)
  */
 void Magewell::capture_audio_loop(void)
 {
-#if 1
     bool      good_signal = true;
-#endif
     bool      lpcm = false;
     int       bytes_per_sample = 0;
     int       even_bytes_per_sample = 0;
@@ -1044,9 +1042,9 @@ void Magewell::capture_audio_loop(void)
             return;
         }
         notify_audio  = MWRegisterNotify(m_channel, eco_event,
-                                         (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
-                                         (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE  |
-                                         (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET
+                                         (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED
+//                                     | (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE
+                                       | (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET
                                          );
     }
     else
@@ -1085,7 +1083,6 @@ void Magewell::capture_audio_loop(void)
             continue;
         }
 
-#if 1
         // Check if audio signal is valid
         if (!audio_signal_status.bChannelStatusValid)
         {
@@ -1098,7 +1095,6 @@ void Magewell::capture_audio_loop(void)
             continue;
         }
         good_signal = true;
-#endif
 
         // Calculate bytes per sample
         even_bytes_per_sample = audio_signal_status.cBitsPerSample / 8;
@@ -1136,7 +1132,8 @@ void Magewell::capture_audio_loop(void)
             if (bytes_per_sample != even_bytes_per_sample)
             {
                 if (m_verbose > 1)
-                    m_log->info("Audio bytes per sample {} -> {}", bytes_per_sample,
+                    m_log->info("Audio bytes per sample {} -> {}",
+                                bytes_per_sample,
                                 even_bytes_per_sample);
                 bytes_per_sample = even_bytes_per_sample;
                 params_changed = true;
@@ -1170,7 +1167,8 @@ void Magewell::capture_audio_loop(void)
             {
                 if (m_verbose > 0 && err_cnt++ % 25 == 0)
                 {
-                    m_log->warn("Invalid audio channel count: {}", cur_channels);
+                    m_log->warn("Invalid audio channel count: {}",
+                                cur_channels);
                 }
 
                 this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
@@ -1226,17 +1224,13 @@ void Magewell::capture_audio_loop(void)
                                                   &notify_status))
                 continue;
 
-            // Handle signal change
-            if (!m_isEco)
+            // Can be spurious from "bad" devices (And eco capture cards).
+            if (notify_status & MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE)
             {
-                // Can be suprious from "bad" devices.
-                if (notify_status & MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE)
-                {
-                    if (m_verbose > 0)
-                        m_log->info("AUDIO signal changed.");
-                    this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
-                    break;
-                }
+                if (m_verbose > 0)
+                    m_log->info("AUDIO signal changed.");
+                this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
+                break;
             }
 
             // Handle input reset

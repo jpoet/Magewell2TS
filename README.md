@@ -19,7 +19,7 @@ The Magewell driver provides V4L2 and ALSA interfaces to the card. This applicat
 
 The Magewell PRO and ECO capture cards capture raw audio and video. The video (at least) needs compressed and it is up to the Linux PC to do that. The only practical way of accomplishing this is with GPU assist. Intel QSV and nVidia nvenc are supported. I don't test with nVidia very often, so there may be times when that is broken -- please let me know.
 
-Note that the ECO 4k+ cards claim they can do 60Hz and HDR. In my experience that is true, but not at the same time.
+Note that the ECO cards do not allow more than one capture process per input. They are also bad at detecting "signal changes" such as video frame rate and bitstream vs pcm audio changes.
 
 ***
 ## Magewell driver
@@ -29,8 +29,7 @@ The Magewell PRO driver can be found here:
 The Magewell ECO driver can be found here:
 [https://www.magewell.com/downloads/eco-capture#/driver/linux-x86](https://www.magewell.com/downloads/eco-capture#/driver/linux-x86)
 
-The drivers listed on the official Magewell download page are for Ubuntu kernels and may or may not work with other distributions like Fedora. However, I have found Magewell to be very responsive with driver requests for Fedora when the official driver doesn't work. They usually give me a new Fedora driver within 24 hours of opening a ticket, but it will sometimes take 48 hours.
-
+In the past, the drivers listed on the official Magewell download page have been for Ubuntu kernels and may or may not work with other distributions like Fedora. However, I have found Magewell to be very responsive with driver requests for Fedora when the official driver doesn't work. They usually give me a new Fedora driver within 24 hours of opening a ticket, but it will sometimes take 48 hours. ProCapture 1.3.4429 works well with Fedora 43 so they may be consolidating thei Linux driver support.
 
 ### Install the driver:
 ```bash
