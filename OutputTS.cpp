@@ -1495,22 +1495,22 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
     return true;
 }
 
-bool OutputTS::init_intel_hw(const string & type,
-                             const AVCodec* codec,
-                             AVDictionary*  opt,
-                             OutputStream*  ost)
+bool OutputTS::init_hw_buffers(const string & type,
+                               const AVCodec* codec,
+                               AVDictionary*  opt,
+                               OutputStream*  ost)
 {
     int    ret;
 
     if (m_verbose > 0)
-        m_log->info("Initializing Intel GPU");
+        m_log->info("Initializing {} GPU", type);
 
     if (ost->hw_frames_ctx == nullptr)
     {
         // Create hardware frames context
         if (!(ost->hw_frames_ctx = av_hwframe_ctx_alloc(ost->hw_device_ctx)))
         {
-            m_log->critical("Failed to create QSV frame context.");
+            m_log->critical("Failed to create {} frame context.", type);
             Shutdown();
             return false;
         }
@@ -1645,7 +1645,7 @@ bool OutputTS::open_vaapi(const AVCodec* codec,
     }
 
     ost->enc->pix_fmt     = AV_PIX_FMT_VAAPI;
-    return init_intel_hw("VAAPI", codec, opt, ost);
+    return init_hw_buffers("VAAPI", codec, opt, ost);
 }
 
 /**
@@ -1737,7 +1737,7 @@ bool OutputTS::open_qsv(const AVCodec* codec,
     }
 
     ost->enc->pix_fmt = AV_PIX_FMT_QSV;
-    return init_intel_hw("QSV", codec, opt, ost);
+    return init_hw_buffers("QSV", codec, opt, ost);
 }
 
 /**

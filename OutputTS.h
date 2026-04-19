@@ -152,10 +152,10 @@ class OutputTS
                               int width, int height);
     bool open_nvidia(const AVCodec* codec, OutputStream* ost,
                      AVDictionary* opt_arg);
-    bool init_intel_hw(const std::string & type,
-                       const AVCodec* codec,
-                       AVDictionary*  opt,
-                       OutputStream*  ost);
+    bool init_hw_buffers(const std::string & type,
+                         const AVCodec* codec,
+                         AVDictionary*  opt,
+                         OutputStream*  ost);
     bool open_vaapi(const AVCodec* codec, OutputStream* ost,
                     AVDictionary* opt_arg);
     bool open_qsv(const AVCodec* codec, OutputStream* ost,

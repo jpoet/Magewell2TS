@@ -80,7 +80,7 @@ void show_help(string_view app)
          << "--read-edid (-r)   : Read EDID info for input to file\n"
          << "--logfile          : Also log messages to the given file\n"
          << "--verbose (-v)     : message verbose level. 0=completely quiet [1]\n"
-         << "--video-codec (-c) : Video codec name (e.g. hevc_qsv, h264_nvenc) [hevc_nvenc]\n"
+         << "--video-codec (-c) : Video codec name (e.g. hevc_qsv, h264_nvenc) [hevc_qsv]\n"
          << "--lookahead (-a)   : How many frames to 'look ahead' [35]\n"
          << "--quality (-q)     : quality setting [25]\n"
          << "--preset (-p)      : encoder preset\n"
@@ -240,7 +240,7 @@ int main(int argc, char* argv[])
 
     string_view app_name = argv[0];
     string      edid_file;
-    string      video_codec = "hevc_nvenc";
+    string      video_codec = "hevc_qsv";
     string      device      = "renderD128";
 
     bool        get_volume  = false;
