@@ -1459,15 +1459,6 @@ bool OutputTS::open_nvidia(const AVCodec* codec,
     av_opt_set_int(ctx->priv_data, "bf", 0, 0);
     av_opt_set_int(ctx->priv_data, "b_ref_mode", 0, 0);
 
-    if (m_gop_secs > 0)
-    {
-        if (av_opt_set(ctx->priv_data, "no-open-gop", "1",
-                       AV_OPT_SEARCH_CHILDREN) < 0)
-        {
-            m_log->warn("nvenc: Could not set no-open-gop option.");
-        }
-    }
-
     // Set pixel format
     if (m_isHDR || m_p010)
         ctx->pix_fmt = AV_PIX_FMT_P010LE;

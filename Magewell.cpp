@@ -1209,15 +1209,12 @@ void Magewell::capture_audio_loop(void)
 
         err_cnt = 0;
         frame_cnt = 0;
-        for (;;)
+        while (m_reset_audio.load() == false)
         {
-            if (m_reset_audio.load() == true)
-                goto audio_capture_stoped;
-
             // Wait for notification
             if (m_isEco)
             {
-                if (EcoEventWait(eco_event, -1) <= 0)
+                if (EcoEventWait(eco_event, 25) <= 0)
                 {
                     if (m_verbose > 1)
                         m_log->info("Waiting for audio data.");
@@ -1226,7 +1223,7 @@ void Magewell::capture_audio_loop(void)
             }
             else
             {
-                if (MWWaitEvent(notify_event, -1) <= 0)
+                if (MWWaitEvent(notify_event, 25) <= 0)
                 {
                     if (m_verbose > 1)
                         m_log->info("Waiting for audio data.");
@@ -1275,6 +1272,10 @@ void Magewell::capture_audio_loop(void)
               Left0, Left1, Left2, Left3, right0, right1, right2,
               right3.
             */
+            uint8_t mark = 0xcc;
+            for (int idx = 0; idx < 16; ++idx)
+                fraw_all.write(reinterpret_cast<const char*>(&mark), sizeof(uint8_t));
+
             for (int idx = 0;
                  idx < MWCAP_AUDIO_SAMPLES_PER_FRAME * MWCAP_AUDIO_MAX_NUM_CHANNELS;
                  ++idx)
@@ -1320,6 +1321,10 @@ void Magewell::capture_audio_loop(void)
               16-bit PCM: Each sample is 16-bits for each valid channel: L1R1L2R2, etc...
               24-bit PCM: Each sample is 32-bits for each valid channel: L1R1L2R2, etc...
             */
+            uint8_t mark = 0xcc;
+            for (int idx = 0; idx < 16; ++idx)
+                fraw.write(reinterpret_cast<const char*>(&mark), sizeof(uint8_t));
+
             AudioBuffer::AudioFrame::const_iterator Itr;
             for (Itr = audio_frame->begin(); Itr != audio_frame->end(); ++Itr)
             {
@@ -2468,7 +2473,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         }
 
         // Wait for capture completion
-        if (MWWaitEvent(capture_event, -1) <= 0)
+        if (MWWaitEvent(capture_event, 25) <= 0)
         {
             if (m_verbose > 0)
             {
