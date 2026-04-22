@@ -2,5 +2,5 @@
 #include <string_view>
 
 namespace project::version {
-    constexpr std::string_view full_version = "pre-v4-@GIT_VERSION@";
+    constexpr std::string_view full_version = "v4-@GIT_VERSION@";
 }
