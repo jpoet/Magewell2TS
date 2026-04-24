@@ -1940,7 +1940,7 @@ void OutputTS::DiscardImages(int val, const string & why)
     const unique_lock<mutex> lock(m_imagequeue_mutex);
 
     m_discard_images += val;
-    if (m_verbose > 2)
+    if (m_verbose > 3)
     {
         if (val > 0)
             m_log->info("Discarding images while {} [{}]", why, m_discard_images);
