@@ -1003,6 +1003,7 @@ bool AudioIO::CodecChanged(void)
 #if 1
         m_log->error("Failed to detect S/PDIF");
 #endif
+        f_discard_images(-1, "detect codec is done.");
         Reset("AudioIO::CodecChanged");
         return false;
     }

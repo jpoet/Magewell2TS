@@ -321,12 +321,9 @@ void OutputTS::setLight(AVMasteringDisplayMetadata * display_meta,
  * @return Pointer to allocated AVFrame or nullptr on error
  * @note This function allocates memory for audio frames and sets up basic properties
  */
-AVFrame* OutputTS::alloc_audio_frame(enum AVSampleFormat sample_fmt,
-                                     const AVChannelLayout* channel_layout,
-                                     int sample_rate, int nb_samples)
+AVFrame* OutputTS::alloc_audio_frame(void)
 {
     AVFrame* frame = av_frame_alloc();
-    int ret;
 
     // Check if frame allocation succeeded
     if (!frame)
@@ -335,14 +332,21 @@ AVFrame* OutputTS::alloc_audio_frame(enum AVSampleFormat sample_fmt,
         return nullptr;
     }
 
+    return frame;
+}
+
+AVFrame* OutputTS::prepare_audio_frame(AVFrame* frame, int sample_fmt)
+{
+    int ret;
+
     // Set frame properties
     frame->format = sample_fmt;
-    av_channel_layout_copy(&frame->ch_layout, channel_layout);
-    frame->sample_rate = sample_rate;
-    frame->nb_samples = nb_samples;
+    av_channel_layout_copy(&frame->ch_layout, &m_audio_stream.enc->ch_layout);
+    frame->sample_rate = m_audio_stream.enc->sample_rate;
+    frame->nb_samples = m_audio_stream.enc->frame_size;
 
     // Allocate buffer for frame data if samples exist
-    if (nb_samples)
+    if (frame->nb_samples)
     {
         ret = av_frame_get_buffer(frame, 0);
         if (ret < 0)
@@ -515,7 +519,6 @@ bool OutputTS::open_audio(void)
 
     const AVCodec* codec = audio_codec;
     AVDictionary* opt = NULL;
-    int nb_samples;
     int ret;
 
     // Open audio codec
@@ -528,17 +531,13 @@ bool OutputTS::open_audio(void)
     // Determine frame size
     if (m_audio_stream.enc->codec->capabilities &
         AV_CODEC_CAP_VARIABLE_FRAME_SIZE)
-        nb_samples = 10000;
-    else
     {
-        nb_samples = m_audio_stream.enc->frame_size;
+//      nb_samples = 10000;
+        m_audio_stream.enc->frame_size = 10000;
     }
 
     // Allocate audio frame
-    m_audio_stream.frame = alloc_audio_frame(m_audio_stream.enc->sample_fmt,
-                                             &m_audio_stream.enc->ch_layout,
-                                             m_audio_stream.enc->sample_rate,
-                                             nb_samples);
+    m_audio_stream.frame = alloc_audio_frame();
     if (m_audio_stream.frame == nullptr)
     {
         m_log->critical("Failed to allocate audio frame.");
@@ -548,15 +547,17 @@ bool OutputTS::open_audio(void)
 
     // Allocate temporary frame for format conversion
     if (m_audioIO->BytesPerSample() == 4)
-        m_audio_stream.tmp_frame = alloc_audio_frame(AV_SAMPLE_FMT_S32,
-                                           &m_audio_stream.enc->ch_layout,
-                                           m_audio_stream.enc->sample_rate,
-                                                     nb_samples);
+    {
+        m_audio_stream.tmp_frame = alloc_audio_frame();
+        m_audio_stream.tmp_frame = prepare_audio_frame(m_audio_stream.tmp_frame,
+                                                       AV_SAMPLE_FMT_S32);
+    }
     else
-        m_audio_stream.tmp_frame = alloc_audio_frame(AV_SAMPLE_FMT_S16,
-                                             &m_audio_stream.enc->ch_layout,
-                                              m_audio_stream.enc->sample_rate,
-                                                     nb_samples);
+    {
+        m_audio_stream.tmp_frame = alloc_audio_frame();
+        m_audio_stream.tmp_frame = prepare_audio_frame(m_audio_stream.tmp_frame,
+                                                       AV_SAMPLE_FMT_S16);
+    }
 
     if (m_audio_stream.tmp_frame == nullptr)
     {
@@ -1134,6 +1135,7 @@ bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
         }
         return false;
     }
+    av_frame_unref(frame);
 
     // Receive encoded packets
     while (ret >= 0)
@@ -1197,12 +1199,8 @@ bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
  */
 AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
 {
-    AVFrame* frame = ost->tmp_frame;
-
-    uint8_t* q = (uint8_t*)frame->data[0];
-
     int bytes = ost->enc->ch_layout.nb_channels *
-                frame->nb_samples * m_audioIO->BytesPerSample();
+                ost->enc->frame_size * m_audioIO->BytesPerSample();
 
     // Check if we have enough data
     if (m_audioIO->Size() < bytes)
@@ -1212,6 +1210,10 @@ AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
         this_thread::sleep_for(chrono::milliseconds(1));
         return nullptr;
     }
+
+    AVFrame* frame = ost->tmp_frame;
+
+    uint8_t* q = (uint8_t*)frame->data[0];
 
     // Read audio data
     if (m_audioIO->Read(q, bytes) <= 0)
@@ -1254,12 +1256,8 @@ bool OutputTS::write_pcm_frame(AVFormatContext* oc, OutputStream* ost)
                                 enc_ctx->sample_rate);
     av_assert0(dst_nb_samples == frame->nb_samples);
 
-    // Make frame writable
-    if (0 > av_frame_make_writable(ost->frame))
-    {
-        m_log->warn("write_pcm_frame: Failed to make frame writable");
-        return false;
-    }
+    ost->frame = prepare_audio_frame(ost->frame,
+                                     m_audio_stream.enc->sample_fmt);
 
     // Convert audio samples
     ret = swr_convert(ost->swr_ctx,
@@ -1272,14 +1270,13 @@ bool OutputTS::write_pcm_frame(AVFormatContext* oc, OutputStream* ost)
         return false;
     }
 
-    frame = ost->frame;
-    frame->pts = av_rescale_q(m_audioIO->TimeStamp(),
-                              m_input_time_base,
-                              enc_ctx->time_base);
+    ost->frame->pts = av_rescale_q(m_audioIO->TimeStamp(),
+                                   m_input_time_base,
+                                   enc_ctx->time_base);
 
     ost->samples_count += dst_nb_samples;
 
-    return write_frame(oc, enc_ctx, frame, ost);
+    return write_frame(oc, enc_ctx, ost->frame, ost);
 }
 
 /**
@@ -1394,7 +1391,6 @@ AVFrame* OutputTS::alloc_hw_picture(AVBufferRef* hw_frames_ctx,
                                     int width, int height)
 {
     AVFrame* picture;
-    int ret;
 
     picture = av_frame_alloc();
     if (!picture)
@@ -1403,16 +1399,6 @@ AVFrame* OutputTS::alloc_hw_picture(AVBufferRef* hw_frames_ctx,
     picture->format = pix_fmt;
     picture->width  = width;
     picture->height = height;
-
-    // Allocate frame buffer
-    ret = av_hwframe_get_buffer(hw_frames_ctx, picture, 0);
-    if (ret < 0)
-    {
-        const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(pix_fmt);
-        m_log->warn("Could not allocate hw {} video frame of {}x{} : {}",
-                    desc->name, width, height, AV_ts2str(ret));
-        return nullptr;
-    }
 
     return picture;
 }
@@ -2070,6 +2056,34 @@ void OutputTS::copy_to_frame(void)
 
         if (m_video_stream.hw_frames_ctx)
         {
+            for (;;)
+            {
+                // Retrieve HW frame from pool
+                ret = av_hwframe_get_buffer(m_video_stream.hw_frames_ctx,
+                                            frm, 0);
+                if (ret == 0)
+                    break;
+                if (ret == AVERROR(ENOMEM))
+                {
+                    // Must wait for a buffer.
+                    unique_lock<mutex> lock(m_videopool_mutex);
+
+                    m_log->warn("No HW video buffers available.");
+                    m_videopool_avail.wait_for(lock,
+                       std::chrono::milliseconds(m_input_frame_wait_ms));
+                    if (m_running.load() == false)
+                        return;
+                }
+                else
+                {
+                    m_log->critical("HW frame pool in bad state: {}",
+                                    AVerr2str(ret));
+                    Shutdown();
+                    f_image_buffer_available(pImage, pEco);
+                    return;
+                }
+            }
+
             // Map hardware frame to temporary frame
             if ((ret = av_hwframe_map(m_video_stream.tmp_frame, frm,
                                       AV_HWFRAME_MAP_WRITE |
