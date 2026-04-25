@@ -2067,8 +2067,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         // Handle signal change
         if (ullStatusBits & MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE)
         {
-            if (m_verbose > 1)
-                m_log->info("MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE");
+            m_log->warn("DAMAGED: Magewell lost video sync.");
             return false;
         }
 
@@ -2306,9 +2305,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         // Handle signal change
         if (ullStatusBits & MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE)
         {
-            if (m_verbose > 1)
-                m_log->info("MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE");
-            this_thread::sleep_for(chrono::milliseconds(5));
+            m_log->warn("DAMAGED: Magewell lost video sync.");
             return false;
         }
 
@@ -2318,7 +2315,8 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         {
             if (m_verbose > 0)
             {
-                m_log->warn("Video signal lost lock. (frame {})", m_frame_cnt);
+                m_log->warn("DAMAGED: Video signal lost lock. (frame {})",
+                            m_frame_cnt);
             }
             this_thread::sleep_for(chrono::milliseconds(5));
             return false;
