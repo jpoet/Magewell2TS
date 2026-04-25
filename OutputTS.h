@@ -135,9 +135,8 @@ class OutputTS
     bool write_frame(AVFormatContext* fmt_ctx, AVCodecContext* c,
                      AVFrame* frame, OutputStream* ost);
     // Audio output
-    AVFrame* alloc_audio_frame(enum AVSampleFormat sample_fmt,
-                               const AVChannelLayout* channel_layout,
-                               int sample_rate, int nb_samples);
+    AVFrame* alloc_audio_frame(void);
+    AVFrame* prepare_audio_frame(AVFrame* frame, int sample_fmt);
     AVFrame* get_pcm_audio_frame(OutputStream* ost);
 
     bool write_pcm_frame(AVFormatContext* oc, OutputStream* ost);

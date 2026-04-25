@@ -86,8 +86,8 @@ void show_help(string_view app)
          << "--preset (-p)      : encoder preset\n"
          << "--p010             : Force p010 (10bit) video format.\n"
          << "--gop_secs (-g)    : GOP size in seconds [1.5] (0 to disable)\n"
-         << "--gpu-buffers      : GPU video buffers count [16]\n"
-         << "--video-buffers    : Video buffers count (RAM) [16]\n"
+         << "--gpu-buffers      : GPU video buffers count [8]\n"
+         << "--video-buffers    : Video buffers count (RAM) [8]\n"
          << "--extra-hw-frames  : Extra HW frames used for encoding [32]\n"
          << "--write-edid (-w)  : Write EDID info from file to input\n"
          << "--wait-for         : Wait for given number of inputs to be initialized. 10 second timeout\n";
@@ -124,9 +124,7 @@ void show_help(string_view app)
          << "  --extra-hw-frames is equivalent to passing that argument\n"
          << "    to ffmpeg. If the value is too low the resulting video can\n"
          << "    have artifacts and it will usually result in dropped frames.\n"
-         << "    It is strongly recommended to set this to least 32.\n"
-         << "  --gpu-buffers must be at least 16.\n"
-         << "    More is better if you have the VRAM.\n";
+         << "    It is strongly recommended to set this to least 32.\n";
 
     clog << "\nNOTE: setting EDID does not survive a reboot.\n";
 }
@@ -258,8 +256,8 @@ int main(int argc, char* argv[])
     bool        no_audio      = false;
     bool        p010          = false;
 
-    int         gpu_buffers   = 16;
-    int         video_buffers = 16;
+    int         gpu_buffers   = 8;
+    int         video_buffers = 8;
     int         extra_hw_frames = 32;
 
     constexpr size_t BUFFER_SIZE = 100 * 1024 * 1024;
@@ -464,7 +462,7 @@ int main(int argc, char* argv[])
     {
         if (!g_mw->Capture(video_codec, preset, quality, look_ahead,
                            no_audio, p010, device, gop_secs, extra_hw_frames,
-                           std::max(gpu_buffers, 16), video_buffers))
+                           gpu_buffers, video_buffers))
             return -2;
     }
 
