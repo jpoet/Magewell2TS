@@ -1214,7 +1214,7 @@ void Magewell::capture_audio_loop(void)
             // Wait for notification
             if (m_isEco)
             {
-                if (EcoEventWait(eco_event, 25) <= 0)
+                if (EcoEventWait(eco_event, m_frame_ms2) <= 0)
                 {
                     if (m_verbose > 1)
                         m_log->info("Waiting for audio data.");
@@ -1223,7 +1223,7 @@ void Magewell::capture_audio_loop(void)
             }
             else
             {
-                if (MWWaitEvent(notify_event, 25) <= 0)
+                if (MWWaitEvent(notify_event, m_frame_ms2) <= 0)
                 {
                     if (m_verbose > 1)
                         m_log->info("Waiting for audio data.");
@@ -2036,7 +2036,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         }
 
         // Wait for notification
-        if (EcoEventWait(eco_event, eco_params.llFrameDuration) <= 0)
+        if (EcoEventWait(eco_event, m_frame_ms2) <= 0)
         {
             if (m_verbose > 1)
                 m_log->info("Waiting for video data (frame {})",
@@ -2069,7 +2069,6 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         {
             if (m_verbose > 1)
                 m_log->info("MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE");
-            this_thread::sleep_for(chrono::milliseconds(5));
             return false;
         }
 
@@ -2276,7 +2275,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     while (m_running.load() == true)
     {
         // Wait for notification
-        if (MWWaitEvent(notify_event, eco_params.llFrameDuration) <= 0)
+        if (MWWaitEvent(notify_event, m_frame_ms2) <= 0)
         {
             if (m_verbose > 1)
                 m_log->info("Waiting for video data (frame {})",
@@ -2473,7 +2472,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         }
 
         // Wait for capture completion
-        if (MWWaitEvent(capture_event, 25) <= 0)
+        if (MWWaitEvent(capture_event, m_frame_ms2) <= 0)
         {
             if (m_verbose > 0)
             {
@@ -2532,8 +2531,6 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 vidpool_tm = current_tm;
             }
         }
-
-        this_thread::sleep_for(chrono::milliseconds(1));
     }
 
     return true;
@@ -2627,7 +2624,7 @@ bool Magewell::capture_video(int quality)
                 m_log->warn("Input video signal status: Unsupported");
             locked = false;
             state = videoSignalStatus.state;
-            this_thread::sleep_for(chrono::milliseconds(m_frame_ms * 10));
+            this_thread::sleep_for(chrono::milliseconds(m_frame_ms * 3));
             continue;
         }
 
