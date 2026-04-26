@@ -2135,7 +2135,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                         else
                         {
                             skipped_frame_cnt += skipped;
-                            if (m_frame_cnt > 60)
+                            if (skipped_frame_cnt > 1 && m_frame_cnt > 60)
                                 m_log->warn("DAMAGED: Magewell lost {:.0f} "
                                             "frames, have skipped {:.0f} : {}",
                                             skipped, skipped_frame_cnt,
