@@ -1257,12 +1257,8 @@ void Magewell::capture_audio_loop(void)
             if (!(notify_status & MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED))
                 continue;
 
-            for (;;)
+            while (MW_ENODATA != MWCaptureAudioFrame(m_channel, &macf))
             {
-                // Capture audio frame
-                if (MW_ENODATA == MWCaptureAudioFrame(m_channel, &macf))
-                    break;
-
                 ++frame_cnt;
 
 #ifdef DUMP_RAW_AUDIO_ALLBITS
