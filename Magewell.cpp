@@ -1214,7 +1214,7 @@ void Magewell::capture_audio_loop(void)
             // Wait for notification
             if (m_isEco)
             {
-                if (EcoEventWait(eco_event, 25) <= 0)
+                if (EcoEventWait(eco_event, m_frame_ms) <= 0)
                 {
                     if (m_verbose > 1)
                         m_log->info("Waiting for audio data.");
@@ -1223,7 +1223,7 @@ void Magewell::capture_audio_loop(void)
             }
             else
             {
-                if (MWWaitEvent(notify_event, 25) <= 0)
+                if (MWWaitEvent(notify_event, m_frame_ms) <= 0)
                 {
                     if (m_verbose > 1)
                         m_log->info("Waiting for audio data.");
@@ -1257,83 +1257,84 @@ void Magewell::capture_audio_loop(void)
             if (!(notify_status & MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED))
                 continue;
 
-            // Capture audio frame
-            if (MW_ENODATA == MWCaptureAudioFrame(m_channel, &macf))
+            for (;;)
             {
-                continue;
-            }
+                // Capture audio frame
+                if (MW_ENODATA == MWCaptureAudioFrame(m_channel, &macf))
+                    break;
 
-            ++frame_cnt;
+                ++frame_cnt;
 
 #ifdef DUMP_RAW_AUDIO_ALLBITS
-            /*
-              Audio sample data. Each sample is 32-bit width, and
-              high bit effective. The priority of the path is:
-              Left0, Left1, Left2, Left3, right0, right1, right2,
-              right3.
-            */
-            uint8_t mark = 0xcc;
-            for (int idx = 0; idx < 16; ++idx)
-                fraw_all.write(reinterpret_cast<const char*>(&mark), sizeof(uint8_t));
+                /*
+                  Audio sample data. Each sample is 32-bit width, and
+                  high bit effective. The priority of the path is:
+                  Left0, Left1, Left2, Left3, right0, right1, right2,
+                  right3.
+                */
+                uint8_t mark = 0xcc;
+                for (int idx = 0; idx < 16; ++idx)
+                    fraw_all.write(reinterpret_cast<const char*>(&mark), sizeof(uint8_t));
 
-            for (int idx = 0;
-                 idx < MWCAP_AUDIO_SAMPLES_PER_FRAME * MWCAP_AUDIO_MAX_NUM_CHANNELS;
-                 ++idx)
-            {
-                fraw_all.write(reinterpret_cast<char*>(&macf.adwSamples[idx]),
-                               sizeof(DWORD));
-            }
+                for (int idx = 0;
+                     idx < MWCAP_AUDIO_SAMPLES_PER_FRAME * MWCAP_AUDIO_MAX_NUM_CHANNELS;
+                     ++idx)
+                {
+                    fraw_all.write(reinterpret_cast<char*>(&macf.adwSamples[idx]),
+                                   sizeof(DWORD));
+                }
 #endif
 
-            // Create audio frame buffer
-            AudioBuffer::AudioFrame* audio_frame = new AudioBuffer::AudioFrame;
-            audio_frame->resize(frame_size);
-            uint8_t* output_ptr = audio_frame->data();
+                // Create audio frame buffer
+                AudioBuffer::AudioFrame* audio_frame = new AudioBuffer::AudioFrame;
+                audio_frame->resize(frame_size);
+                uint8_t* output_ptr = audio_frame->data();
 
-            for (int pair = 0; pair < channel_pairs; ++pair)
-            {
-                const uint32_t* left_samples = &macf.adwSamples[pair];
-                const uint32_t* right_samples = &macf.adwSamples[pair +
-                                                                half_channels];
-
-                for (int sample = 0;
-                     sample < MWCAP_AUDIO_SAMPLES_PER_FRAME; ++sample)
+                for (int pair = 0; pair < channel_pairs; ++pair)
                 {
-                    uint32_t left_raw = left_samples[sample * sample_stride];
-                    uint32_t right_raw = right_samples[sample * sample_stride];
+                    const uint32_t* left_samples = &macf.adwSamples[pair];
+                    const uint32_t* right_samples = &macf.adwSamples[pair +
+                                                                     half_channels];
 
-                    uint32_t left_val = left_raw >> shift;
-                    uint32_t right_val = right_raw >> shift;
+                    for (int sample = 0;
+                         sample < MWCAP_AUDIO_SAMPLES_PER_FRAME; ++sample)
+                    {
+                        uint32_t left_raw = left_samples[sample * sample_stride];
+                        uint32_t right_raw = right_samples[sample * sample_stride];
 
-                    /* For 32-bit samples, we copy 4 bytes,
-                     * for 16-bit samples, we copy 2 bytes
-                     */
-                    std::memcpy(output_ptr, &left_val, even_bytes_per_sample);
-                    output_ptr += even_bytes_per_sample;
-                    std::memcpy(output_ptr, &right_val, even_bytes_per_sample);
-                    output_ptr += even_bytes_per_sample;
+                        uint32_t left_val = left_raw >> shift;
+                        uint32_t right_val = right_raw >> shift;
+
+                        /* For 32-bit samples, we copy 4 bytes,
+                         * for 16-bit samples, we copy 2 bytes
+                         */
+                        std::memcpy(output_ptr, &left_val, even_bytes_per_sample);
+                        output_ptr += even_bytes_per_sample;
+                        std::memcpy(output_ptr, &right_val, even_bytes_per_sample);
+                        output_ptr += even_bytes_per_sample;
+                    }
                 }
-            }
 
 #ifdef DUMP_RAW_AUDIO
-            /*
-              Bitstream Audio: Each sample is 16-bits for L1 and 16-bits for R1
-              16-bit PCM: Each sample is 16-bits for each valid channel: L1R1L2R2, etc...
-              24-bit PCM: Each sample is 32-bits for each valid channel: L1R1L2R2, etc...
-            */
-            uint8_t mark = 0xcc;
-            for (int idx = 0; idx < 16; ++idx)
-                fraw.write(reinterpret_cast<const char*>(&mark), sizeof(uint8_t));
+                /*
+                  Bitstream Audio: Each sample is 16-bits for L1 and 16-bits for R1
+                  16-bit PCM: Each sample is 16-bits for each valid channel: L1R1L2R2, etc...
+                  24-bit PCM: Each sample is 32-bits for each valid channel: L1R1L2R2, etc...
+                */
+                uint8_t mark = 0xcc;
+                for (int idx = 0; idx < 16; ++idx)
+                    fraw.write(reinterpret_cast<const char*>(&mark), sizeof(uint8_t));
 
-            AudioBuffer::AudioFrame::const_iterator Itr;
-            for (Itr = audio_frame->begin(); Itr != audio_frame->end(); ++Itr)
-            {
-                fraw.write(reinterpret_cast<const char*>(&(*Itr)), sizeof(uint8_t));
-            }
+                AudioBuffer::AudioFrame::const_iterator Itr;
+                for (Itr = audio_frame->begin(); Itr != audio_frame->end(); ++Itr)
+                {
+                    fraw.write(reinterpret_cast<const char*>(&(*Itr)), sizeof(uint8_t));
+                }
 #endif
 
-            // Add frame to output handler
-            m_out2ts->addAudio(audio_frame, macf.llTimestamp);
+                // Add frame to output handler
+                m_out2ts->addAudio(audio_frame, macf.llTimestamp);
+            }
         }
     }
 
