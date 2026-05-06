@@ -999,6 +999,7 @@ void Magewell::capture_audio_loop(void)
     MWCAP_AUDIO_SIGNAL_STATUS audio_signal_status;
     int err_cnt = 0;
     int frame_cnt = 0;
+    uint buffered_frame_idx = 512;
 
     int      frame_size      = 0;
     int      channel_pairs   = 0;
@@ -1209,6 +1210,7 @@ void Magewell::capture_audio_loop(void)
 
         err_cnt = 0;
         frame_cnt = 0;
+        buffered_frame_idx = 512;
         while (m_reset_audio.load() == false)
         {
             // Wait for notification
@@ -1260,6 +1262,28 @@ void Magewell::capture_audio_loop(void)
             while (MW_ENODATA != MWCaptureAudioFrame(m_channel, &macf))
             {
                 ++frame_cnt;
+                if (buffered_frame_idx > macf.cFrameCount)
+                {
+                    buffered_frame_idx = macf.iFrame;
+                    if (m_verbose > 2)
+                    {
+                        m_log->info("Magewell using {} audio buffers.",
+                                    macf.cFrameCount);
+                    }
+                }
+                else
+                {
+                    if (++buffered_frame_idx == macf.cFrameCount)
+                        buffered_frame_idx = 0;
+                    if (buffered_frame_idx != macf.iFrame)
+                    {
+                        m_log->error("Lost audio frame. Got: {}, expected: {};"
+                                     " total: {}",
+                                     macf.iFrame, buffered_frame_idx,
+                                     macf.cFrameCount);
+                        buffered_frame_idx = macf.iFrame;
+                    }
+                }
 
 #ifdef DUMP_RAW_AUDIO_ALLBITS
                 /*
