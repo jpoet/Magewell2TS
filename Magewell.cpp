@@ -2088,9 +2088,8 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         // Handle signal change
         if (ullStatusBits & MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE)
         {
-            if (m_verbose > 1)
-                m_log->info("MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE");
-            this_thread::sleep_for(chrono::milliseconds(5));
+            if (m_frame_cnt > 60)
+                m_log->warn("DAMAGED: Magewell lost video sync.");
             return false;
         }
 
@@ -2328,9 +2327,10 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         // Handle signal change
         if (ullStatusBits & MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE)
         {
-            if (m_verbose > 1)
-                m_log->info("MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE");
-            this_thread::sleep_for(chrono::milliseconds(5));
+            if (m_frame_cnt > 60)
+            {
+                m_log->warn("DAMAGED: Magewell lost video sync.");
+            }
             return false;
         }
 
@@ -2338,7 +2338,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         MWGetVideoSignalStatus(m_channel, &videoSignalStatus);
         if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
         {
-            if (m_verbose > 0)
+            if (m_frame_cnt > 60)
             {
                 m_log->warn("Video signal lost lock. (frame {})", m_frame_cnt);
             }
@@ -2489,8 +2489,11 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         {
             if (m_verbose > 0)
             {
-                m_log->warn("Damaged: Failed to retrieve next frame "
-                            "[{}] (processed {})", frame_idx, m_frame_cnt);
+                if (m_frame_cnt > 60)
+                {
+                    m_log->warn("Damaged: Failed to retrieve next frame "
+                                "[{}] (processed {})", frame_idx, m_frame_cnt);
+                }
             }
             pro_image_buffer_available(pbImage, nullptr);
             continue;
