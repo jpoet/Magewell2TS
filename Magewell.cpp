@@ -2437,9 +2437,12 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             if (skipped > 0)
             {
                 skipped_frame_cnt += skipped;
-                m_log->warn("DAMAGED: Magewell lost {} frames. "
-                            "Have skipped {} : {}",
-                            skipped, skipped_frame_cnt, m_frame_cnt);
+                if (skipped_frame_cnt > 1 && m_frame_cnt > 60)
+                {
+                    m_log->warn("DAMAGED: Magewell lost {} frames. "
+                                "Have skipped {} : {}",
+                                skipped, skipped_frame_cnt, m_frame_cnt);
+                }
             }
 
             frame_idx = min_idx;
