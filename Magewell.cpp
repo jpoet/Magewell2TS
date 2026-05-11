@@ -1277,8 +1277,8 @@ void Magewell::capture_audio_loop(void)
                         buffered_frame_idx = 0;
                     if (buffered_frame_idx != macf.iFrame)
                     {
-                        m_log->error("Lost audio frame. Got: {}, expected: {};"
-                                     " total: {}",
+                        m_log->warn("DAMAGED: Lost audio frame. Got: {}, "
+                                    "expected: {}; total: {}",
                                      macf.iFrame, buffered_frame_idx,
                                      macf.cFrameCount);
                         buffered_frame_idx = macf.iFrame;
@@ -2088,7 +2088,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         // Handle signal change
         if (ullStatusBits & MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE)
         {
-            if (m_frame_cnt > 60)
+            if (m_frame_cnt > 2000)
                 m_log->warn("DAMAGED: Magewell lost video sync.");
             return false;
         }
@@ -2157,13 +2157,14 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                         else
                         {
                             skipped_frame_cnt += skipped;
-                            if (skipped_frame_cnt > 1 && m_frame_cnt > 60)
+                            if (skipped_frame_cnt > 1 && m_frame_cnt > 2000)
                                 m_log->warn("DAMAGED: Magewell lost {:.0f} "
-                                            "frames, have skipped {:.0f} : {}",
+                                            "video frames, "
+                                            "have skipped {:.0f} : {}",
                                             skipped, skipped_frame_cnt,
                                             m_frame_cnt);
                             else
-                                m_log->warn("Magewell lost {:.0f} "
+                                m_log->warn("Magewell lost {:.0f} video "
                                             "frames, have skipped {:.0f} : {}",
                                             skipped, skipped_frame_cnt,
                                             m_frame_cnt);
@@ -2327,7 +2328,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         // Handle signal change
         if (ullStatusBits & MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE)
         {
-            if (m_frame_cnt > 60)
+            if (m_frame_cnt > 2000)
             {
                 m_log->warn("DAMAGED: Magewell lost video sync.");
             }
@@ -2338,7 +2339,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         MWGetVideoSignalStatus(m_channel, &videoSignalStatus);
         if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
         {
-            if (m_frame_cnt > 60)
+            if (m_frame_cnt > 2000)
             {
                 m_log->warn("DAMAGED: Video signal lost lock. (frame {})",
                             m_frame_cnt);
@@ -2441,9 +2442,9 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             if (skipped > 0)
             {
                 skipped_frame_cnt += skipped;
-                if (skipped_frame_cnt > 1 && m_frame_cnt > 60)
+                if (skipped_frame_cnt > 1 && m_frame_cnt > 2000)
                 {
-                    m_log->warn("DAMAGED: Magewell lost {} frames. "
+                    m_log->warn("DAMAGED: Magewell lost {} video frames. "
                                 "Have skipped {} : {}",
                                 skipped, skipped_frame_cnt, m_frame_cnt);
                 }
