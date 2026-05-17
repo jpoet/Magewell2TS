@@ -366,25 +366,31 @@ string Magewell::describe_input(HCHANNEL hChannel)
     MW_RESULT xr;
     MWCAP_VIDEO_SIGNAL_STATUS vStatus;
     MWCAP_INPUT_SPECIFIC_STATUS status;
+    uint temperature = 0;
 
     // Get input specific status
     xr = MWGetInputSpecificStatus(hChannel, &status);
+    MWGetTemperature(hChannel, &temperature);
 
     // Check if we got valid status
     if (xr != MW_SUCCEEDED ||
         MWGetVideoSignalStatus(hChannel, &vStatus) != MW_SUCCEEDED)
     {
-        return "Failed to get video signal status.";
+        return format("{:.1f}ºC Failed to get video signal status.",
+                      static_cast<float>(temperature) / 10);
     }
 
     // Check if there's a valid signal
     if (!status.bValid)
     {
-        return "No signal detected on input.";
+        return format("{:.1f}ºC No signal detected on input.",
+                      static_cast<float>(temperature) / 10);
     }
 
     // Output basic video signal information
-    string msg = format("Video Signal {}: {}", GetVideoSignal(vStatus.state),
+    string msg = format("{:.1f}ºC Video Signal {}: {}",
+                        static_cast<float>(temperature) / 10,
+                        GetVideoSignal(vStatus.state),
                         GetVideoInputType(status.dwVideoInputType));
 
     // Output HDMI-specific information
