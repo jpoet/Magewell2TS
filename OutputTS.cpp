@@ -1949,7 +1949,6 @@ void OutputTS::copy_to_frame(void)
     AVFrame* dst_frame;
     uint8_t* pImage;
     void*    pEco;
-    int      image_size;
     int64_t  timestamp;
 #if 0
     int64_t  prev_ts = -1;
@@ -1994,7 +1993,6 @@ void OutputTS::copy_to_frame(void)
                 {
                     pImage     = m_imagequeue.front().image;
                     pEco       = m_imagequeue.front().pEco;
-                    image_size = m_imagequeue.front().image_size;
                     timestamp  = m_imagequeue.front().timestamp;
 
                     m_imagequeue.pop_front();
@@ -2099,21 +2097,38 @@ void OutputTS::copy_to_frame(void)
         else
             dst_frame = frm;
 
-        // Copy frame data based on pixel format
-        if (m_video_stream.enc->pix_fmt == AV_PIX_FMT_YUV420P)
+        uint8_t *src_data[8] = { nullptr };
+        int src_linesize[8]  = { 0 };
+
+        // Map flat incoming pImage buffer to the formatting arrays
+        // Note: Alignment must be 1 since pImage is a flat, packed
+        // byte buffer
+        int required_size = av_image_fill_arrays(src_data,
+                                                 src_linesize,
+                                                 pImage,
+                                                 m_sw_pix_fmt,
+                                                 m_video_stream.enc->width,
+                                                 m_video_stream.enc->height,
+                                                 1);
+
+        if (required_size < 0)
         {
-            // YUV 4:2:0
-            memcpy(dst_frame->data[0], pImage, image_size);
-            memcpy(dst_frame->data[1], pImage + image_size, image_size / 4);
-            memcpy(dst_frame->data[2], pImage + image_size * 5 / 4,
-                   image_size / 4);
+            m_log->error("Failed to create array from image: {}",
+                         AVerr2str(required_size));
+            Shutdown();
+            break;
         }
-        else
-        {
-            memcpy(dst_frame->data[0], pImage, image_size);
-            memcpy(dst_frame->data[1], pImage + image_size,
-                   image_size / 2);
-        }
+
+        // Perform the safe row-by-row memory transfer to mapped
+        // hardware surface
+        av_image_copy(dst_frame->data,
+                      dst_frame->linesize,
+                      (const uint8_t **)src_data,
+                      src_linesize,
+                      m_sw_pix_fmt,
+                      m_video_stream.enc->width,
+                      m_video_stream.enc->height
+                      );
 
         if (m_video_stream.hw_frames_ctx)
         {
