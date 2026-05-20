@@ -61,7 +61,7 @@
 #include "Magewell.h"
 
 //#define DUMP_RAW_AUDIO_ALLBITS
-//#define DUMP_RAW_AUDIO
+#define DUMP_RAW_AUDIO
 
 #if defined(DUMP_RAW_AUDIO) || defined(DUMP_RAW_AUDIO_ALLBITS)
 #include <fstream>
@@ -1298,21 +1298,12 @@ void Magewell::capture_audio_loop(void)
                   Left0, Left1, Left2, Left3, right0, right1, right2,
                   right3.
                 */
-                uint8_t mark = 0xcc;
-                for (int idx = 0; idx < 16; ++idx)
-                    fraw_all.write(reinterpret_cast<const char*>(&mark), sizeof(uint8_t));
-
-                for (int idx = 0;
-                     idx < MWCAP_AUDIO_SAMPLES_PER_FRAME * MWCAP_AUDIO_MAX_NUM_CHANNELS;
-                     ++idx)
-                {
-                    fraw_all.write(reinterpret_cast<char*>(&macf.adwSamples[idx]),
-                                   sizeof(DWORD));
-                }
+                fraw_all.write(reinterpret_cast<char*>(macf.adwSamples),
+                               sample_size * MWCAP_AUDIO_MAX_NUM_CHANNELS);
 #endif
 
-                // Create audio frame buffer
-                AudioBuffer::AudioFrame* audio_frame = new AudioBuffer::AudioFrame;
+                               // Create audio frame buffer
+                               AudioBuffer::AudioFrame* audio_frame = new AudioBuffer::AudioFrame;
                 audio_frame->resize(frame_size);
                 uint8_t* output_ptr = audio_frame->data();
 
@@ -1341,21 +1332,20 @@ void Magewell::capture_audio_loop(void)
                     }
                 }
 
-#ifdef DUMP_RAW_AUDIO
+#if defined(DUMP_RAW_AUDIO)
+
                 /*
                   Bitstream Audio: Each sample is 16-bits for L1 and 16-bits for R1
                   16-bit PCM: Each sample is 16-bits for each valid channel: L1R1L2R2, etc...
                   24-bit PCM: Each sample is 32-bits for each valid channel: L1R1L2R2, etc...
                 */
-                uint8_t mark = 0xcc;
-                for (int idx = 0; idx < 16; ++idx)
-                    fraw.write(reinterpret_cast<const char*>(&mark), sizeof(uint8_t));
 
-                AudioBuffer::AudioFrame::const_iterator Itr;
-                for (Itr = audio_frame->begin(); Itr != audio_frame->end(); ++Itr)
-                {
-                    fraw.write(reinterpret_cast<const char*>(&(*Itr)), sizeof(uint8_t));
-                }
+               fraw.write(reinterpret_cast<char*>(audio_frame->data()),
+                          audio_frame->size());
+
+               /* od --endian=big  -t x4 -w32   raw-audio-allbits.bin |less
+                */
+
 #endif
 
                 // Add frame to output handler
