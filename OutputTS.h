@@ -58,7 +58,14 @@ class OutputTS
     bool setVideoParams(int width, int height, bool interlaced,
                         AVRational time_base, double frame_duration,
                         AVRational frame_rate, bool is_hdr);
-    bool addAudio(AudioBuffer::AudioFrame *& buf, int64_t timestamp);
+
+    // Pass-through configuration link to cross the hierarchy layer at startup
+    void LinkAudioSink
+      (std::function<void(AudioBuffer::AudioFrame&&)>& sink_initializer)
+    {
+        m_audioIO->LinkAudioSink(sink_initializer);
+    }
+
     void ClearVideoPool(void);
     void ClearImageQueue(void);
     void DiscardImages(int val, const std::string & why);

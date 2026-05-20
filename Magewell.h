@@ -270,9 +270,6 @@ private:
     // spdlog
     std::shared_ptr<spdlog::logger> m_log;
 
-    // Audio buffer parameters
-    int m_audio_buf_frames {12288};  ///< Audio buffer frames
-
     // Capture components
     OutputTS*            m_out2ts  {nullptr};  ///< Output TS handler
     HCHANNEL             m_channel {nullptr};   ///< Channel handle
@@ -325,4 +322,6 @@ private:
     bool m_p010    {false};  ///< Whether P010 format is used
     bool m_fatal   {false};  ///< Fatal error flag
     int  m_verbose {1};      ///< Verbose level
+
+    std::function<void(AudioBuffer::AudioFrame&&)> f_audio_sink;
 };

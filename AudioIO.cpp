@@ -52,50 +52,6 @@ static std::string AVerr2str(int code)
 }
 
 /**
- * @brief Assignment operator implementation
- *
- * Copies all member variables from another AudioBuffer object
- *
- * @param rhs Right-hand side object to copy from
- * @return Reference to this object
- */
-AudioBuffer& AudioBuffer::operator=(const AudioBuffer & rhs)
-{
-    if (this == &rhs)
-        return *this;
-
-    // Reset EOF flag
-    m_EoF                  = false;
-
-    m_log                  = rhs.m_log;
-
-    // Copy S/PDIF context pointers
-    m_spdif_format_context = rhs.m_spdif_format_context;
-    m_spdif_avio_context   = rhs.m_spdif_avio_context;
-    m_spdif_avio_context_buffer = rhs.m_spdif_avio_context_buffer;
-    m_spdif_codec          = rhs.m_spdif_codec;
-    m_spdif_codec_id       = rhs.m_spdif_codec_id;
-
-    // Copy audio properties
-    m_lpcm                 = rhs.m_lpcm;
-    av_channel_layout_copy(&m_channel_layout, &rhs.m_channel_layout);
-    m_codec_name           = rhs.m_codec_name;
-    m_num_channels         = rhs.m_num_channels;
-    m_bytes_per_sample     = rhs.m_bytes_per_sample;
-    m_frame_size           = rhs.m_frame_size;
-    m_samples_per_frame    = rhs.m_samples_per_frame;
-    m_sample_rate          = rhs.m_sample_rate;
-    m_block_size           = rhs.m_block_size;
-
-    // Copy other properties
-    m_parent               = rhs.m_parent;
-    m_id                   = rhs.m_id;
-    m_verbose              = rhs.m_verbose;
-
-    return *this;
-}
-
-/**
  * @brief Equality operator implementation
  *
  * @param rhs Right-hand side object to compare with
@@ -204,31 +160,14 @@ void AudioBuffer::PrintState(const string & where, bool force) const
     }
 }
 
-/**
- * @brief Add an audio frame to the buffer queue
- *
- * Adds an audio frame to the queue and notifies waiting readers
- *
- * @param buf Pointer to audio frame data to add
- * @param timestamp Timestamp for the frame
- * @return true if successful, false otherwise
- */
-bool AudioBuffer::Add(AudioFrame *& buf, int64_t timestamp)
+bool AudioBuffer::PushFrame(AudioFrame&& frame)
 {
-#if 0
-    if (buf->size() != m_frame_size)
-    {
-        m_log->warn("Adding audio buffer with size {}. expected {}",
-                    buf->size(), m_frame_size);
-    }
-#endif
-
     {
         // Acquire write mutex and add frame to queue
         const unique_lock<mutex> lock(m_write_mutex);
         {
-            m_total_write += buf->size();
-            m_audio_queue.push_back( {buf, timestamp} );
+            m_total_write += frame.data.size();
+            m_audio_queue.emplace_back(std::move(frame));
         }
     }
 
@@ -273,16 +212,15 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
 
     int64_t ts = m_audio_queue.front().timestamp;
 
-    AudioFrame* frame;
     uint32_t frm = 0;
     // Process frames until requested length is filled or queue is empty
     while (frm + m_frame_size <= len)
     {
-        frame = m_audio_queue.begin()->frame;
-        pkt_sz = frame->size();
+        pkt_sz = m_audio_queue.front().data.size();
 
         // Copy frame data to destination
-        copy(frame->begin(), frame->end(), dest);
+        copy(m_audio_queue.front().data.begin(),
+             m_audio_queue.front().data.end(), dest);
 
         dest += pkt_sz;
         frm += pkt_sz;
@@ -291,10 +229,7 @@ int AudioBuffer::Read(uint8_t* buf, uint32_t len)
         if (m_probing)
             m_probed_queue.push_back(m_audio_queue.front());
         else
-        {
             ++m_pkts_read;
-            delete frame;  // Important: This is where memory is freed
-        }
 
         // Update timestamp if needed
         if (ts == m_parent->m_timestamp)
@@ -731,23 +666,22 @@ bool AudioIO::AddBuffer(int num_channels, bool is_lpcm,
 {
     {
         const unique_lock<mutex> lock(m_buffer_mutex);
-        buffer_que_t::iterator Ibuf;
 
         if (m_running.load() == false)
+        {
             return false;
+        }
 
         // Set EOF on previous buffer if exists
         if (!m_buffer_q.empty())
-        {
-            Ibuf = m_buffer_q.end() - 1;
-            (*Ibuf).setEoF();
-        }
+            m_buffer_q.back().setEoF();
 
-        // Create new buffer and add to queue
-        m_buffer_q.push_back(AudioBuffer(num_channels, is_lpcm,
-                                         bytes_per_sample, sample_rate,
-                                         samples_per_frame, frame_size,
-                                         this, m_verbose, m_buf_id++));
+        m_buffer_q.emplace_back(num_channels, is_lpcm,
+                                bytes_per_sample, sample_rate,
+                                samples_per_frame, frame_size,
+                                this, m_verbose, m_buf_id++);
+
+        // Track the newly added element safely
         m_Iback = m_buffer_q.end() - 1;
 
         if (m_verbose > 2)
@@ -759,7 +693,7 @@ bool AudioIO::AddBuffer(int num_channels, bool is_lpcm,
                         "     samples_per_frame = {}\n"
                         "            frame_size = {}"
                         ")",
-                        (*m_Iback).Id(),
+                        m_Iback->Id(),
                         num_channels,
                         is_lpcm ? "true" : "false",
                         bytes_per_sample,
@@ -863,34 +797,23 @@ bool AudioIO::BlockReady(void) const
 }
 
 
-/**
- * @brief Add audio frame to the last buffer
- *
- * @param buf Pointer to audio frame data
- * @param timestamp Timestamp for the frame
- * @return true if successful, false otherwise
- */
-bool AudioIO::Add(AudioBuffer::AudioFrame *& buf, int64_t timestamp)
+// Binds the Magewell callback straight to the current active AudioBuffer
+void AudioIO::LinkAudioSink
+  (std::function<void(AudioBuffer::AudioFrame&&)>& sink_initializer)
 {
-    const unique_lock<mutex> lock(m_buffer_mutex);
-
-    if (m_buffer_q.empty())
+    sink_initializer = [this](AudioBuffer::AudioFrame&& frame)
     {
-        m_log->warn("No audio buffers to Add to.");
-        return false;
-    }
+        const unique_lock<mutex> lock(m_buffer_mutex);
 
-#if 0
-    buffer_que_t::iterator Ibuf = m_buffer_q.end() - 1;
-    if (static_cast<int32_t>(buf.size()) != (*Ibuf).FrameSize())
-    {
-        m_log->warn("AudioIO::Add buf size: {} expected {}",
-                    buf.size(), (*Ibuf).FrameSize());
-        return false;
-    }
-#endif
+        if (m_buffer_q.empty())
+        {
+            m_log->warn("No audio buffers to Add to.");
+            return;
+        }
 
-    return (*m_Iback).Add(buf, timestamp);
+        // Appends directly to the deque of the back-most AudioBuffer
+        m_buffer_q.back().PushFrame(std::move(frame));
+    };
 }
 
 /**

@@ -1007,7 +1007,7 @@ void Magewell::capture_audio_loop(void)
     int frame_cnt = 0;
     uint buffered_frame_idx = 512;
 
-    int      frame_size      = 0;
+    int      samples_size    = 0;
     int      channel_pairs   = 0;
     int      shift           = 0;
 
@@ -1198,7 +1198,7 @@ void Magewell::capture_audio_loop(void)
                 continue;
             }
 
-            frame_size = MWCAP_AUDIO_SAMPLES_PER_FRAME
+            samples_size = MWCAP_AUDIO_SAMPLES_PER_FRAME
                          * cur_channels * even_bytes_per_sample;
 
             channel_pairs = cur_channels / 2;
@@ -1209,7 +1209,8 @@ void Magewell::capture_audio_loop(void)
                                      bytes_per_sample,
                                      sample_rate,
                                      MWCAP_AUDIO_SAMPLES_PER_FRAME,
-                                     frame_size);
+                                     samples_size);
+            m_out2ts->LinkAudioSink(f_audio_sink);
 
             m_reset_audio.store(false);
         }
@@ -1302,10 +1303,12 @@ void Magewell::capture_audio_loop(void)
                                sample_size * MWCAP_AUDIO_MAX_NUM_CHANNELS);
 #endif
 
-                               // Create audio frame buffer
-                               AudioBuffer::AudioFrame* audio_frame = new AudioBuffer::AudioFrame;
-                audio_frame->resize(frame_size);
-                uint8_t* output_ptr = audio_frame->data();
+                // Create audio frame buffer
+                AudioBuffer::AudioFrame samples;
+
+                samples.data.resize(samples_size);
+                samples.timestamp = macf.llTimestamp;
+                uint8_t* output_ptr = samples.data.data();
 
                 for (int pair = 0; pair < channel_pairs; ++pair)
                 {
@@ -1340,16 +1343,15 @@ void Magewell::capture_audio_loop(void)
                   24-bit PCM: Each sample is 32-bits for each valid channel: L1R1L2R2, etc...
                 */
 
-               fraw.write(reinterpret_cast<char*>(audio_frame->data()),
-                          audio_frame->size());
+               fraw.write(reinterpret_cast<char*>(samples.data.data()),
+                          samples.data.size());
 
                /* od --endian=big  -t x4 -w32   raw-audio-allbits.bin |less
                 */
 
 #endif
-
                 // Add frame to output handler
-                m_out2ts->addAudio(audio_frame, macf.llTimestamp);
+               f_audio_sink(std::move(samples));
             }
         }
     }

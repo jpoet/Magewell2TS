@@ -46,7 +46,11 @@ class AudioBuffer
      *
      * Represents a vector of unsigned bytes that constitute an audio frame
      */
-    using AudioFrame = std::vector<uint8_t>;
+    struct AudioFrame
+    {
+        std::vector<uint8_t> data;
+        int64_t timestamp{ 0 };
+    };
 
     /**
      * @brief Constructor for AudioBuffer
@@ -63,17 +67,14 @@ class AudioBuffer
      * @param verbose Verbose level for logging
      * @param id Unique identifier for this buffer
      */
+    AudioBuffer(void) = default;
     AudioBuffer(int num_channels, bool is_lpcm,
                 int bytes_per_sample, int sample_rate,
                 int samples_per_frame, int frame_size,
                 AudioIO* parent, int verbose, int id);
 
-    /**
-     * @brief Copy constructor
-     *
-     * @param rhs Right-hand side object to copy from
-     */
-    AudioBuffer(const AudioBuffer & rhs) { *this = rhs; }
+    AudioBuffer(const AudioBuffer& rhs) = delete;
+    AudioBuffer& operator=(const AudioBuffer& rhs) = delete;
 
     /**
      * @brief Destructor for AudioBuffer
@@ -136,14 +137,6 @@ class AudioBuffer
                        bool force = false) const;
 
     /**
-     * @brief Assignment operator
-     *
-     * @param rhs Right-hand side object to assign from
-     * @return Reference to this object
-     */
-    AudioBuffer& operator=(const AudioBuffer & rhs);
-
-    /**
      * @brief Equality operator
      *
      * @param rhs Right-hand side object to compare with
@@ -151,14 +144,7 @@ class AudioBuffer
      */
     bool operator==(const AudioBuffer & rhs);
 
-    /**
-     * @brief Add an audio frame to the buffer queue
-     *
-     * @param buf Pointer to audio frame data to add
-     * @param timestamp Timestamp for the frame
-     * @return true if successful, false otherwise
-     */
-    bool Add(AudioFrame *& buf, int64_t timestamp);
+    bool PushFrame(AudioFrame&& frame);
 
     /**
      * @brief Read audio data from buffer
@@ -307,17 +293,9 @@ class AudioBuffer
     std::shared_ptr<spdlog::logger> m_log;
 
     /**
-     * @brief Structure to hold audio frame data and timestamp
-     */
-    using frame_t = struct {
-        AudioFrame* frame;
-        int64_t timestamp = {-1LL};
-    };
-
-    /**
      * @brief Type alias for audio frame queue
      */
-    using frameque_t = std::deque<frame_t>;
+    using frameque_t = std::deque<AudioFrame>;
 
     /**
      * @brief Main queue for audio frames
@@ -534,14 +512,9 @@ class AudioIO
      */
     bool      RescanSPDIF(void);
 
-    /**
-     * @brief Add audio frame to the last buffer
-     *
-     * @param buf Pointer to audio frame data
-     * @param timestamp Timestamp for the frame
-     * @return true if successful, false otherwise
-     */
-    bool      Add(AudioBuffer::AudioFrame *& buf, int64_t timestamp);
+    // Binds the Magewell callback straight to the current active AudioBuffer
+    void LinkAudioSink(std::function<void
+                       (AudioBuffer::AudioFrame&&)>& sink_initializer);
 
     /**
      * @brief Seek in audio data

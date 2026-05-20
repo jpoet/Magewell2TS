@@ -986,18 +986,6 @@ bool OutputTS::setVideoParams(int width, int height, bool interlaced,
 }
 
 /**
- * @brief Add audio data to the output
- * @param buf Pointer to audio buffer
- * @param timestamp Timestamp for audio data
- * @return true on success, false on failure
- * @note Adds audio data to the audio IO handler for processing
- */
-bool OutputTS::addAudio(AudioBuffer::AudioFrame *& buf, int64_t timestamp)
-{
-    return m_audioIO->Add(buf, timestamp);
-}
-
-/**
  * @brief Close the output container
  * @note Cleans up container resources
  */
