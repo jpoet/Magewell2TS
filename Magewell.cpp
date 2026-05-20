@@ -1251,14 +1251,14 @@ void Magewell::capture_audio_loop(void)
             {
                 if (m_verbose > 0)
                     m_log->info("AUDIO signal changed.");
-                this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
+//                this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
                 break;
             }
 
             // Handle input reset
             if (notify_status & MWCAP_NOTIFY_AUDIO_INPUT_RESET)
             {
-                this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
+                this_thread::sleep_for(chrono::milliseconds(m_frame_ms / 4));
                 break;
             }
 
