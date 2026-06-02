@@ -4,12 +4,19 @@
 #include <deque>
 #include <set>
 
+#include <chrono>
+#include <vector>
+#include <string>
+#include <format>
+
 #include <mutex>
 #include <condition_variable>
 
 #include <MWFOURCC.h>
 #include <LibMWCapture/MWCapture.h>
 #include "LibMWCapture/MWEcoCapture.h"
+
+#include <spdlog/spdlog.h>
 
 #include "OutputTS.h"
 
@@ -22,6 +29,254 @@
  * @author John Patrick Poet
  * @date 2022-2026
  */
+
+
+#include <iostream>
+#include <chrono>
+#include <vector>
+#include <string>
+#include <format>
+
+#include <iostream>
+#include <chrono>
+#include <vector>
+#include <string>
+#include <format>
+
+class SteadyVideo
+{
+public:
+    struct Stats
+    {
+        bool isStable;
+        std::chrono::milliseconds duration;
+        int cnt; // Tracks samples measured in this state instance
+    };
+
+    struct TotalSummary
+    {
+        std::chrono::milliseconds stableDuration;
+        std::chrono::milliseconds unstableDuration;
+        int stableCnt;   // Added to track total stable samples
+        int unstableCnt; // Added to track total unstable samples
+    };
+
+    SteadyVideo(std::chrono::milliseconds requiredDuration)
+        : m_requiredDuration(requiredDuration),
+          m_currentState(true),
+          m_startTime(std::chrono::steady_clock::now()),
+          m_stateStartTime(m_startTime),
+          m_stableDuration(std::chrono::milliseconds(0)),
+          m_cnt(0)
+    {
+    }
+
+    bool AddSample(bool current)
+    {
+        std::chrono::time_point<std::chrono::steady_clock> now = std::chrono::steady_clock::now();
+        std::chrono::milliseconds sampleDuration = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_stateStartTime);
+
+        // Count this new sample for the active state
+        m_cnt++;
+
+        if (current == m_currentState)
+        {
+            if (m_currentState)
+            {
+                m_stableDuration = sampleDuration;
+            }
+        }
+        else
+        {
+            // Save the finished state information to history
+            Stats historicalStat;
+            historicalStat.isStable = m_currentState;
+            historicalStat.duration = sampleDuration;
+            historicalStat.cnt      = m_cnt;
+            m_history.push_back(historicalStat);
+
+            // Reset trackers for the brand new state
+            m_currentState = current;
+            m_cnt = 0;
+            m_stateStartTime = now;
+            m_stableDuration = std::chrono::milliseconds(0);
+        }
+
+        return m_currentState && (m_stableDuration >= m_requiredDuration);
+    }
+
+    // Marked const since it does not modify the class state
+    std::vector<Stats> Statistics() const
+    {
+        std::vector<Stats> currentStats = m_history;
+        std::chrono::time_point<std::chrono::steady_clock> now = std::chrono::steady_clock::now();
+        std::chrono::milliseconds currentDuration = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_stateStartTime);
+
+        // Include the active ongoing state into the list
+        Stats finalStat;
+        finalStat.isStable = m_currentState;
+        finalStat.duration = currentDuration;
+        finalStat.cnt      = m_cnt;
+        currentStats.push_back(finalStat);
+
+        return currentStats;
+    }
+
+    // Marked const and updated to use modern range-based for loops
+    TotalSummary StateDurations() const
+    {
+        std::vector<Stats> allStats = Statistics();
+        TotalSummary summary{}; // Zero-initializes durations and counts
+
+        for (const auto& stat : allStats)
+        {
+            if (stat.isStable)
+            {
+                summary.stableDuration += stat.duration;
+                summary.stableCnt      += stat.cnt;
+            }
+            else
+            {
+                summary.unstableDuration += stat.duration;
+                summary.unstableCnt      += stat.cnt;
+            }
+        }
+
+        return summary;
+    }
+
+    // Marked const and updated to display counts in the tables
+    std::string StatTable() const
+    {
+        std::vector<Stats> allStats = Statistics();
+        std::string table = "--- Chronological Log ---\n";
+        table += std::format("| {:<10} | {:<15} | {:<12} |\n", "State", "Duration (ms)", "Sample Count");
+        table += "|------------|-----------------|--------------|\n";
+
+        for (const auto& stat : allStats)
+        {
+            std::string stateString = stat.isStable ? "Stable" : "Unstable";
+            table += std::format("| {:<10} | {:<15} | {:<12} |\n", stateString, stat.duration.count(), stat.cnt);
+        }
+
+        TotalSummary summary = StateDurations();
+        table += "\n--- Cumulative Totals ---\n";
+        table += std::format("| {:<10} | {:<15} | {:<12} |\n", "State", "Total Time (ms)", "Total Samples");
+        table += "|------------|-----------------|--------------|\n";
+        table += std::format("| {:<10} | {:<15} | {:<12} |\n", "Stable", summary.stableDuration.count(), summary.stableCnt);
+        table += std::format("| {:<10} | {:<15} | {:<12} |\n", "Unstable", summary.unstableDuration.count(), summary.unstableCnt);
+
+        return table;
+    }
+
+private:
+    std::chrono::milliseconds m_requiredDuration;
+    bool m_currentState;
+    std::chrono::time_point<std::chrono::steady_clock> m_startTime;
+    std::chrono::time_point<std::chrono::steady_clock> m_stateStartTime;
+    std::chrono::milliseconds m_stableDuration;
+    int  m_cnt {0};
+    std::vector<Stats> m_history;
+};
+
+class FrameRateDetector
+{
+  public:
+
+    AVRational update(int64_t frame_duration_units)
+    {
+        AVRational detected =
+            normalize_framerate(frame_duration_units);
+
+        if (av_cmp_q(detected, m_candidate) == 0)
+        {
+            ++m_stable_count;
+
+            //
+            // Require stability before accepting
+            //
+            if (m_stable_count >= m_required_stability)
+            {
+                m_current = detected;
+            }
+        }
+        else
+        {
+            m_candidate    = detected;
+            m_stable_count = 1;
+        }
+
+        return m_current;
+    }
+
+    AVRational current() const
+    {
+        return m_current;
+    }
+
+  private:
+
+    AVRational normalize_framerate(int64_t frame_duration_units) const
+    {
+        const double measured_fps =
+            10000000.0 /
+            static_cast<double>(frame_duration_units);
+
+        double best_error =
+            std::numeric_limits<double>::max();
+
+        AVRational best {0,1};
+
+        for (const auto& candidate : kCanonicalRates)
+        {
+            const double error =
+                std::abs(measured_fps - candidate.fps);
+
+            if (error < best_error)
+            {
+                best_error = error;
+                best       = candidate.rate;
+            }
+        }
+
+        return best;
+    }
+
+  private:
+
+    struct CanonicalRate
+    {
+        AVRational rate;
+        double     fps;
+    };
+
+    static constexpr std::array<CanonicalRate,10>
+      kCanonicalRates
+    {{
+            {{24000,1001}, 23.976023976},
+            {{24,1},       24.0},
+
+            {{25,1},       25.0},
+
+            {{30000,1001}, 29.970029970},
+            {{30,1},       30.0},
+
+            {{48000,1001}, 47.952047952},
+            {{48,1},       48.0},
+
+            {{60000,1001}, 59.940059940},
+            {{60,1},       60.0},
+        }};
+
+    AVRational m_current  {0,1};
+    AVRational m_candidate{0,1};
+
+    int m_stable_count      {0};
+
+    int m_required_stability{30};
+};
+
+
 class Magewell
 {
     // Type definitions
@@ -103,31 +358,23 @@ public:
      */
     bool WriteEDID(const std::string & filepath);
 
-    /**
-     * @brief Start video capture with specified parameters
-     * @param video_codec Video codec to use
-     * @param preset Encoding preset
-     * @param quality Quality setting
-     * @param look_ahead Look ahead setting
-     * @param no_audio Whether to disable audio capture
-     * @param p010 Whether to use P010 format
-     * @param gpu_device GPU device to use
-     * @return true if successful, false otherwise
-     */
     bool Capture(const std::string & video_codec, const std::string & preset,
                  int quality, int look_ahead, bool no_audio, bool p010,
                  const std::string & gpu_device, float gop_secs,
-                 int extra_hw_frames, int gpu_buffers, int video_buffers);
+                 int extra_hw_frames, std::chrono::milliseconds settle_time,
+                 int video_buffers);
 
     /**
      * @brief Shutdown the capture process
      */
     void Shutdown(void);
 
+#if 0
     /**
      * @brief Reset the capture process
      */
     void Reset(void);
+#endif
 
     /**
      * @brief Check if fatal error occurred
@@ -162,7 +409,7 @@ private:
      */
     bool update_HDRinfo(void);
 
-    size_t   AllocateImageBuffer(void);
+    size_t   AllocateImageBuffers(void);
     uint8_t* GetFrameImage(size_t frame_idx);
 
     /**
@@ -229,10 +476,10 @@ private:
      * @param interlaced Whether video is interlaced
      */
     bool capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
+                           std::optional<OutputTS::VideoParams>&& pParams,
                            int eco_event,
                            HNOTIFY video_notify,
-                           ULONGLONG ullStatusBits,
-                           bool interlaced);
+                           ULONGLONG ullStatusBits);
 
     /**
      * @brief Capture video using PRO capture method
@@ -246,13 +493,13 @@ private:
      * @param interlaced Whether video is interlaced
      */
     bool capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
+                           std::optional<OutputTS::VideoParams>&& pParams,
                            HNOTIFY video_notify,
                            MWCAP_PTR notify_event,
                            MWCAP_PTR capture_event,
                            int       frame_wrap_idx,
                            DWORD     event_mask,
-                           ULONGLONG ullStatusBits,
-                           bool interlaced);
+                           ULONGLONG ullStatusBits);
 
     /**
      * @brief Main video capture loop
@@ -271,10 +518,11 @@ private:
     std::shared_ptr<spdlog::logger> m_log;
 
     // Capture components
-    OutputTS*            m_out2ts  {nullptr};  ///< Output TS handler
-    HCHANNEL             m_channel {nullptr};   ///< Channel handle
-    MWCAP_CHANNEL_INFO   m_channel_info  {0};  ///< Channel information
-    int                  m_channel_idx   {0};  ///< Channel index
+    OutputTS*            m_out2ts  {nullptr};    ///< Output TS handler
+    HCHANNEL             m_channel {nullptr};    ///< Channel handle
+    MWCAP_CHANNEL_INFO   m_channel_info  {0};    ///< Channel information
+    int                  m_channel_idx   {0};    ///< Channel index
+    std::chrono::milliseconds m_settle_time   {5000}; ///< signal change timeout
 
     // HDR information
     HDMI_INFOFRAME_PACKET m_infoPacket      {0};  ///< Info packet
@@ -284,9 +532,9 @@ private:
 
     std::unique_ptr<uint64_t[]> m_image_buffer;
     size_t                      m_image_size_qwords {0};
-    bool                        m_pinned   {false};
+    bool                        m_pinned            {false};
 
-    size_t       m_requested_buffers       {0};
+    size_t       m_image_buffers           {0};
     size_t       m_image_buffers_total     {0}; ///< Total image buffers
     size_t       m_image_buffers_avail     {0}; ///< Available image buffers
     imageque_t   m_avail_image_buffers;         ///< Queue of available buffers
@@ -309,9 +557,11 @@ private:
 
     // State flags
     std::atomic<bool> m_running     {true};  ///< Running flag
+#if 0
     std::atomic<bool> m_reset_audio {true};  ///< Audio reset flag
     std::atomic<bool> m_reset_video {true};  ///< Video reset flag
     std::chrono::steady_clock::time_point m_last_reset;  ///< Last reset time
+#endif
 
     // Function pointer
     std::function<bool (void)>  f_open_video;  ///< Video open function
@@ -323,5 +573,10 @@ private:
     bool m_fatal   {false};  ///< Fatal error flag
     int  m_verbose {1};      ///< Verbose level
 
-    std::function<void(AudioBuffer::AudioFrame&&)> f_audio_sink;
+    FrameRateDetector m_rateDetector;
+    AVRational  m_current_frame_rate { 0, 1 };
+
+    std::function<void(IEC61937Parser::Frame&&)> f_audio_sink;
+
+    std::chrono::steady_clock::time_point m_start_tm;
 };

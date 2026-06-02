@@ -36,7 +36,7 @@ configure_file(
 )
 
 # add the executable
-add_executable(magewell2ts magewell2ts.cpp Magewell.cpp AudioIO.cpp OutputTS.cpp lock_ios.cpp)
+add_executable(magewell2ts EAC3Parser.cpp IEC61937Parser.cpp magewell2ts.cpp Magewell.cpp OutputTS.cpp)
 
 # set_target_properties(magewell2ts PROPERTIES
 #   LINK_SEARCH_START_STATIC ON
@@ -119,6 +119,7 @@ if(NOT VPL_FOUND)
 else()
   message(NOTICE "Note: To use oneVPL, ffmpeg needs to be compiled with '--enable-libvpl'")
   target_link_libraries(${TARGET} PkgConfig::VPL)
+  target_include_directories(magewell2ts PRIVATE /usr/include/vpl)
   add_compile_definitions(VPL_VERSION=${VPL_VERSION})
 endif()
 
