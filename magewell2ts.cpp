@@ -29,6 +29,10 @@
 #include <memory>
 #include <format>
 
+#include <fcntl.h>
+#include <unistd.h>
+#include <cstdio>
+
 #include <vector>
 #include <filesystem>
 #include <spdlog/spdlog.h>
@@ -260,14 +264,22 @@ int main(int argc, char* argv[])
     int         video_buffers = 8;
     int         extra_hw_frames = 32;
 
-    constexpr size_t BUFFER_SIZE = 100 * 1024 * 1024;
-    std::vector<char> buffer(BUFFER_SIZE);
-
-    // Set stdout to use this buffer (fully buffered)
-    if (std::setvbuf(stdout, buffer.data(), _IOFBF, BUFFER_SIZE) != 0)
+    // Attempt to set output PIPE to 1 Megabyte
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    int max_pipe_size = 1048576;
+    // Force the STDOUT file descriptor pipe buffer to expand
+    if (fcntl(STDOUT_FILENO, F_SETPIPE_SZ, max_pipe_size) < 0)
     {
-        cerr << "Failed to allocate large buffer for stdout\n";
-        return 1;
+        // Could not set pipe size, so must be file mode.
+        constexpr size_t BUFFER_SIZE = 100 * 1024 * 1024;
+        std::vector<char> buffer(BUFFER_SIZE);
+
+        // Set stdout to use this buffer (fully buffered)
+        if (std::setvbuf(stdout, buffer.data(), _IOFBF, BUFFER_SIZE) != 0)
+        {
+            cerr << "Failed to allocate large buffer for stdout\n";
+            return 1;
+        }
     }
 
     vector<string_view> args(argv + 1, argv + argc);
