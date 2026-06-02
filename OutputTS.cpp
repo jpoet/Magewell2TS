@@ -1,12 +1,6 @@
 /*
  * Copyright (c) 2022-2026 John Patrick Poet
  *
- * Based on:
- *     Muxing.c Copyright (c) 2003 Fabrice Bellard
- *     avio_reading.c Copyright (c) 2014 Stefano Sabatini
- *     encode_audio.c Copyright (c) 2001 Fabrice Bellard
- *     encode_video.c Copyright (c) 2001 Fabrice Bellard
- *
  * Permission is hereby granted, free of charge, to any person
  * obtaining a copy of this software and associated documentation
  * files (the "Software"), to deal in the Software without
@@ -35,13 +29,6 @@
  * @date 2022-2026
  */
 
-#if 0
-#include <string>
-#include <format>
-#include <vector>
-#include <chrono>
-#endif
-
 #include <csignal>
 #include <unistd.h>
 #include <iostream>
@@ -67,120 +54,122 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libswresample/swresample.h>
+#include <libavutil/hwcontext.h>
+#include <libavutil/hwcontext_qsv.h>  // AVQSVFramesContext
+#include <vpl/mfxstructures.h>        // "MFX_MEMTYPE_VIDEO_MEMORY_DECODER_TARGET"
 }
 
+#if 0
 #define BURST_HEADER_SIZE 0x4
 #define SYNCWORD1 0xF872
 #define SYNCWORD2 0x4E1F
+#endif
 
 #include "OutputTS.h"
+#include "BitstreamAudioParser.h"
 
 using namespace std;
 
-/**
- * @brief Convert AV timestamp to string representation
- * @param ts Timestamp value to convert
- * @return String representation of timestamp
- * @note This function is used for debugging and logging purposes
- */
+#include <string>
+#include <sstream>
+#include <format>
+#include <cstdint>
+
 std::string AV_ts2str(int64_t ts)
 {
-    char astr[AV_TS_MAX_STRING_SIZE] = { 0 };
+    char astr[AV_ERROR_MAX_STRING_SIZE] = { 0 }; // Explicit stack buffer boundary
     av_ts_make_string(astr, ts);
-    return string(astr);
+    return std::string(astr);
 }
 
-/**
- * @brief Convert AV timestamp to time string with timebase
- * @param ts Timestamp value to convert
- * @param tb Timebase for conversion
- * @return String representation of timestamp in seconds
- * @note This function is used for debugging and logging purposes
- */
 std::string AV_ts2timestr(int64_t ts, AVRational* tb)
 {
-    ostringstream os;
+    if (!tb || tb->num == 0) return "0.00";
+    std::ostringstream os;
     os << av_q2d(*tb) * ts;
     return os.str();
 }
 
-/**
- * @brief Convert AV error code to string representation
- * @param code Error code to convert
- * @return String representation of error code
- * @note This function is used for debugging and logging purposes
- */
-static std::string AVerr2str(int code)
+std::string AVerr2str(int code)
 {
     char astr[AV_ERROR_MAX_STRING_SIZE] = { 0 };
     av_make_error_string(astr, AV_ERROR_MAX_STRING_SIZE, code);
-    return string(astr);
+    return std::string(astr);
 }
 
-static string av_dump_format_string(AVFormatContext* ctx)
+std::string av_dump_format_string(AVFormatContext* ctx)
 {
     if (!ctx)
-    {
         return std::format("No format context provided\n");
-    }
 
-    string result;
+    std::string result;
     for (unsigned int idx = 0; idx < ctx->nb_streams; ++idx)
     {
         AVStream* stream = ctx->streams[idx];
         AVCodecParameters* par = stream->codecpar;
 
         result += std::format("\tStream {}: ", idx);
-        result += std::format("{}: {}, ", av_get_media_type_string(par->codec_type),
+        result += std::format("{}: {}, ",
+                              av_get_media_type_string(par->codec_type),
                               avcodec_get_name(par->codec_id));
 
         if (par->codec_type == AVMEDIA_TYPE_VIDEO)
         {
-            string pix_name = par->format >= 0 ?
-                              av_get_pix_fmt_name((AVPixelFormat)par->format) : "unknown";
-            double tbn;
-            if (stream->time_base.num)
-                tbn = (double)stream->time_base.den
-                      / (double)stream->time_base.num;
-            else
-                tbn = 0;
-            result += std::format("{}({}), {}x{} {:.2f} tbn\n",
+            std::string pix_name =
+                par->format >= 0 ?
+                    av_get_pix_fmt_name((AVPixelFormat)par->format) : "unknown";
+            double tbn = 0.0;
+
+            if (stream->time_base.num != 0)
+            {
+                tbn = static_cast<double>(stream->time_base.den) /
+                      static_cast<double>(stream->time_base.num);
+            }
+
+
+            // Safe checking to handle fallback color layout strings safely
+            const char* cs_name = av_color_space_name(par->color_space);
+            std::string space_name = cs_name ? cs_name : "unknown";
+
+            result += std::format("{}({}), {}x{}p {:.2f} tbn\n",
                                   pix_name,
-                                  av_color_space_name(par->color_space),
-                                  par->width, par->height, tbn);
+                                  space_name,
+                                  par->width, par->height,
+                                  tbn);
         }
         else if (par->codec_type == AVMEDIA_TYPE_AUDIO)
         {
-            char layout_name[256];
+            char layout_name[256] = { 0 };
             av_channel_layout_describe(&par->ch_layout, layout_name,
                                        sizeof(layout_name));
-            result += std::format("{} Hz, {}, {} kb/s", par->sample_rate,
-                                  layout_name, par->bit_rate / 1000);
+
+            // Calculate a true dynamic bitrate for uncompressed LPCM
+            // targets safely
+            int64_t true_bitrate = par->bit_rate;
+            if (true_bitrate <= 0 && par->sample_rate > 0)
+            {
+                // Bitrate = sample_rate * channels * bits_per_sample
+                int bps = av_get_bits_per_sample(par->codec_id);
+                if (bps <= 0) bps = 16; // Safe standard baseline fallback guess
+                true_bitrate = static_cast<int64_t>(par->sample_rate) *
+                               par->ch_layout.nb_channels * bps;
+            }
+
+            // Added missing trailing newline to match video block
+            // layout aesthetics
+            result += std::format("{} Hz, {}, {} kb/s\n", par->sample_rate,
+                                  layout_name, true_bitrate / 1000);
         }
     }
 
     return result;
 }
 
-/**
- * @brief Constructor for OutputTS class
- * @param verbose_level Verbose level for logging
- * @param video_codec_name Name of video codec to use
- * @param preset Encoding preset
- * @param quality Quality setting for encoding
- * @param look_ahead Look ahead setting for encoding
- * @param p010 Flag to use P010 format
- * @param device GPU device identifier
- * @param shutdown Callback for shutdown events
- * @param reset Callback for reset events
- * @param image_buffer_avail Callback for image buffer availability
- * @note Initializes the output TS handler with specified parameters
- */
 OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
                    const string & preset, int quality, int look_ahead,
                    bool p010, bool isEco, const string & device,
-                   int extra_hw_frames, int gpu_buffers, float gop_secs,
-                   ShutdownCallback shutdown, ResetCallback reset,
+                   int extra_hw_frames, float gop_secs,
+                   ShutdownCallback shutdown,
                    MagCallback image_buffer_avail)
     : m_verbose(verbose_level)
     , m_video_codec_name(video_codec_name)
@@ -192,72 +181,134 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
     , m_p010(p010)
     , m_isEco(isEco)
     , m_extra_hw_frames(extra_hw_frames)
-    , m_gpu_buffers(gpu_buffers)
     , f_shutdown(shutdown)
-    , f_reset(reset)
     , f_image_buffer_available(image_buffer_avail)
 {
     m_log = spdlog::get("app_logger");
-    m_start_tm = chrono::steady_clock::now();
-
     if (!m_log)
     {
-        // Handle error if logger not found (e.g., create a fallback or throw exception)
         std::cerr << "OutputTS Error: Logger 'app_logger' not found!" << std::endl;
         return;
     }
 
     av_log_set_level(AV_LOG_QUIET);
 
-    // Determine encoder type based on codec name
-    if (m_video_codec_name.find("qsv") != string::npos)
+    // Initialize atomic runtime state machine flags
+    m_running.store(true);
+
+    // Determine encoder type based on codec name strings
+    if (m_video_codec_name.find("qsv") != string::npos) {
         m_encoderType = EncoderType::QSV;
-    else if (m_video_codec_name.find("vaapi") != string::npos)
+    } else if (m_video_codec_name.find("vaapi") != string::npos) {
         m_encoderType = EncoderType::VAAPI;
-    else if (m_video_codec_name.find("nvenc") != string::npos)
+    } else if (m_video_codec_name.find("nvenc") != string::npos || m_video_codec_name.find("nv") != string::npos) {
         m_encoderType = EncoderType::NV;
-    else
-    {
+    } else {
         m_encoderType = EncoderType::UNKNOWN;
-        m_log->critical("Codec '{}' not supported.", m_video_codec_name);
-        Shutdown();
+        m_log->critical("Codec '{}' not supported inside streaming pipeline.", m_video_codec_name);
+        throw std::runtime_error("Unsupported video codec choice.");
     }
 
-    // Start muxing and copying threads
+    // Allocate HDR metadata tracking blocks
+    m_display_primaries = av_mastering_display_metadata_alloc();
+    m_content_light     = av_content_light_metadata_alloc(nullptr);
+
+    initialize_bitstream_parser();
+
+    // Start up threads last
     m_mux_thread = std::thread(&OutputTS::mux, this);
     pthread_setname_np(m_mux_thread.native_handle(), "mux");
 
-    m_copy_thread = std::thread(&OutputTS::copy_to_frame, this);
-    pthread_setname_np(m_copy_thread.native_handle(), "copy");
+    m_video_thread = std::thread(&OutputTS::process_video, this);
+    pthread_setname_np(m_video_thread.native_handle(), "video");
 
-    // Allocate HDR metadata structures
-    m_display_primaries  = av_mastering_display_metadata_alloc();
-    m_content_light  = av_content_light_metadata_alloc(NULL);
+    m_audio_thread = std::thread(&OutputTS::process_audio, this);
+    pthread_setname_np(m_audio_thread.native_handle(), "audio");
 }
 
-/**
- * @brief Destructor for OutputTS class
- * @note Cleans up all resources including threads, buffers, and FFmpeg contexts
- */
 OutputTS::~OutputTS(void)
 {
+    if (m_verbose > 2)
+        m_log->info("Cleaning Transport Stream");
+
+    // Signal all execution loops to cease operations
+    m_running.store(false);
     Shutdown();
 
-    // Wait for threads to finish
-    if (m_copy_thread.joinable())
-        m_copy_thread.join();
+    // Shut down thread-safe queues to break any active condition variable locks
+    while (!m_videoPktQ.IsEmpty())
+    {
+        auto entry = m_videoPktQ.PopValue();
+    }
+    m_videoPktQ.Shutdown();
+
+    while (!m_audioPktQ.IsEmpty())
+    {
+        auto entry = m_audioPktQ.PopValue();
+    }
+    m_audioPktQ.Shutdown();
+
+    if (m_verbose > 2)
+        m_log->info("Waiting for threads to exit.");
+    // Wait for working thread scopes to exit cleanly
+    if (m_video_thread.joinable())
+        m_video_thread.join();
 
     if (m_mux_thread.joinable())
         m_mux_thread.join();
 
-    // Free HDR metadata structures
+    m_log->info("Releasing core resource footprints...");
+
+    // Clear out raw image frame queues and release their hardware
+    // handles back to Magewell
+    {
+        std::lock_guard<std::mutex> lock(m_imageQ_mutex);
+        while (!m_imageQ.empty()) {
+            auto& img = m_imageQ.front();
+            f_image_buffer_available(img.pImage, img.pEco);
+            m_imageQ.pop_front();
+        }
+    }
+
+    // =========================================================================
+    // DEALLOCATE CORE STREAM ENCODERS & FILES
+    // =========================================================================
+    close_container();
+
+    // Close the individual active video and audio encoder contexts safely
+    close_encoder(&m_videoStream);
+    close_encoder(&m_audioStream);
+
+    // Free internal HDR metadata memory layout maps
     av_freep(&m_display_primaries);
     av_freep(&m_content_light);
 
-    // Close streams and container
-    close_stream(&m_video_stream);
+    // Release GPU hardware
+    if (m_videoStream.hw_device_ctx)
+    {
+        av_buffer_unref(&m_videoStream.hw_device_ctx);
+        m_videoStream.hw_device_ctx = nullptr;
+    }
 
-    close_stream(&m_audio_stream);
+    if (m_verbose > 2)
+        m_log->info("Transport Stream shutdown");
+}
+
+
+
+string OutputTS::ColorSpaceDesc(void) const
+{
+    switch (m_color_space)
+    {
+        case AVCOL_SPC_BT470BG:
+          return "YUV601";
+        case AVCOL_SPC_BT2020_NCL:
+          return "YUV2020";
+        case AVCOL_SPC_BT709:
+          return "YUV709";
+        default:
+          return "Unknown";
+    }
 }
 
 /**
@@ -267,20 +318,9 @@ OutputTS::~OutputTS(void)
 void OutputTS::Shutdown(void)
 {
     if (m_running.exchange(false))
-    {
         f_shutdown();
-        if (m_audioIO)
-            m_audioIO->Shutdown();
-    }
 }
 
-/**
- * @brief Log packet information for debugging
- * @param where Location where packet is being logged
- * @param fmt_ctx Format context for packet
- * @param pkt Packet to log
- * @note This function is used for debugging and logging purposes
- */
 void OutputTS::log_packet(string where, const AVFormatContext* fmt_ctx,
                        const AVPacket* pkt)
 {
@@ -312,1891 +352,1867 @@ void OutputTS::setLight(AVMasteringDisplayMetadata * display_meta,
     }
 }
 
-/**
- * @brief Allocate an audio frame with specified parameters
- * @param sample_fmt Audio sample format
- * @param channel_layout Channel layout for audio
- * @param sample_rate Sample rate for audio
- * @param nb_samples Number of samples in frame
- * @return Pointer to allocated AVFrame or nullptr on error
- * @note This function allocates memory for audio frames and sets up basic properties
- */
-AVFrame* OutputTS::alloc_audio_frame(void)
-{
-    AVFrame* frame = av_frame_alloc();
-
-    // Check if frame allocation succeeded
-    if (!frame)
-    {
-        m_log->error("Failed to allocate an audio frame.");
-        return nullptr;
-    }
-
-    return frame;
-}
-
-AVFrame* OutputTS::prepare_audio_frame(AVFrame* frame, int sample_fmt)
-{
-    int ret;
-
-    // Set frame properties
-    frame->format = sample_fmt;
-    av_channel_layout_copy(&frame->ch_layout, &m_audio_stream.enc->ch_layout);
-    frame->sample_rate = m_audio_stream.enc->sample_rate;
-    frame->nb_samples = m_audio_stream.enc->frame_size;
-
-    // Allocate buffer for frame data if samples exist
-    if (frame->nb_samples)
-    {
-        ret = av_frame_get_buffer(frame, 0);
-        if (ret < 0)
-        {
-            m_log->error("Failed to allocate an audio buffer");
-            av_frame_free(&frame);
-            return nullptr;
-        }
-    }
-
-    return frame;
-}
-
-/**
- * @brief Open audio encoder for output
- * @return true on success, false on failure
- * @note Sets up audio encoder parameters and opens codec
- */
-bool OutputTS::open_audio(void)
-{
-    close_encoder(&m_audio_stream);
-
-    // Log audio stream addition if verbose level is high enough
-    if (m_verbose > 1)
-        m_log->info("Opening {} encoder", m_audioIO->CodecName());
-
-    const AVCodec* audio_codec = nullptr;
-
-    // Find audio codec by name
-    audio_codec = avcodec_find_encoder_by_name(m_audioIO->CodecName().c_str());
-    if (!audio_codec)
-    {
-        m_log->warn("Could not find audio encoder for '{}'",
-                    m_audioIO->CodecName());
-        return true;
-    }
-
-    // Allocate temporary packet
-    m_audio_stream.tmp_pkt = av_packet_alloc();
-    if (!m_audio_stream.tmp_pkt)
-    {
-        m_log->error("Could not allocate AVPacket");
-        return false;
-    }
-
-    // Allocate codec context
-    m_audio_stream.enc = avcodec_alloc_context3(audio_codec);
-    if (!m_audio_stream.enc)
-    {
-        m_log->error("Could not alloc an encoding context");
-        return false;
-    }
-    m_audio_stream.next_pts = 0;
-
-    // Set bit rate based on channel count
-    if (m_audioIO->NumChannels() == 2)
-        m_audio_stream.enc->bit_rate = 256000;
-    else
-        m_audio_stream.enc->bit_rate = 640000;
-
-    // Handle different FFmpeg versions for codec configuration
-#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(61, 13, 100)
-    m_audio_stream.enc->sample_fmt = audio_codec->sample_fmts ?
-                         audio_codec->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
-
-    if (audio_codec->supported_samplerates)
-    {
-        m_audio_stream.enc->sample_rate = audio_codec->supported_samplerates[0];
-        for (int idx = 0; audio_codec->supported_samplerates[idx]; ++idx)
-        {
-            if (audio_codec->supported_samplerates[idx] == m_audioIO->SampleRate())
-            {
-                m_audio_stream.enc->sample_rate = m_audioIO->SampleRate();
-                break;
-            }
-        }
-    }
-    else
-        m_audio_stream.enc->sample_rate = 48000;
-
-    av_channel_layout_copy(&m_audio_stream.enc->ch_layout,
-                           m_audioIO->ChannelLayout());
-#else
-    int count = 0;
-
-    enum AVSampleFormat *sample_fmts = nullptr;
-    avcodec_get_supported_config(m_audio_stream.enc,
-                                 audio_codec,
-                                 AV_CODEC_CONFIG_SAMPLE_FORMAT,
-                                 0,
-                                 const_cast<const void**>(reinterpret_cast<void**>(&sample_fmts)),
-                                 &count);
-    if (!sample_fmts)
-        m_audio_stream.enc->sample_fmt = AV_SAMPLE_FMT_FLTP;
-    else
-        m_audio_stream.enc->sample_fmt = sample_fmts[0];
-
-    const int *sample_rates;
-    avcodec_get_supported_config(m_audio_stream.enc,
-                                 NULL,
-                                 AV_CODEC_CONFIG_SAMPLE_RATE,
-                                 0,
-                                 reinterpret_cast<const void**>(&sample_rates),
-                                 &count);
-
-    if (!sample_rates)
-        m_audio_stream.enc->sample_rate = 48000;
-    else
-    {
-        m_audio_stream.enc->sample_rate = sample_rates[0];
-        for (int idx = 0; idx < count; ++idx)
-        {
-            if (sample_rates[idx] == m_audioIO->SampleRate())
-            {
-                m_audio_stream.enc->sample_rate = m_audioIO->SampleRate();
-                break;
-            }
-        }
-    }
-
-    const AVChannelLayout *ch_layouts;
-    av_channel_layout_copy(&m_audio_stream.enc->ch_layout,
-                           m_audioIO->ChannelLayout());
-    avcodec_get_supported_config(m_audio_stream.enc,
-                                 NULL,
-                                 AV_CODEC_CONFIG_CHANNEL_LAYOUT,
-                                 0,
-                                 reinterpret_cast<const void**>(&ch_layouts),
-                                 &count);
-    if (ch_layouts)
-    {
-        int idx;
-        for (idx = 0; idx < count; ++idx)
-        {
-            if (!av_channel_layout_compare(&m_audio_stream.enc->ch_layout,
-                                           &ch_layouts[idx]))
-                break;
-        }
-        if (idx == count)
-        {
-            char buf[512];
-            av_channel_layout_describe(&m_audio_stream.enc->ch_layout, buf, sizeof(buf));
-            m_log->error("Channel layout {} is not supported by the {} encoder.",
-                         buf, m_audio_stream.enc->codec->name);
-            m_log->info("Encoder {} supports:",
-                        m_audio_stream.enc->codec->name);
-            for (idx = 0; idx < count; ++idx)
-            {
-                av_channel_layout_describe(&ch_layouts[idx], buf, sizeof(buf));
-                m_log->info("    {}", buf);
-            }
-        }
-    }
-#endif
-
-    // Set threading options
-    if (m_audio_stream.enc->codec->capabilities & AV_CODEC_CAP_SLICE_THREADS)
-    {
-        m_audio_stream.enc->thread_type = FF_THREAD_SLICE;
-        if (m_verbose > 1)
-            m_log->info(" Audio = THREAD SLICE");
-    }
-    else if (m_audio_stream.enc->codec->capabilities &
-             AV_CODEC_CAP_FRAME_THREADS)
-    {
-        m_audio_stream.enc->thread_type = FF_THREAD_FRAME;
-        if (m_verbose > 1)
-            m_log->info(" Audio = THREAD FRAME");
-    }
-
-    const AVCodec* codec = audio_codec;
-    AVDictionary* opt = NULL;
-    int ret;
-
-    // Open audio codec
-    if ((ret = avcodec_open2(m_audio_stream.enc, codec, &opt)) < 0)
-    {
-        m_log->error("Could not open audio codec: {}", AVerr2str(ret));
-        return false;
-    }
-
-    // Determine frame size
-    if (m_audio_stream.enc->codec->capabilities &
-        AV_CODEC_CAP_VARIABLE_FRAME_SIZE)
-    {
-//      nb_samples = 10000;
-        m_audio_stream.enc->frame_size = 10000;
-    }
-
-    // Allocate audio frame
-    m_audio_stream.frame = alloc_audio_frame();
-    if (m_audio_stream.frame == nullptr)
-    {
-        m_log->critical("Failed to allocate audio frame.");
-        Shutdown();
-        return false;
-    }
-
-    // Allocate temporary frame for format conversion
-    if (m_audioIO->BytesPerSample() == 4)
-    {
-        m_audio_stream.tmp_frame = alloc_audio_frame();
-        m_audio_stream.tmp_frame = prepare_audio_frame(m_audio_stream.tmp_frame,
-                                                       AV_SAMPLE_FMT_S32);
-    }
-    else
-    {
-        m_audio_stream.tmp_frame = alloc_audio_frame();
-        m_audio_stream.tmp_frame = prepare_audio_frame(m_audio_stream.tmp_frame,
-                                                       AV_SAMPLE_FMT_S16);
-    }
-
-    if (m_audio_stream.tmp_frame == nullptr)
-    {
-        m_log->critical("Unable to allocate a temporary audio frame.");
-        Shutdown();
-        return false;
-    }
-
-    // Create resampler context
-    m_audio_stream.swr_ctx = swr_alloc();
-    if (!m_audio_stream.swr_ctx)
-    {
-        m_log->error("Could not allocate resampler context");
-        return false;
-    }
-
-    // Configure resampler context
-    av_opt_set_chlayout  (m_audio_stream.swr_ctx, "in_chlayout",
-                          &m_audio_stream.enc->ch_layout,     0);
-    av_opt_set_int       (m_audio_stream.swr_ctx, "in_sample_rate",
-                          m_audio_stream.enc->sample_rate,    0);
-
-    if (m_audioIO->BytesPerSample() == 4)
-    {
-        av_opt_set_sample_fmt(m_audio_stream.swr_ctx, "in_sample_fmt",
-                              AV_SAMPLE_FMT_S32, 0);
-//        ctx->bits_per_raw_sample = 24;
-    }
-    else
-        av_opt_set_sample_fmt(m_audio_stream.swr_ctx, "in_sample_fmt",
-                              AV_SAMPLE_FMT_S16, 0);
-
-    av_opt_set_chlayout  (m_audio_stream.swr_ctx, "out_chlayout",
-                          &m_audio_stream.enc->ch_layout,     0);
-    av_opt_set_int       (m_audio_stream.swr_ctx, "out_sample_rate",
-                          m_audio_stream.enc->sample_rate,    0);
-    av_opt_set_sample_fmt(m_audio_stream.swr_ctx, "out_sample_fmt",
-                          m_audio_stream.enc->sample_fmt,     0);
-
-    // Initialize resampler context
-    if ((ret = swr_init(m_audio_stream.swr_ctx)) < 0)
-    {
-        m_log->error("Failed to initialize the resampling context");
-        return false;
-    }
-
-    return true;
-}
 
 /**
  * @brief Open video encoder for output
+ * @param pParams pointer to the updated hardware video specifications
  * @return true on success, false on failure
- * @note Sets up video encoder parameters and opens codec
  */
-bool OutputTS::open_video(void)
+bool OutputTS::open_video(const VideoParams& params)
 {
-    close_encoder(&m_video_stream);
+    // Thread-safe cleanup of the previous encoder generation context
+    close_encoder(&m_videoStream);
+
+    // Perform basic hardware parameter safety validation
+    if (params.width <= 0 || params.height <= 0)
+    {
+        m_log->error("Invalid dimensions received: {}x{}",
+                     params.width, params.height);
+        return false;
+    }
 
     if (m_verbose > 1)
-        m_log->info("Opening {} encoder", m_video_codec_name);
+    {
+        m_log->info("Opening {} encoder (Target Specs: {}x{}p{})",
+                    m_video_codec_name, params.width, params.height,
+                    static_cast<double>(params.frame_rate.num) /
+                    static_cast<double>(params.frame_rate.den));
+    }
 
-    AVDictionary* opt = NULL;
+    // =========================================================================
+    // CODEC ALLOCATION & CONTEXT SETUP
+    // =========================================================================
     const AVCodec* video_codec =
         avcodec_find_encoder_by_name(m_video_codec_name.c_str());
-
-    // Find video codec
-    if (video_codec)
+    if (!video_codec)
     {
-        if (m_verbose > 0)
-        {
-            m_log->info("Video codec: {} : {} '{}'",
-                        static_cast<int>(video_codec->id),
-                        string(video_codec->name),
-                        string(video_codec->long_name));
-        }
-    }
-    else
-    {
-        m_log->error("Could not find video encoder for '{}'", m_video_codec_name);
+        m_log->error("Could not locate requested video encoder: '{}'",
+                     m_video_codec_name);
         return false;
     }
 
-    // Allocate temporary packet
-    m_video_stream.tmp_pkt = av_packet_alloc();
-    if (!m_video_stream.tmp_pkt)
+    m_videoStream.enc = avcodec_alloc_context3(video_codec);
+    if (!m_videoStream.enc)
     {
-        m_log->error("Could not allocate AVPacket");
+        m_log->error("Failed to allocate unique video encoding context.");
         return false;
     }
 
-    // Allocate codec context
-    m_video_stream.enc = avcodec_alloc_context3(video_codec);
-    if (!m_video_stream.enc)
-    {
-        m_log->error("Could not alloc an encoding context");
-        av_packet_free(&m_video_stream.tmp_pkt);
-        return false;
-    }
-    m_video_stream.next_pts = 0;
+    // Assign hardware metrics straight to the active encoder context
+    m_videoStream.enc->codec_id  = video_codec->id;
+    m_videoStream.enc->width     = params.width;
+    m_videoStream.enc->height    = params.height;
+    m_sw_pix_fmt                 = params.pix_fmt;
 
-    // Set codec parameters
-    m_video_stream.enc->codec_id = (video_codec)->id;
-    m_video_stream.enc->width    = m_input_width;
-    m_video_stream.enc->height   = m_input_height;
-    m_video_stream.enc->time_base = AVRational{m_input_frame_rate.den,
-                                               m_input_frame_rate.num};
+    // Set the encoder's internal processing time_base to match frame
+    // intervals
+    m_videoStream.enc->time_base =
+        AVRational{params.frame_rate.den, params.frame_rate.num};
 
-    // Set HDR color range
-    if (m_isHDR)
-    {
-        if (m_verbose > 0)
-            m_log->info("Open video stream with HDR.");
-#if 1
-        // Full color range
-        m_video_stream.enc->color_range     = AVCOL_RANGE_JPEG;
-#else
-        // Limited color range
-        m_video_stream.enc->color_range     = AVCOL_RANGE_MPEG;
-#endif
-    }
-    else
-        m_video_stream.enc->color_range     = AVCOL_RANGE_UNSPECIFIED;
-
-    m_video_stream.enc->color_primaries = m_color_primaries;
-    m_video_stream.enc->color_trc       = m_color_trc;
-    m_video_stream.enc->colorspace      = m_color_space;
-
-    // Set threading options
-    if (m_video_stream.enc->codec->capabilities & AV_CODEC_CAP_SLICE_THREADS)
-    {
-        m_video_stream.enc->thread_type = FF_THREAD_SLICE;
-        if (m_verbose > 1)
-            m_log->info(" Video = THREAD SLICE");
-    }
-    else if (m_video_stream.enc->codec->capabilities & AV_CODEC_CAP_FRAME_THREADS)
-    {
-        m_video_stream.enc->thread_type = FF_THREAD_FRAME;
-        if (m_verbose > 1)
-            m_log->info(" Video = THREAD FRAME");
-    }
-
-    // Log video parameters
-    if (m_verbose > 1)
-    {
-        m_log->info("Output stream Video: {}x{}{}",
-                    m_video_stream.enc->width, m_video_stream.enc->height,
-                    m_interlaced ? 'i' : 'p');
-    }
-
-    // Reset reusable frames
-    if (m_video_stream.frames != nullptr)
-    {
-        for (int idx = 0; idx < m_video_stream.frames_total; ++idx)
-        {
-            av_frame_free(&m_video_stream.frames[idx].frame);
-            m_video_stream.frames[idx].frame = nullptr;
-        }
-        delete[] m_video_stream.frames;
-        m_video_stream.frames = nullptr;
-    }
-    m_video_stream.frame = nullptr;
-    m_video_stream.frames_idx_in  = -1;
-    m_video_stream.frames_idx_out = -1;
-    m_video_stream.frames_used    = 0;
-    m_video_stream.frames_total   = m_frame_buffers;
-
+    // Calculate dynamic GOP size threshold boundaries based on target seconds
     if (m_gop_secs > 0)
     {
-        m_video_stream.enc->gop_size =
-            (static_cast<double>(m_input_frame_rate.num) /
-             static_cast<double>(m_input_frame_rate.den) *
-             static_cast<double>(m_gop_secs) + 0.5);
-        if (m_verbose > 1)
-            m_log->info("GOP size set to {} frames.",
-                        m_video_stream.enc->gop_size);
+        m_videoStream.enc->gop_size =
+            static_cast<int>((static_cast<double>(params.frame_rate.num) /
+                              static_cast<double>(params.frame_rate.den)) *
+                             static_cast<double>(m_gop_secs) + 0.5);
+        if (m_verbose > 2)
+            m_log->info("GOP size {} frames.",
+                        m_videoStream.enc->gop_size);
     }
 
-    // Open encoder based on type
+    // Apply color mastering tags dynamically from the payload flag
+    if (params.is_HDR)
+    {
+        m_log->info("Configuring encoder context for HDR streaming.");
+        m_videoStream.enc->color_range = AVCOL_RANGE_JPEG;
+    }
+    else
+    {
+        m_videoStream.enc->color_range = AVCOL_RANGE_UNSPECIFIED;
+    }
+
+    // Assign color spaces using existing baseline tracking variables
+    m_videoStream.enc->color_primaries = m_color_primaries;
+    m_videoStream.enc->color_trc       = m_color_trc;
+    m_videoStream.enc->colorspace      = m_color_space;
+
+    // Evaluate hardware thread slicing permissions
+    if (m_videoStream.enc->codec->capabilities & AV_CODEC_CAP_SLICE_THREADS)
+    {
+        m_videoStream.enc->thread_type = FF_THREAD_SLICE;
+        if (m_verbose > 1)
+            m_log->info(" Video Encoder Strategy = THREAD SLICE");
+    }
+    else if (m_videoStream.enc->codec->capabilities &
+             AV_CODEC_CAP_FRAME_THREADS)
+    {
+        m_videoStream.enc->thread_type = FF_THREAD_FRAME;
+        if (m_verbose > 1)
+            m_log->info(" Video Encoder Strategy = THREAD FRAME");
+    }
+
+    // Cache the original un-scaled input timebase from the struct parameters.
+    // This allows process_video to calculate frame PTS scaling accurately later:
+    // frm->pts = av_rescale_q(timestamp, m_input_time_base, m_videoStream.enc->time_base);
+    m_input_time_base = params.time_base;
+
+    // Update the class dimensions so other subsystems remain synchronized
+    m_input_width  = params.width;
+    m_input_height = params.height;
+
+    // Setup GPU
+    AVDictionary* local_opt = nullptr;
+    bool open_success = false;
+
     switch (m_encoderType)
     {
         case EncoderType::QSV:
-          if (!open_qsv(video_codec, &m_video_stream, opt))
-              return false;
+          open_success = open_qsv(video_codec, &local_opt);
           break;
         case EncoderType::VAAPI:
-          if (!open_vaapi(video_codec, &m_video_stream, opt))
-              return false;
+          open_success = open_vaapi(video_codec, &local_opt);
           break;
         case EncoderType::NV:
-          if (!open_nvidia(video_codec, &m_video_stream, opt))
-              return false;
+          open_success = open_nvidia(video_codec, &local_opt);
           break;
         default:
-          m_log->error("Could not determine video encoder type.");
-          return false;
+          m_log->error("Unsupported hardware encoder architecture selected.");
+          break;
     }
 
-    // Set HDR metadata for frames
-    if (m_isHDR)
-    {
-        for (int idx = 0; idx < m_video_stream.frames_total; ++idx)
-        {
-            AVFrame* frm = m_video_stream.frames[idx].frame;
-
-            AVMasteringDisplayMetadata* primaries =
-                av_mastering_display_metadata_create_side_data(frm);
-            *primaries = *m_display_primaries;
-            AVContentLightMetadata* light =
-                av_content_light_metadata_create_side_data(frm);
-            *light = *m_content_light;
-        }
+    // Always free the initialization dictionary context to avoid leaking RAM
+    if (local_opt != nullptr) {
+        av_dict_free(&local_opt);
     }
 
-    DiscardImages(-1, "done initializing video.");
+    if (!open_success) {
+        return false;
+    }
+
     return true;
 }
 
-/**
- * @brief Open output container for muxing
- * @return true on success, false on failure
- * @note Sets up container format and opens output file
- */
-bool OutputTS::open_container(void)
+bool OutputTS::open_audio_encoder(CodecParamsPtr& codecpar)
 {
-    int ret;
-    AVDictionary* opt = NULL;
+    close_encoder(&m_audioStream);
 
-    close_container();
+    // LPCM -> AC3 ENCODE
+    const AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_AC3);
 
-    if (m_running.load() == false)
-        return false;
-
-    if (m_verbose > 1)
-        m_log->info("================== open_container begin ==================");
-
-    // Allocate output format context
-    avformat_alloc_output_context2(&m_output_format_context,
-                                   NULL, "mpegts", NULL);
-    if (!m_output_format_context)
+    if (!codec)
     {
-        m_log->critical("Could not create output format context.");
+        m_log->error("AC3 encoder not found");
         return false;
     }
 
-    m_fmt = m_output_format_context->oformat;
+    m_audioStream.enc = avcodec_alloc_context3(codec);
 
-    // Create video stream
-    m_video_stream.st = avformat_new_stream(m_output_format_context, NULL);
-    if (!m_video_stream.st)
+    if (!m_audioStream.enc)
     {
-        m_log->critical("Could not allocate video stream");
+        m_log->error("Failed allocating AC3 context");
+
         return false;
     }
-    m_video_stream.st->id = 0;
-    m_video_stream.st->time_base = m_video_stream.enc->time_base;
 
-    // Copy stream parameters
-    ret = avcodec_parameters_from_context(m_video_stream.st->codecpar,
-                                          m_video_stream.enc);
+    AVCodecContext* enc = m_audioStream.enc;
+
+    // AC3 standard sample rate
+    enc->sample_rate = 48000;
+    // Internal encoder format
+    enc->sample_fmt = AV_SAMPLE_FMT_FLTP;
+    // AC3 timing domain
+    enc->time_base = { 1, enc->sample_rate };
+
+    av_channel_layout_default(&enc->ch_layout, codecpar->ch_layout.nb_channels);
+
+    switch (codecpar->ch_layout.nb_channels)
+    {
+        case 2:
+          enc->bit_rate = 192000;
+          break;
+
+        case 6:
+          enc->bit_rate = 448000;
+          break;
+
+        case 8:
+          enc->bit_rate = 640000;
+          break;
+
+        default:
+          enc->bit_rate = 448000;
+          break;
+    }
+
+    //
+    // AC3 fixed frame size
+    //
+    enc->frame_size = 1536;
+
+    int ret = avcodec_open2(enc, codec, nullptr);
+
     if (ret < 0)
     {
-        m_log->critical("Could not copy the stream parameters.");
+        m_log->error("avcodec_open2(audio) failed: {}",
+                     AVerr2str(ret));
+        close_encoder(&m_audioStream);
         return false;
     }
 
-    // Create audio stream if enabled
-    if (m_audio_stream.enc)
-    {
-        /* Audio */
-        m_audio_stream.st = avformat_new_stream(m_output_format_context, NULL);
-        if (!m_audio_stream.st)
-        {
-            m_log->critical("Could not allocate stream");
-            return false;
-        }
-        m_audio_stream.st->id = 1;
-        m_audio_stream.st->time_base =
-            (AVRational){ 1, m_audio_stream.enc->sample_rate };
-
-        // Copy stream parameters
-        ret = avcodec_parameters_from_context(m_audio_stream.st->codecpar,
-                                              m_audio_stream.enc);
-        if (ret < 0)
-        {
-            m_log->critical("Could not copy the stream parameters");
-            return false;
-        }
-    }
-
-    // Dump format information
-    if (m_verbose > 0)
-        m_log->info("\n{}", av_dump_format_string(m_output_format_context));
-
-    // Open output file
-    if (!(m_fmt->flags & AVFMT_NOFILE))
-    {
-        ret = avio_open(&m_output_format_context->pb,
-                        m_filename.c_str(), AVIO_FLAG_WRITE);
-        if (ret < 0)
-        {
-            m_log->critical("Could not open '{}': {}",
-                            m_filename, AVerr2str(ret));
-            return false;
-        }
-    }
-
-    // Write header
-    ret = avformat_write_header(m_output_format_context, &opt);
+    ret = avcodec_parameters_from_context(codecpar.get(), enc);
     if (ret < 0)
     {
-        m_log->critical("Could not open output file: %s", AVerr2str(ret));
+        m_log->error("Failed copying codec params");
+        close_encoder(&m_audioStream);
         return false;
     }
 
-    if (m_verbose > 1)
-        m_log->info("================== open_container end ==================");
+    m_audioStream.samples_count = 0;
 
-    m_init_needed = false;
-    return true;
-}
-
-/**
- * @brief Set audio parameters for encoding
- * @param num_channels Number of audio channels
- * @param is_lpcm Flag for LPCM format
- * @param bytes_per_sample Bytes per audio sample
- * @param sample_rate Audio sample rate
- * @param samples_per_frame Samples per audio frame
- * @param frame_size Size of audio frame
- * @return true on success, false on failure
- * @note Configures audio parameters for the audio IO handler
- */
-bool OutputTS::setAudioParams(int num_channels, bool is_lpcm,
-                              int bytes_per_sample, int sample_rate,
-                              int samples_per_frame, int frame_size)
-{
-    if (m_audioIO == nullptr)
-    {
-        m_audioIO = new AudioIO([=,this](int val, const string & why)
-                              { this->DiscardImages(val, why); },
-                                       m_verbose);
-        if (m_audioIO == nullptr)
-        {
-            m_log->error("Failed to create Audio handler");
-            return false;
-        }
-    }
-    m_no_audio = false;
-
-    if (!m_audioIO->AddBuffer(num_channels, is_lpcm,
-                              bytes_per_sample, sample_rate,
-                              samples_per_frame, frame_size))
-        return false;
-
-    if (m_verbose > 2)
-        m_log->info("setAudioParams {}", is_lpcm ? "LPCM" : "Bitstream");
+    m_log->info("Opened AC3 encoder: {}ch {}Hz {}bps",
+                codecpar->ch_layout.nb_channels,
+                enc->sample_rate,
+                enc->bit_rate);
 
     return true;
 }
 
-/**
- * @brief Set video parameters for encoding
- * @param width Video width
- * @param height Video height
- * @param interlaced Flag for interlaced video
- * @param time_base Timebase for video
- * @param frame_duration Frame duration in microseconds
- * @param frame_rate Frame rate
- * @param is_hdr Flag for HDR video
- * @return true on success, false on failure
- * @note Configures video parameters and prepares for encoding
- */
-bool OutputTS::setVideoParams(int width, int height, bool interlaced,
-                              AVRational time_base, double frame_duration,
-                              AVRational frame_rate, bool is_hdr)
-{
-    // Calculate frame wait time
-    m_input_frame_wait_ms = frame_duration / 10000 * 2;
-
-    // Clear queues before setting new parameters
-    DiscardImages(1, "initializing video.");
-    {
-        unique_lock<mutex> lock(m_imagequeue_mutex);
-        while (m_running.load() &&
-               (!m_imagequeue_is_empty ||
-                !m_videopool_is_empty))
-        {
-            m_imagequeue_empty.wait_for(lock,
-                         std::chrono::milliseconds(m_input_frame_wait_ms));
-        }
-    }
-    if (!m_running.load())
-        return false;
-
-    // Update video parameters
-    m_input_width = width;
-    m_input_height = height;
-    m_interlaced = interlaced;
-    m_input_time_base = time_base;
-    m_input_frame_duration = frame_duration;
-    m_input_frame_rate = frame_rate;
-    m_isHDR = is_hdr;
-
-    m_frame_buffers = m_gpu_buffers;
-
-    if (m_p010 || m_isHDR)
-        m_sw_pix_fmt = AV_PIX_FMT_P010;
-    else
-        m_sw_pix_fmt = AV_PIX_FMT_NV12;
-
-    double fps = static_cast<double>(frame_rate.num) / frame_rate.den;
-
-    if (m_verbose > 0)
-    {
-        m_log->info("Video: {}x{}{}{:.2f}{}", width, height,
-                    m_interlaced ? 'i' : 'p', fps,
-                    m_isHDR ? " HDR" : "");
-        if (m_verbose > 2)
-            m_log->info("Video Params set");
-    }
-
-    open_video();
-    m_init_needed = true;
-
-    return true;
-}
-
-/**
- * @brief Close the output container
- * @note Cleans up container resources
- */
-void OutputTS::close_container(void)
-{
-    if (m_fmt && !(m_fmt->flags & AVFMT_NOFILE))
-        avio_closep(&m_output_format_context->pb);
-
-    avformat_free_context(m_output_format_context);
-}
-
-/**
- * @brief Close encoder for a stream
- * @param ost Output stream to close
- * @note Frees encoder resources
- */
 void OutputTS::close_encoder(OutputStream* ost)
 {
-    if (!ost->enc)
+    if (!ost)
         return;
 
     if (m_verbose > 1)
-        m_log->info("Closing {} encoder.", ost->enc->codec->long_name);
+    {
+        if (ost->enc &&
+            ost->enc->codec &&
+            ost->enc->codec->long_name)
+        {
+            m_log->info(
+                "Closing {} encoder.",
+                ost->enc->codec->long_name);
+        }
+    }
 
-    // Free encoder hardware frames context
+    //
+    // Encoder-owned HW references
+    //
+    if (ost->enc &&
+        ost->enc->hw_frames_ctx)
+    {
+        av_buffer_unref(
+            &ost->enc->hw_frames_ctx);
+
+        ost->enc->hw_frames_ctx =
+            nullptr;
+    }
+
+    //
+    // Shared HW frame pools
+    //
     if (ost->hw_frames_ctx)
     {
-        // Unreference the hardware frames context
-        av_buffer_unref(&ost->hw_frames_ctx);
-        ost->hw_frames_ctx = nullptr;
+        av_buffer_unref(
+            &ost->hw_frames_ctx);
+
+        ost->hw_frames_ctx =
+            nullptr;
     }
 
-    if (ost->frames)
+    //
+    // Audio specific clean up
+    //
+    if (ost == &m_audioStream)
     {
-        // Free allocated frames
-        for (int idx = 0; idx < ost->frames_total; ++idx)
+        if (m_audio_fifo)
         {
-            if (ost->frames[idx].frame)
-            {
-                av_frame_free(&ost->frames[idx].frame);
-            }
+            av_audio_fifo_free(m_audio_fifo);
+            m_audio_fifo = nullptr;
         }
-        delete[] ost->frames;
-        ost->frames = nullptr;
     }
 
-    if (ost->tmp_frame)
-    {
-        av_frame_free(&ost->tmp_frame);
-    }
-
-    // Reset flags
-    ost->hw_device = false;
-
-    // Free resampler context
-    if (ost->swr_ctx)
-    {
-        swr_free(&ost->swr_ctx);
-        ost->swr_ctx = nullptr;
-    }
-
-    if (ost->enc->hw_frames_ctx)
-    {
-        // Unreference the hardware frames context from encoder
-        av_buffer_unref(&ost->enc->hw_frames_ctx);
-        ost->enc->hw_frames_ctx = nullptr;
-    }
-
-    avcodec_free_context(&ost->enc);
-    ost->enc = nullptr;
-}
-
-/**
- * @brief Close output stream
- * @param ost Output stream to close
- * @note Frees stream resources
- */
-void OutputTS::close_stream(OutputStream* ost)
-{
-    if (ost == nullptr)
-        return;
-
-    // Free resampler context
-    if (ost->swr_ctx)
-    {
-        swr_free(&ost->swr_ctx);
-        ost->swr_ctx = nullptr;
-    }
-
-    // Free codec context (commented to avoid double-free)
+    //
+    // Destroy codec context
+    //
     if (ost->enc)
     {
-        avcodec_free_context(&ost->enc);
+        avcodec_free_context(
+            &ost->enc);
+
         ost->enc = nullptr;
     }
 
-    // Note: FFmpeg docs suggest not to free stream context here
-#if 0
-    avformat_free_context(&ost->st);
-    ost->st = nullptr;
-#endif
-
-    if (ost->hw_device_ctx)
-    {
-        av_buffer_unref(&ost->hw_device_ctx);
-        ost->hw_device_ctx = nullptr;
-    }
+    //
+    // Reset runtime state
+    //
+    ost->st             = nullptr;
+    ost->hw_device      = false;
+    ost->samples_count  = 0;
 }
 
-/**
- * @brief Write a frame to output container
- * @param fmt_ctx Format context
- * @param codec_ctx Codec context
- * @param frame Frame to write
- * @param ost Output stream
- * @return true on success, false on failure
- * @note Encodes and writes frame to output container
- */
-bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
-                           AVCodecContext* codec_ctx,
-                           AVFrame* frame,
-                           OutputStream* ost)
+// Open Transport Stream container
+bool OutputTS::open_container(AVCodecParameters* video_param,
+                              AVRational video_time_base,
+                              AVCodecParameters* audio_param,
+                              AVRational audio_time_base)
 {
-    int ret;
-    AVPacket* pkt = ost->tmp_pkt;
+    close_container();
 
-    // Send frame to encoder
-    ret = avcodec_send_frame(codec_ctx, frame);
-    if (ret < 0)
+    if (m_verbose > 1)
+        m_log->info("================ open_container begin ================");
+
+    // Allocate the fresh transport stream envelope targeting stdout
+    // via the "pipe:" protocol
+    int ret = avformat_alloc_output_context2(&m_formatContext,
+                                             nullptr, "mpegts", "pipe:1");
+    if (ret < 0 || m_formatContext == nullptr)
     {
-        if (m_verbose > 0)
-        {
-            m_log->warn("Failed sending a frame to the encoder: {}",
-                        AVerr2str(ret));
-        }
+        m_log->error("Failed to allocate stdout output context: {}",
+                     AVerr2str(ret));
         return false;
     }
-    av_frame_unref(frame);
 
-    // Receive encoded packets
-    while (ret >= 0)
+    // Bypass internal I/O buffering so frames hit stdout pipe
+    // with zero latency
+    m_formatContext->flags |= AVFMT_FLAG_FLUSH_PACKETS;
+
+    // TRACK 0: Video track initialization
+    AVStream* v_st = avformat_new_stream(m_formatContext, nullptr);
+    if (v_st == nullptr)
+        return false;
+
+    avcodec_parameters_copy(v_st->codecpar, video_param);
+    v_st->time_base = video_time_base;
+
+    // TRACK 1: Audio track initialization (Conditional)
+    if (!m_no_audio)
     {
-        ret = avcodec_receive_packet(codec_ctx, pkt);
-        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
-            break;
-        else if (ret < 0)
-        {
-            if (m_verbose > 0)
-            {
-                m_log->warn("Failed encoding a frame: {}", AVerr2str(ret));
-            }
-            return false;
-        }
+        AVStream* a_st = avformat_new_stream(m_formatContext, nullptr);
+        if (a_st == nullptr) return false;
 
-        // Rescale timestamp values
-        av_packet_rescale_ts(pkt, codec_ctx->time_base, ost->st->time_base);
-
-        pkt->stream_index = ost->st->index;
-
-        // Handle timestamp adjustments
-        if (ost->prev_dts >= pkt->dts)
-            pkt->dts = ost->prev_dts + 1;
-        ost->prev_dts = pkt->dts;
-
-        if (pkt->pts < pkt->dts)
-            pkt->pts = pkt->dts;
-
-        // Write packet to container
-        ret = av_interleaved_write_frame(fmt_ctx, pkt);
-        if (ret < 0)
-        {
-            if (m_verbose > 0)
-            {
-                m_log->warn("Failed to write packet: {}", AVerr2str(ret));
-                if (m_verbose > 1)
-                {
-                    m_log->info("Codec time base {}/{}",
-                                codec_ctx->time_base.num,
-                                codec_ctx->time_base.den);
-                    m_log->info("Stream          {}/{}",
-                                ost->st->time_base.num,
-                                ost->st->time_base.den);
-                    log_packet("write_frame", fmt_ctx, pkt);
-                }
-            }
-            return false;
-        }
-        ++ost->frames_written;
+        avcodec_parameters_copy(a_st->codecpar, audio_param);
+        a_st->time_base = audio_time_base;
     }
 
-    return ret == AVERROR_EOF ? false : true;
-}
-
-/**
- * @brief Get PCM audio frame for encoding
- * @param ost Output stream
- * @return Pointer to audio frame or nullptr on error
- * @note Retrieves PCM audio data from buffer and prepares it for encoding
- */
-AVFrame* OutputTS::get_pcm_audio_frame(OutputStream* ost)
-{
-    int bytes = ost->enc->ch_layout.nb_channels *
-                ost->enc->frame_size * m_audioIO->BytesPerSample();
-
-    // Check if we have enough data
-    if (m_audioIO->Size() < bytes)
+    // Physical stream commit
+    // Bind FFmpeg's I/O handle back to the active stdout stream descriptor
+    ret = avio_open(&m_formatContext->pb, "pipe:1", AVIO_FLAG_WRITE);
+    if (ret < 0)
     {
-        if (m_verbose > 4)
-            m_log->trace("Not enough audio data.");
-        this_thread::sleep_for(chrono::milliseconds(1));
-        return nullptr;
+        m_log->error("Failed to bind physical stdout descriptor pipe: {}",
+                     AVerr2str(ret));
+        return false;
     }
 
-    AVFrame* frame = ost->tmp_frame;
+    if (m_verbose > 0)
+        m_log->info(av_dump_format_string(m_formatContext));
 
-    uint8_t* q = (uint8_t*)frame->data[0];
+    AVDictionary* muxer_opts = nullptr;
+    // Force the muxer to insert a PCR timestamp at minimum every 20ms to 40ms
+    av_dict_set(&muxer_opts, "pcr_period", "20", 0);
+    // Ensure strict transport stream compliance layout
+    av_dict_set(&muxer_opts, "muxrate", "0", 0); // VBR mode, but forces clock packets
 
-    // Read audio data
-    if (m_audioIO->Read(q, bytes) <= 0)
-        return nullptr;
+    // Commit headers to stream pipeline
+    ret = avformat_write_header(m_formatContext, &muxer_opts);
 
-    // Set frame properties
-    ost->timestamp = frame->pts = m_audioIO->TimeStamp();
-    ost->next_timestamp = ost->timestamp;
+    av_dict_free(&muxer_opts);
+    if (ret < 0)
+    {
+        m_log->error("Error writing new sequential stream header: {}",
+                     AVerr2str(ret));
+        return false;
+    }
 
-    ost->frame->pts = av_rescale_q(frame->pts, m_input_time_base,
-                                   ost->enc->time_base);
+    if (m_verbose > 1)
+        m_log->info("================ open_container end ================");
 
-    ost->next_pts = frame->pts + frame->nb_samples;
-
-    return frame;
+    return true;
 }
 
-/**
- * @brief Write PCM audio frame to output
- * @param oc Output context
- * @param ost Output stream
- * @return true on success, false on failure
- * @note Encodes and writes PCM audio frame
- */
-bool OutputTS::write_pcm_frame(AVFormatContext* oc, OutputStream* ost)
+void OutputTS::close_container(void)
 {
-    AVCodecContext* enc_ctx = ost->enc;
-    AVFrame* frame = get_pcm_audio_frame(ost);
-    int dst_nb_samples = 0;
+    if (m_formatContext != nullptr)
+    {
+        // If headers were written successfully, write the final
+        // MPEG-TS trailer block.  This transmits crucial trailing PSI
+        // data tables down the stdout pipe.
+        av_write_trailer(m_formatContext);
+
+        if (m_formatContext->pb != nullptr)
+        {
+            // Flush any remaining buffered bytes out to the Linux
+            // kernel pipe.
+            avio_flush(m_formatContext->pb);
+
+            // CRITICAL FOR STDOUT: Explicitly free the private AVIO
+            // context buffer without closing the underlying system
+            // File Descriptor 1 (stdout).
+            av_freep(&m_formatContext->pb->buffer);
+            av_free(m_formatContext->pb);
+
+            // Set the pointer to nullptr so FFmpeg's structural
+            // clean-up code knows it doesn't need to try and close a
+            // file handle.
+            m_formatContext->pb = nullptr;
+        }
+
+        // Safely free the root context, structural streams, and
+        // parameters.
+        avformat_free_context(m_formatContext);
+        m_formatContext = nullptr;
+    }
+}
+
+// std::shared_ptr<AVPacket>
+bool OutputTS::queue_packets(OutputStream* ost,
+                             MediaQueue<Packet>& pktQ,
+                             bool is_flushing)
+{
+    if (!ost || !ost->enc)
+        return false;
+
+    AVCodecContext* codec_ctx = ost->enc;
+
     int ret = 0;
 
-    if (!frame)
-        return false;
+    while (true)
+    {
+        PacketPtr pkt = make_packet();
 
-    // Calculate destination samples
-    dst_nb_samples = av_rescale(swr_get_delay(ost->swr_ctx,
-                                              enc_ctx->sample_rate)
-                                + frame->nb_samples,
-                                enc_ctx->sample_rate,
-                                enc_ctx->sample_rate);
-    av_assert0(dst_nb_samples == frame->nb_samples);
+        if (!pkt)
+        {
+            m_log->error("Failed allocating AVPacket.");
+            return false;
+        }
 
-    ost->frame = prepare_audio_frame(ost->frame,
-                                     m_audio_stream.enc->sample_fmt);
+        ret = avcodec_receive_packet(codec_ctx, pkt.get());
 
-    // Convert audio samples
-    ret = swr_convert(ost->swr_ctx,
-                      ost->frame->data, dst_nb_samples,
-                      const_cast<const uint8_t** >(frame->data),
-                      frame->nb_samples);
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+        {
+            break;
+        }
+
+        if (ret < 0)
+        {
+            m_log->warn("Failed encoding frame: {}",
+                        AVerr2str(ret));
+            return false;
+        }
+
+        // Some encoders omit DTS
+        if (pkt->dts == AV_NOPTS_VALUE)
+            pkt->dts = pkt->pts;
+
+        // ??????????????????
+        if (ost->st)
+            pkt->stream_index = ost->st->index;
+
+        Packet qp
+            {
+                .is_marker    = false,
+                .dts          = pkt->dts,
+                .time_base    = codec_ctx->time_base,
+                .pkt          = std::move(pkt),
+                .codec_par    = nullptr
+            };
+
+        pktQ.Push(std::move(qp));
+
+        m_pktQ_ready.notify_one();
+    }
+
+    return is_flushing
+        ? (ret == AVERROR_EOF)
+        : true;
+}
+
+bool OutputTS::encode_frame(OutputStream* ost, AVFrame* frame,
+                            MediaQueue<Packet>& pktQ)
+{
+    if (!ost || !ost->enc) return false;
+
+    // Send frame to encoder
+    int ret = avcodec_send_frame(ost->enc, frame);
+    av_frame_unref(frame);
     if (ret < 0)
     {
-        m_log->warn("write_pcm_frame: Error while converting");
+        m_log->warn("Failed sending a frame to the encoder: {}", AVerr2str(ret));
         return false;
     }
 
-    ost->frame->pts = av_rescale_q(m_audioIO->TimeStamp(),
-                                   m_input_time_base,
-                                   enc_ctx->time_base);
+    // Only unref if the encoder accepted ownership.
+    // If ret == EAGAIN, the frame was rejected and must be preserved.
+    if (frame && ret != AVERROR(EAGAIN))
+        av_frame_unref(frame);
 
-    ost->samples_count += dst_nb_samples;
-
-    return write_frame(oc, enc_ctx, ost->frame, ost);
+    return queue_packets(ost, pktQ, false);
 }
 
-/**
- * @brief Write bitstream audio frame to output
- * @param oc Output context
- * @param ost Output stream
- * @return true on success, false on failure
- * @note Writes bitstream audio frame directly to output
- */
-bool OutputTS::write_bitstream_frame(AVFormatContext* oc, OutputStream* ost)
+bool OutputTS::flush_packets(OutputStream* ost, MediaQueue<Packet>& pktQ)
 {
-    AVPacket* pkt = m_audioIO->ReadSPDIF();
+    if (!ost || !ost->enc) return true;
+    if (!avcodec_is_open(ost->enc)) return true;
 
-    if (pkt == nullptr)
+    // Enter draining mode by passing nullptr
+    int ret = avcodec_send_frame(ost->enc, nullptr);
+    if (ret < 0 && ret != AVERROR_EOF)
     {
-        if (m_verbose > 2)
-            m_log->info("Failed to read pkt from S/PDIF");
+        if (m_verbose > 0) {
+            m_log->error("Error entering encoder drain mode: {}", AVerr2str(ret));
+        }
         return false;
     }
 
-    // Set timestamp and duration
-    ost->timestamp = m_audioIO->TimeStamp();
-    int64_t duration = av_rescale_q(pkt->duration,
-                                    ost->st->time_base,
-                                    m_input_time_base);
-
-    ost->next_timestamp = ost->timestamp + duration;
-    pkt->pts = av_rescale_q(ost->timestamp,
-                            m_input_time_base,
-                            ost->st->time_base);
-
-    // Set packet properties
-    pkt->dts = pkt->pts;
-    pkt->stream_index = ost->st->index;
-
-    // Write packet
-    int ret = av_interleaved_write_frame(oc, pkt);
-    /* pkt is now blank (av_interleaved_write_frame() takes ownership of
-     * its contents and resets pkt), so that no unreferencing is necessary.
-     * This would be different if one used av_write_frame(). */
-
-    if (ret < 0)
-    {
-        m_log->warn("Failed to write audio packet: {}", AVerr2str(ret));
-        return false;
-    }
-
-    return true;
+    return queue_packets(ost, pktQ, true);
 }
 
-/**
- * @brief Write audio frame to output
- * @param oc Output context
- * @param ost Output stream
- * @return true on success, false on failure
- * @note Dispatches audio frame writing based on format (PCM or bitstream)
- */
-bool OutputTS::write_audio_frame(AVFormatContext* oc, OutputStream* ost)
-{
-    if (m_audioIO->Bitstream())
-        return write_bitstream_frame(oc, ost);
-    else
-        return write_pcm_frame(oc, ost);
-}
-
-/**
- * @brief Allocate picture frame
- * @param pix_fmt Pixel format for frame
- * @param width Width of frame
- * @param height Height of frame
- * @return Pointer to allocated AVFrame or nullptr on error
- * @note Allocates memory for video frames
- */
-AVFrame* OutputTS::alloc_picture(enum AVPixelFormat pix_fmt,
-                                 int width, int height)
-{
-    AVFrame* picture;
-    int ret;
-
-    picture = av_frame_alloc();
-    if (!picture)
-        return nullptr;
-
-    picture->format = pix_fmt;
-    picture->width  = width;
-    picture->height = height;
-
-    // Allocate frame buffer
-    ret = av_frame_get_buffer(picture, 0);
-    if (ret < 0)
-    {
-        const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(pix_fmt);
-        m_log->warn("Could not allocate {} video frame of {}x{} : {}",
-                    desc->name, width, height, AV_ts2str(ret));
-        return nullptr;
-    }
-
-    return picture;
-}
-
-/**
- * @brief Allocate hardware picture frame
- * @param hw_frames_ctx hardware context.
- * @param pix_fmt Pixel format for frame
- * @param width Width of frame
- * @param height Height of frame
- * @return Pointer to allocated AVFrame or nullptr on error
- * @note Allocates memory for video frames
- */
-AVFrame* OutputTS::alloc_hw_picture(AVBufferRef* hw_frames_ctx,
-                                    enum AVPixelFormat pix_fmt,
-                                    int width, int height)
-{
-    AVFrame* picture;
-
-    picture = av_frame_alloc();
-    if (!picture)
-        return nullptr;
-
-    picture->format = pix_fmt;
-    picture->width  = width;
-    picture->height = height;
-
-    return picture;
-}
-
-/**
- * @brief Open NVIDIA encoder
- * @param codec Video codec to use
- * @param ost Output stream
- * @param opt_arg Encoder options
- * @return true on success, false on failure
- * @note Configures NVIDIA NVENC encoder
- */
-bool OutputTS::open_nvidia(const AVCodec* codec,
-                           OutputStream* ost, AVDictionary* opt_arg)
+bool OutputTS::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
 {
     int ret;
-    AVCodecContext* ctx = ost->enc;
-    AVDictionary* opt = NULL;
+    AVDictionary* opt = nullptr;
 
-    av_dict_copy(&opt, opt_arg, 0);
+    if (opt_arg && *opt_arg) {
+        av_dict_copy(&opt, *opt_arg, 0);
+    }
 
-    // Set encoder options
+    // Configure nVidia nvenc private encoder compression options
+    av_dict_set(&opt, "rc", "constqp", 0);
+    m_videoStream.enc->global_quality = m_quality;
+
     if (!m_preset.empty())
     {
-        av_opt_set(ctx->priv_data, "preset", m_preset.c_str(), 0);
-        if (m_verbose > 0)
-            m_log->info("Using preset {} for {}", m_preset, m_video_codec_name);
+        // nvenc uses presets like 'p1' to 'p7' (fastest to highest quality)
+        av_dict_set(&opt, "preset", m_preset.c_str(), 0);
+        if (m_verbose > 0) {
+            m_log->info("Nvidia Engine: Applied preset '{}' for {}",
+                        m_preset, m_video_codec_name);
+        }
     }
 
-    av_opt_set(ctx->priv_data, "tune", "hq", 0);
-    av_opt_set(ctx->priv_data, "rc", "constqp", 0);
+    // Configure real-time, low-latency streaming pipeline behavior
+    av_dict_set(&opt, "delay", "0", 0);
+    av_dict_set(&opt, "forced-idr", "1", 0);
+    av_dict_set(&opt, "zerolatency", "1", 0);
 
-    av_opt_set_int(ctx->priv_data, "cq", m_quality, 0);
+    // Apply lookahead parameter blocks if supported by the hardware model
     if (m_look_ahead > 0)
     {
-        av_opt_set_int(ctx->priv_data, "rc-lookahead", m_look_ahead, 0);
-        av_opt_set_int(ctx->priv_data, "surfaces", 50, 0);
+        av_dict_set_int(&opt, "rc-lookahead", m_look_ahead, 0);
+        // "no-scenecut" optimizes multi-threaded pipeline performance during fast cuts
+        av_dict_set_int(&opt, "no-scenecut", 1, 0);
     }
-    av_opt_set_int(ctx->priv_data, "b", 0, 0);
-    av_opt_set_int(ctx->priv_data, "minrate", 4000000, 0);
-    av_opt_set_int(ctx->priv_data, "maxrate", 25000000, 0);
-    av_opt_set_int(ctx->priv_data, "bufsize", 400000000, 0);
 
-    av_opt_set_int(ctx->priv_data, "bf", 0, 0);
-    av_opt_set_int(ctx->priv_data, "b_ref_mode", 0, 0);
+    // =========================================================================
+    // SAFE MULTI-THREADED DEVICE ACCELERATION ACQUISITION
+    // =========================================================================
+    if (m_videoStream.hw_device_ctx == nullptr)
+    {
+        // Bind the NVENC execution environment to the physical GPU card
+        // m_device contains the path or index identifier (e.g., "cuda" or "0")
+        ret = av_hwdevice_ctx_create(&m_videoStream.hw_device_ctx,
+                                     AV_HWDEVICE_TYPE_CUDA,
+                                     m_device.c_str(), nullptr, 0);
+        if (ret < 0 || m_videoStream.hw_device_ctx == nullptr)
+        {
+            m_log->error("Failed to acquire persistent Nvidia CUDA Device "
+                         "Context on '{}': {}", m_device, AVerr2str(ret));
+            if (opt) av_dict_free(&opt);
+            return false;
+        }
 
-    // Set pixel format
-    if (m_isHDR || m_p010)
-        ctx->pix_fmt = AV_PIX_FMT_P010LE;
-    else
-        ctx->pix_fmt = AV_PIX_FMT_YUV420P;
+        if (m_verbose > 0) {
+            m_log->info("nVidia CUDA hardware runtime engine "
+                        "successfully bound.");
+        }
+    }
 
-    // Open codec
-    ret = avcodec_open2(ctx, codec, &opt);
-    av_dict_free(&opt);
+    // Assign input surface format codes
+    // Because nvenc ingests raw host memory arrays or CUDA textures directly,
+    // we assign its input pixel format explicitly. NVENC natively converts
+    // the layout into its optimized hardware space behind the scenes.
+    m_videoStream.enc->pix_fmt = AV_PIX_FMT_NV12;
+
+    // Pass the core hardware accelerator handle reference into the
+    // encoder block context
+    m_videoStream.enc->hw_device_ctx =
+        av_buffer_ref(m_videoStream.hw_device_ctx);
+
+    // Codec initialization & encoder activation
+    // Commit the local options dictionary parameters during encoder activation
+    ret = avcodec_open2(m_videoStream.enc, codec, &opt);
+
+    // Clean local tracking structures safely to avoid leaking RAM
+    if (opt) {
+        av_dict_free(&opt);
+    }
+
     if (ret < 0)
     {
-        m_log->critical("Could not open video codec: {}", AVerr2str(ret));
-        Shutdown();
+        m_log->critical("Fatal Error: Nvidia NVENC codec activation "
+                        "rejected: {}", AVerr2str(ret));
         return false;
     }
 
-    // Allocate reusable frames
-    ost->frames = new OutputStream::FramePool[ost->frames_total];
-    for (int idx = 0; idx < ost->frames_total; ++idx)
-    {
-        ost->frames[idx].frame = alloc_picture(ctx->pix_fmt,
-                                               ctx->width,
-                                               ctx->height);
-        if (!ost->frames[idx].frame)
-        {
-            m_log->critical("Could not allocate video frame");
-            Shutdown();
-            return false;
-        }
-    }
-
-    ost->tmp_frame = nullptr;
-
+    m_log->info("Nvidia NVENC pipeline fully active "
+                "at resolution {}x{}",
+                m_videoStream.enc->width, m_videoStream.enc->height);
     return true;
 }
 
-bool OutputTS::init_hw_buffers(const string & type,
-                               const AVCodec* codec,
-                               AVDictionary*  opt,
-                               OutputStream*  ost)
-{
-    int    ret;
-
-    if (m_verbose > 0)
-        m_log->info("Initializing {} GPU", type);
-
-    if (ost->hw_frames_ctx == nullptr)
-    {
-        // Create hardware frames context
-        if (!(ost->hw_frames_ctx = av_hwframe_ctx_alloc(ost->hw_device_ctx)))
-        {
-            m_log->critical("Failed to create {} frame context.", type);
-            Shutdown();
-            return false;
-        }
-    }
-
-    // Intel encoders need a minimum of 16
-    int pool_size = m_frame_buffers + m_extra_hw_frames + m_look_ahead;
-
-    if (m_verbose > 0)
-        m_log->info("Using {} (requested) + {} (extra_hw_frames) + {} "
-                    "(lookahead) = {} GPU buffers",
-                    m_frame_buffers, m_extra_hw_frames, m_look_ahead, pool_size);
-
-    AVHWFramesContext* frames_ctx =
-        reinterpret_cast<AVHWFramesContext* >(ost->hw_frames_ctx->data);
-    // Set frame format
-    frames_ctx->format    = ost->enc->pix_fmt;
-    frames_ctx->sw_format = m_sw_pix_fmt;
-    frames_ctx->width     = m_input_width;
-    frames_ctx->height    = m_input_height;
-    frames_ctx->initial_pool_size = pool_size;
-
-    // Initialize frames context
-    if ((ret = av_hwframe_ctx_init(ost->hw_frames_ctx)) < 0)
-    {
-        m_log->critical("Failed to initialize {} frame context. Error code: {}",
-                     type, AVerr2str(ret));
-        av_buffer_unref(&ost->hw_frames_ctx);
-        Shutdown();
-        return false;
-    }
-
-    // Initialize HW encoder with HW frame context.
-    ost->enc->hw_frames_ctx = av_buffer_ref(ost->hw_frames_ctx);
-    if (!ost->enc->hw_frames_ctx)
-    {
-        ret = AVERROR(ENOMEM);
-        m_log->critical("Failed to allocate hw frame buffer. Error code: {}",
-                        AVerr2str(ret));
-        av_buffer_unref(&ost->hw_frames_ctx);
-        Shutdown();
-        return false;
-    }
-    ost->hw_device = true;
-
-    // Open codec
-    if ((ret = avcodec_open2(ost->enc, codec, &opt)) < 0)
-    {
-        m_log->critical("Cannot open {} video encoder codec. Error code: {}",
-                        type, AVerr2str(ret));
-        Shutdown();
-        return false;
-    }
-
-    // Allocate reusable frames
-    ost->frames = new OutputStream::FramePool[ost->frames_total];
-    for (int idx = 0; idx < ost->frames_total; ++idx)
-    {
-        ost->frames[idx].frame = alloc_hw_picture(ost->hw_frames_ctx,
-                                                  m_sw_pix_fmt,
-                                                  m_input_width,
-                                                  m_input_height);
-        if (!ost->frames[idx].frame)
-        {
-            m_log->warn("Could not allocate {} video frame[{}]", type, idx);
-            ost->frames_total = idx + 1;
-        }
-    }
-
-    ost->tmp_frame = alloc_picture(m_sw_pix_fmt,
-                                   m_input_width, m_input_height);
-    return true;
-}
-
-/**
- * @brief Open VAAPI encoder
- * @param codec Video codec to use
- * @param ost Output stream
- * @param opt_arg Encoder options
- * @return true on success, false on failure
- * @note Configures VAAPI encoder
- */
-bool OutputTS::open_vaapi(const AVCodec* codec,
-                          OutputStream* ost, AVDictionary* opt_arg)
+bool OutputTS::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
 {
     int ret;
     AVDictionary* opt = nullptr;
 
-    av_dict_copy(&opt, opt_arg, 0);
+    if (opt_arg && *opt_arg) {
+        av_dict_copy(&opt, *opt_arg, 0);
+    }
 
-    // Set encoder options
-    av_opt_set(ost->enc->priv_data, "rc_mode", "ICQ", 0);
-    av_opt_set_int(ost->enc->priv_data, "maxrate", 25000000, 0);
-    av_opt_set_int(ost->enc->priv_data, "bufsize", 400000000, 0);
-    av_opt_set_int(ost->enc->priv_data, "bf", 0, 0);
-    av_opt_set_int(ost->enc->priv_data, "qp", 25, 0);
+    // Configure VAAPI private encoder compression options
+    // Most VAAPI encoders utilize standard global_quality directly or
+    // expose private option strings.
+    m_videoStream.enc->global_quality = m_quality;
 
-    av_opt_set_int(ost->enc->priv_data, "extra_hw_frames",
-                   m_extra_hw_frames + m_look_ahead + 4, 0);
-
-    // Create hardware device context
-    if (ost->hw_device_ctx == nullptr)
+    if (!m_preset.empty())
     {
-        vector<std::string> drivers{ "iHD", "i965" };
-        vector<std::string>::iterator Idriver;
-        for (Idriver = drivers.begin(); Idriver != drivers.end(); ++Idriver)
+        // VAAPI encoders accept string presets depending on driver capabilities
+        // Common examples: "fast", "medium", "slow"
+        av_opt_set(m_videoStream.enc->priv_data, "preset", m_preset.c_str(), 0);
+        if (m_verbose > 0)
         {
-            string envstr = "LIBVA_DRIVER_NAME=" + *Idriver;
-            char* env = envstr.data();
-            putenv(env);
-            envstr = "LIBVA_MESSAGING_LEVEL=0";
-            env = envstr.data();
-            putenv(env);
-
-            if ((ret = av_hwdevice_ctx_create(&ost->hw_device_ctx,
-                                              AV_HWDEVICE_TYPE_VAAPI,
-                                              m_device.c_str(), opt, 0)) < 0)
-                m_log->error("Failed to open VAPPI driver '{}'", *Idriver);
-            else
-                break;
+            m_log->info("VAAPI Engine: Applied preset '{}' for {}",
+                        m_preset, m_video_codec_name);
         }
-        if (Idriver == drivers.end())
+    }
+
+    // Low-overhead real-time live streaming behavior controls
+    av_opt_set(m_videoStream.enc->priv_data, "async_depth", "4", 0);
+
+    // VAAPI drivers natively compute internal frame pipelines
+    // differently than QSV.  Most entry levels do not support deep
+    // multi-frame lookahead mechanics inline, but we pad the surface
+    // allocation window anyway to stay safe against spikes.
+    int surface_count_padding = m_extra_hw_frames + 4;
+    if (m_look_ahead > 0)
+        surface_count_padding += m_look_ahead;
+
+    // =========================================================================
+    // SAFE MULTI-THREADED DEVICE ACCELERATION ACQUISITION
+    // =========================================================================
+    if (m_videoStream.hw_device_ctx == nullptr)
+    {
+        // Thread-safe configuration adjustments using compliant
+        // system APIs.  For standard Linux setups, the default driver
+        // can be iHD (Intel) or radeonsi (AMD).
+        setenv("LIBVA_MESSAGING_LEVEL", "0", 1);
+
+        // For VAAPI, m_device typically specifies a card render node
+        // path (e.g., "/dev/dri/renderD128")
+        ret = av_hwdevice_ctx_create(&m_videoStream.hw_device_ctx,
+                                     AV_HWDEVICE_TYPE_VAAPI,
+                                     m_device.c_str(), nullptr, 0);
+        if (ret < 0 || m_videoStream.hw_device_ctx == nullptr)
         {
-            m_log->critical("Failed to create a VAAPI device. Error code: {}",
-                         AVerr2str(ret));
-            Shutdown();
+            m_log->error("Failed to acquire persistent VAAPI Device "
+                         "Context on path '{}': {}", m_device, AVerr2str(ret));
+            if (opt)
+                av_dict_free(&opt);
             return false;
         }
 
         if (m_verbose > 0)
-            m_log->info("Using VAAPI driver '{}'", *Idriver);
+        {
+            m_log->info("VAAPI hardware runtime engine successfully bound.");
+        }
     }
 
-    ost->enc->pix_fmt     = AV_PIX_FMT_VAAPI;
-    return init_hw_buffers("VAAPI", codec, opt, ost);
+    if (opt)
+        av_dict_free(&opt);
+
+    // Bind encoder parameters format to target execution surface expectations
+    m_videoStream.enc->pix_fmt = AV_PIX_FMT_VAAPI;
+
+    // Context aware surface pool allocation rebuild
+    // Explicitly destroy the old generation frame context layout map
+    // before spawning a new one
+    if (m_videoStream.hw_frames_ctx != nullptr)
+    {
+        av_buffer_unref(&m_videoStream.hw_frames_ctx);
+        m_videoStream.hw_frames_ctx = nullptr;
+    }
+
+    // Allocate a fresh frames context matching the updated resolution
+    // parameters
+    m_videoStream.hw_frames_ctx =
+        av_hwframe_ctx_alloc(m_videoStream.hw_device_ctx);
+    if (m_videoStream.hw_frames_ctx == nullptr)
+    {
+        m_log->error("VAAPI Pool Builder: Failed to allocate hardware "
+                     "frames memory block.");
+        return false;
+    }
+
+    AVHWFramesContext* frames_ctx =
+        reinterpret_cast<AVHWFramesContext*>(m_videoStream.hw_frames_ctx->data);
+
+    // VAAPI drivers are strict regarding surface dimensions matching
+    // the context exactly
+    frames_ctx->width             = m_videoStream.enc->width;
+    frames_ctx->height            = m_videoStream.enc->height;
+    frames_ctx->format            = AV_PIX_FMT_VAAPI;
+    frames_ctx->sw_format         = m_sw_pix_fmt;
+
+    // Set an explicit static initial pool size broad enough to absorb
+    // execution spikes comfortably
+    frames_ctx->initial_pool_size = surface_count_padding + 16;
+
+    ret = av_hwframe_ctx_init(m_videoStream.hw_frames_ctx);
+    if (ret < 0)
+    {
+        m_log->error("VAAPI Kernel Driver rejected fresh format "
+                     "surface pool request: {}", AVerr2str(ret));
+        av_buffer_unref(&m_videoStream.hw_frames_ctx);
+        m_videoStream.hw_frames_ctx = nullptr;
+        return false;
+    }
+
+    // Copy the newly validated hardware surface reference directly to
+    // the encoder object context
+    m_videoStream.enc->hw_frames_ctx =
+        av_buffer_ref(m_videoStream.hw_frames_ctx);
+
+    // Kernel initialization codec activation
+    ret = avcodec_open2(m_videoStream.enc, codec, nullptr);
+    if (ret < 0)
+    {
+        m_log->critical("Fatal Error: VAAPI codec activation rejected "
+                        "by system kernel: {}", AVerr2str(ret));
+        return false;
+    }
+
+    m_log->info("VAAPI pipeline fully active at "
+                "hardware resolution {}x{}",
+                frames_ctx->width, frames_ctx->height);
+    return true;
 }
 
-/**
- * @brief Open QSV encoder
- * @param codec Video codec to use
- * @param ost Output stream
- * @param opt_arg Encoder options
- * @return true on success, false on failure
- * @note Configures Intel Quick Sync Video encoder
- */
-bool OutputTS::open_qsv(const AVCodec* codec,
-                        OutputStream* ost, AVDictionary* opt_arg)
+bool OutputTS::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
 {
-    int    ret;
-
+    int ret;
     AVDictionary* opt = nullptr;
 
-    av_dict_copy(&opt, opt_arg, 0);
+    if (opt_arg && *opt_arg)
+        av_dict_copy(&opt, *opt_arg, 0);
 
-    // Set encoder options
-    av_opt_set(ost->enc->priv_data, "rc_mode", "ICQ", 0);
-    ost->enc->global_quality = m_quality;
+    // Configure Intel QSV private encoder compression options
+    av_opt_set(m_videoStream.enc->priv_data, "rc_mode", "ICQ", 0);
+    m_videoStream.enc->global_quality = m_quality;
 
     if (m_video_codec_name != "av1_qsv")
     {
         if (!m_preset.empty())
         {
-            av_opt_set(ost->enc->priv_data, "preset", m_preset.c_str(), 0);
+            av_opt_set(m_videoStream.enc->priv_data, "preset",
+                       m_preset.c_str(), 0);
             if (m_verbose > 0)
-                m_log->info("Using preset {} for {}", m_preset, m_video_codec_name);
+                m_log->info("QSV Engine: Applied preset '{}' for {}",
+                            m_preset, m_video_codec_name);
         }
 
-        av_opt_set(ost->enc->priv_data, "scenario", "livestreaming", 0);
+        av_opt_set(m_videoStream.enc->priv_data, "scenario",
+                   "livestreaming", 0);
 
-        if (m_look_ahead > 0 &&
-            av_opt_find(ost->enc->priv_data, "look_ahead", NULL,
-                        0, AV_OPT_SEARCH_CHILDREN))
+        if (m_look_ahead > 0 && av_opt_find(m_videoStream.enc->priv_data,
+                                            "lookahead", nullptr, 0,
+                                            AV_OPT_SEARCH_CHILDREN))
         {
-            // Old name?
-            av_opt_set_int(ost->enc->priv_data, "look_ahead", 1, 0);
-            av_opt_set_int(ost->enc->priv_data, "look_ahead_depth",
-                           m_look_ahead, 0);
-
-            // Current name
-            av_opt_set_int(ost->enc->priv_data, "lookahead", 1, 0);
-            av_opt_set_int(ost->enc->priv_data, "lookahead_depth",
+            // Standard dynamic naming convention across modern FFmpeg branches
+            av_opt_set_int(m_videoStream.enc->priv_data, "lookahead", 1, 0);
+            av_opt_set_int(m_videoStream.enc->priv_data, "lookahead_depth",
                            m_look_ahead, 0);
         }
-        av_opt_set(ost->enc->priv_data, "skip_frame", "insert_dummy", 0);
-        av_opt_set(ost->enc->priv_data, "async_depth", "4", 0);
+
+        av_opt_set(m_videoStream.enc->priv_data, "skip_frame",
+                   "insert_dummy", 0);
+        av_opt_set(m_videoStream.enc->priv_data, "async_depth", "4", 0);
     }
 
-    av_opt_set_int(ost->enc->priv_data, "extra_hw_frames",
+    // Match surface allocation requirements to the active QSV
+    // lookahead lookback parameters
+    av_opt_set_int(m_videoStream.enc->priv_data, "extra_hw_frames",
                    m_extra_hw_frames + m_look_ahead + 4, 0);
 
     if (m_gop_secs > 0)
     {
-        // force I-frames to be encoded as IDR
-        if (av_opt_set_int(ost->enc->priv_data, "forced_idr", 1, 0) < 0)
+        if (av_opt_set_int(m_videoStream.enc->priv_data,
+                           "forced_idr", 1, 0) < 0)
             m_log->warn("qsv: failed to set forced_idr");
-
-        // idr_interval == 1 tells it to use gop_size
-        if (av_opt_set_int(ost->enc->priv_data, "idr_interval", 1, 0) < 0)
-            m_log->warn("qsv: failed to set idr_interval for gop");
+        if (av_opt_set_int(m_videoStream.enc->priv_data,
+                           "idr_interval", 1, 0) < 0)
+            m_log->warn("qsv: failed to set idr_interval");
     }
 
-    // Create hardware device context
-    if (ost->hw_device_ctx == nullptr)
+    if (m_videoStream.hw_device_ctx == nullptr)
     {
-        // Make sure env doesn't prevent QSV init.
-        string envstr = "LIBVA_DRIVER_NAME";
-        char* env = envstr.data();
-        unsetenv(env);
-        envstr = "LIBVA_MESSAGING_LEVEL=0";
-        env = envstr.data();
-        putenv(env);
+        // Use modern Intel media driver, overwrite=0 protects user env
+        setenv("LIBVA_DRIVER_NAME", "iHD", 0);
+        setenv("LIBVA_MESSAGING_LEVEL", "0", 1);
 
         av_dict_set(&opt, "child_device", m_device.c_str(), 0);
-        if ((ret = av_hwdevice_ctx_create(&ost->hw_device_ctx,
-                                          AV_HWDEVICE_TYPE_QSV,
-                                          m_device.c_str(), opt, 0)) != 0)
+
+        // Establish the single, long-lived hardware backend pipeline
+        // instance [1]
+        ret = av_hwdevice_ctx_create(&m_videoStream.hw_device_ctx,
+                                     AV_HWDEVICE_TYPE_QSV,
+                                     m_device.c_str(), opt, 0);
+        if (ret < 0 || m_videoStream.hw_device_ctx == nullptr)
         {
-            m_log->error("Failed to open QSV on {}", m_device);
+            m_log->error("Failed to acquire persistent Intel QSV "
+                         "Device Context on device '{}': {}",
+                         m_device, AVerr2str(ret));
+            if (opt)
+                av_dict_free(&opt);
             return false;
         }
 
         if (m_verbose > 0)
-            m_log->info("Using QSV");
+            m_log->info("Intel QSV hardware runtime engine successfully bound");
     }
 
-    ost->enc->pix_fmt = AV_PIX_FMT_QSV;
-    return init_hw_buffers("QSV", codec, opt, ost);
+    // Clean local working option structures
+    if (opt)
+        av_dict_free(&opt);
+
+    // Bind encoder parameters format to target execution plane
+    // mapping requirements
+    m_videoStream.enc->pix_fmt = AV_PIX_FMT_QSV;
+
+    // Explicitly destroy the old generation frame context layout map
+    // before spawning a new one [1]
+    if (m_videoStream.hw_frames_ctx != nullptr)
+    {
+        av_buffer_unref(&m_videoStream.hw_frames_ctx);
+        m_videoStream.hw_frames_ctx = nullptr;
+    }
+
+    // Create a fresh frames context matching the updated resolution parameters
+    m_videoStream.hw_frames_ctx =
+        av_hwframe_ctx_alloc(m_videoStream.hw_device_ctx);
+    if (m_videoStream.hw_frames_ctx == nullptr)
+    {
+        m_log->error("QSV Pool Builder: Failed to allocate hardware "
+                     "frames memory block.");
+        return false;
+    }
+
+    AVHWFramesContext* frames_ctx =
+        reinterpret_cast<AVHWFramesContext*>(m_videoStream.hw_frames_ctx->data);
+
+    // Intel Media Driver require 16 or 32-byte surface boundary alignments [1]
+    #define INTEL_ALIGN(x) (((x) + 31) & ~31)
+    frames_ctx->width             = INTEL_ALIGN(m_videoStream.enc->width);
+    frames_ctx->height            = INTEL_ALIGN(m_videoStream.enc->height);
+    frames_ctx->format            = AV_PIX_FMT_QSV;
+    frames_ctx->sw_format         = m_sw_pix_fmt;
+
+    // Set a explicit static initial pool size broad enough to hold
+    // the QSV lookahead depth window [1]
+    frames_ctx->initial_pool_size = m_extra_hw_frames + m_look_ahead + 16;
+
+    // Apply QSV-specific flags if driver layer exposes them
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(58, 0, 0)
+    // Use frames_ctx directly as AVHWFramesContext*
+    if (frames_ctx->hwctx)
+    {
+        AVQSVFramesContext* qsv_hwctx =
+            reinterpret_cast<AVQSVFramesContext*>(frames_ctx->hwctx);
+        // Safely assign the target GPU memory optimization
+        qsv_hwctx->frame_type = MFX_MEMTYPE_VIDEO_MEMORY_DECODER_TARGET;
+    }
+#endif
+
+    ret = av_hwframe_ctx_init(m_videoStream.hw_frames_ctx);
+    if (ret < 0)
+    {
+        m_log->error("Intel Media Driver rejected fresh format surface "
+                     "pool request: {}", AVerr2str(ret));
+        av_buffer_unref(&m_videoStream.hw_frames_ctx);
+        m_videoStream.hw_frames_ctx = nullptr;
+        return false;
+    }
+
+    // Copy the newly validated hardware surface reference directly to
+    // the encoder object context [1]
+    m_videoStream.enc->hw_frames_ctx =
+        av_buffer_ref(m_videoStream.hw_frames_ctx);
+
+
+    // Intel kernel initialization codec activation
+    ret = avcodec_open2(m_videoStream.enc, codec, nullptr);
+    if (ret < 0)
+    {
+        m_log->critical("Fatal Error: Intel QSV codec activation rejected "
+                        "by system kernel: {}", AVerr2str(ret));
+        return false;
+    }
+
+    m_log->info("Intel QSV pipeline fully active at "
+                "hardware resolution {}x{}",
+                frames_ctx->width, frames_ctx->height);
+    return true;
 }
 
-/**
- * @brief Encode video frame with NVIDIA encoder
- * @return true on success, false on failure
- * @note Encodes video frame using NVENC
- */
-bool OutputTS::nv_encode(void)
+bool OutputTS::stream_changed(const AVCodecParameters* current_params,
+                              const AVCodecParameters* new_params) const
 {
-    OutputStream* ost = &m_video_stream;
+    // If either pointer is null, we can't compare safely; force a
+    // fresh reopen/init.
+    if (!current_params || !new_params)
+        return true;
 
-    ost->next_pts = m_video_stream.timestamp + 1;
+    // Check for Codec Profile or Type modifications
+    if (current_params->codec_type != new_params->codec_type ||
+        current_params->codec_id   != new_params->codec_id)
+        return true;
 
-    return write_frame(m_output_format_context,
-                       ost->enc, ost->frame, ost);
+    // Audio-Specific Hard Boundaries
+    if (current_params->codec_type == AVMEDIA_TYPE_AUDIO)
+    {
+        if (current_params->sample_rate != new_params->sample_rate)
+            return true;
+
+        // Channel configuration
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(59, 24, 100)
+        if (av_channel_layout_compare(&current_params->ch_layout,
+                                      &new_params->ch_layout) != 0)
+            return true;
+#else
+        if (current_params->channels != new_params->channels)
+            return true;
+#endif
+    }
+
+    // Video changes (Resolution, Aspect Ratio, Color Space) return false.
+    // They are handled by the QSV encoder context natively without recycling.
+    return false;
 }
 
-/**
- * @brief Encode video frame with QSV/VAAPI encoder
- * @return true on success, false on failure
- * @note Encodes video frame using QSV or VAAPI
- */
-bool OutputTS::qsv_vaapi_encode(void)
-{
-    OutputStream* ost   = &m_video_stream;
-
-    ost->next_pts = m_video_stream.timestamp + 1;
-
-    return write_frame(m_output_format_context,
-                      ost->enc, ost->frame, ost);
-}
-
-/**
- * @brief Main muxing thread function
- * @note Handles audio and video frame processing and muxing
- */
 void OutputTS::mux(void)
 {
-    int glitch_cnt = 0;
+    CodecParamsPtr audio_params;
+    CodecParamsPtr video_params;
 
-    while (m_running.load() == true)
+    AVRational audio_time_base { 0, 1 };
+    AVRational video_time_base { 0, 1 };
+
+    int64_t prev_video_dts { AV_NOPTS_VALUE };
+    int64_t prev_audio_dts { AV_NOPTS_VALUE };
+
+    // MPEG clock domain for comparison
+    bool update_container = false;
+
+    while (m_running.load())
     {
-        // Handle audio codec changes
-        if (m_audioIO && m_audioIO->CodecChanged())
+        std::optional<Packet> outPkt;
+        PacketPtr pkt;
+
+        if (m_videoPktQ.IsEmpty() || (!m_no_audio && m_audioPktQ.IsEmpty()))
         {
-            if (m_verbose > 0)
-                m_log->info("Audio changing: closing audio encoder");
-            if (!open_audio())
+            std::unique_lock<std::mutex> lock(m_pktQ_mutex);
+            m_pktQ_ready.wait_for(lock,
+                            std::chrono::milliseconds(m_input_frame_wait_ms));
+
+            continue;
+        }
+
+        // VIDEO ONLY MODE
+        if (m_no_audio)
+        {
+            outPkt = m_videoPktQ.PopValue();
+
+            if (outPkt->is_marker)
             {
-                m_log->critical("Failed to create audio stream");
+                video_params = std::move(outPkt->codec_par);
+                video_time_base  = outPkt->time_base;
+                update_container = true;
+            }
+            else
+            {
+                pkt = std::move(outPkt->pkt);
+                pkt->stream_index = VIDEO_STREAM_ID;
+
+                av_packet_rescale_ts(pkt.get(),
+                                     outPkt->time_base,
+                                     m_formatContext
+                                     ->streams[VIDEO_STREAM_ID]
+                                     ->time_base);
+
+                //
+                // Monotonic DTS
+                //
+                if (prev_video_dts != AV_NOPTS_VALUE &&
+                    pkt->dts <= prev_video_dts)
+                {
+                    int64_t fixed = prev_video_dts + 1;
+
+                    m_log->warn("Fixing video DTS regression {} -> {}",
+                                pkt->dts, fixed);
+                    pkt->dts = fixed;
+                }
+
+                prev_video_dts = pkt->dts;
+            }
+        }
+        else
+        {
+            //
+            // Compare streams in common tb
+            //
+            int64_t audio_dts =
+                av_rescale_q(m_audioPktQ.PeekDts(),
+                             m_audioPktQ.PeekTimebase(),
+                             TimeBase::MPEG_TS);
+
+            int64_t video_dts =
+                av_rescale_q(m_videoPktQ.PeekDts(),
+                             m_videoPktQ.PeekTimebase(),
+                             TimeBase::MPEG_TS);
+
+#if 0
+            m_log->info("audio_dts {} {} {} video_dts",
+                        audio_dts, audio_dts < video_dts ? "<" : ">",
+                        video_dts);
+#endif
+            //
+            // AUDIO NEXT
+            //
+            if (audio_dts < video_dts)
+            {
+                outPkt = m_audioPktQ.PopValue();
+
+                if (outPkt->is_marker)
+                {
+                    audio_params = std::move(outPkt->codec_par);
+                    audio_time_base = outPkt->time_base;
+
+                    if (m_videoPktQ.PeekMarker())
+                    {
+                        outPkt          = m_videoPktQ.PopValue();
+                        video_params = std::move(outPkt->codec_par);
+                        video_time_base = outPkt->time_base;
+                    }
+
+                    update_container = true;
+                }
+                else
+                {
+                    pkt = std::move(outPkt->pkt);
+
+                    pkt->stream_index = AUDIO_STREAM_ID;
+
+                    av_packet_rescale_ts(pkt.get(),
+                                         outPkt->time_base,
+                                         m_formatContext
+                                         ->streams[AUDIO_STREAM_ID]
+                                         ->time_base);
+
+                    //
+                    // Audio monotonicity
+                    //
+                    if (prev_audio_dts != AV_NOPTS_VALUE &&
+                        pkt->dts <= prev_audio_dts)
+                    {
+                        int64_t fixed = prev_audio_dts + 1;
+
+                        m_log->warn("Fixing audio DTS regression {} -> {}",
+                                    pkt->dts, fixed);
+                        pkt->dts = fixed;
+                    }
+
+                    prev_audio_dts = pkt->dts;
+                }
+            }
+            //
+            // VIDEO NEXT
+            //
+            else
+            {
+                outPkt = m_videoPktQ.PopValue();
+
+                if (outPkt->is_marker)
+                {
+                    video_params = std::move(outPkt->codec_par);
+                    video_time_base = outPkt->time_base;
+
+                    if (m_audioPktQ.PeekMarker())
+                    {
+                        outPkt          = m_audioPktQ.PopValue();
+                        audio_params = std::move(outPkt->codec_par);
+                        audio_time_base = outPkt->time_base;
+                    }
+
+                    update_container = true;
+                }
+                else
+                {
+                    pkt = std::move(outPkt->pkt);
+
+                    pkt->stream_index = VIDEO_STREAM_ID;
+
+                    av_packet_rescale_ts(pkt.get(),
+                                         outPkt->time_base,
+                                         m_formatContext
+                                         ->streams[VIDEO_STREAM_ID]
+                                         ->time_base);
+
+                    if (pkt->duration <= 0)
+                    {
+                        pkt->duration = av_rescale_q(1,
+                                                     outPkt->time_base,
+                                                     m_formatContext
+                                                     ->streams[VIDEO_STREAM_ID]
+                                                     ->time_base);
+                    }
+
+                    if (prev_video_dts != AV_NOPTS_VALUE &&
+                        pkt->dts <= prev_video_dts)
+                    {
+                        int64_t fixed = prev_video_dts + 1;
+
+                        m_log->warn("Fixing video DTS regression {} -> {}",
+                                    pkt->dts, fixed);
+                        pkt->dts = fixed;
+                    }
+
+                    prev_video_dts = pkt->dts;
+                }
+            }
+        }
+
+        //
+        // Dynamic container reopen
+        //
+        if (update_container)
+        {
+            if (!m_formatContext ||
+                stream_changed(m_formatContext
+                               ->streams[VIDEO_STREAM_ID]
+                               ->codecpar, video_params.get()) ||
+                (!m_no_audio && stream_changed(m_formatContext
+                                               ->streams[AUDIO_STREAM_ID]
+                                               ->codecpar,
+                                               audio_params.get())))
+            {
+                open_container(video_params.get(),
+                               video_time_base,
+                               audio_params.get(),
+                               audio_time_base);
+            }
+
+            update_container = false;
+
+            continue;
+        }
+
+        if (!outPkt || !pkt)
+            continue;
+
+#if 0
+        //
+        // Ensure pts >= dts
+        //
+        if (pkt->pts < pkt->dts)
+            pkt->pts = pkt->dts;
+#endif
+
+#if 0
+        m_log->info("MUX: [{}] pts:{} dts:{} duration:{} size:{} flags:{}",
+                    pkt->stream_index, pkt->pts, pkt->dts,
+                    pkt->duration, pkt->size, pkt->flags);
+#endif
+        int ret = av_write_frame(m_formatContext, pkt.get());
+
+        if (ret == AVERROR(EINVAL))
+        {
+            m_log->critical("Mux rejected packet! PTS={} DTS={} DUR={}",
+                            pkt->pts, pkt->dts, pkt->duration);
+        }
+        else if (ret < 0)
+        {
+            m_log->error("av_write_frame failed: {}", AVerr2str(ret));
+        }
+    }
+}
+
+
+void OutputTS::process_video(void)
+{
+    while (m_running.load())
+    {
+        VideoImage image;
+
+        //
+        // Wait for next image
+        //
+        {
+            std::unique_lock<std::mutex> lock(m_imageQ_mutex);
+
+            m_imageQ_ready.wait_for(lock,
+                                    std::chrono::milliseconds(100), [this]()
+            {
+                return !m_running.load() || !m_imageQ.empty();
+            });
+
+            if (!m_running.load())
+                break;
+
+            if (m_imageQ.empty())
+                continue;
+
+            image = std::move(m_imageQ.front());
+            m_imageQ.pop_front();
+        }
+
+        //
+        // Encoder reconfiguration request
+        //
+        if (image.pParams.has_value())
+        {
+            const auto& params = *image.pParams;
+
+            m_log->info("Video parameter change detected: {}x{}p{:.2f}",
+                        params.width,
+                        params.height,
+                        static_cast<double>(params.frame_rate.num) /
+                        static_cast<double>(params.frame_rate.den));
+#if 1
+            m_log->info("process_video(): input={} hw={} size={}x{}",
+                        av_get_pix_fmt_name(m_sw_pix_fmt),
+                        av_get_pix_fmt_name
+                        (static_cast<AVPixelFormat>(params.pix_fmt)),
+                        params.width,
+                        params.height);
+#endif
+
+            //
+            // Flush encoder completely
+            //
+            flush_packets(&m_videoStream, m_videoPktQ);
+
+
+#if 0 // Is this really necessary?
+            // Allow QSV async surfaces time to retire.
+            //
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+#endif
+
+            //
+            // Open replacement encoder
+            //
+            if (!open_video(params))
+            {
+                m_log->critical("Failed to reopen video encoder.");
+
                 Shutdown();
                 break;
             }
-            m_init_needed = true;
-        }
 
-        // Initialize container if needed
-        if (m_init_needed)
-        {
-            if (m_video_stream.enc &&
-                (!m_audioIO || m_audio_stream.enc != nullptr))
+            //
+            // Signal mux thread that codec/container
+            // re-open is required.
+            //
+            Packet marker;
+            marker.is_marker = true;
+            marker.codec_par = make_codec_params();
+
+            if (!marker.codec_par)
             {
-                if (!open_container())
-                {
-                    Shutdown();
-                    break;
-                }
-                m_video_stream.timestamp = -1;
-                m_video_stream.next_timestamp = -1;
-                if (m_audioIO)
-                    m_audio_stream.next_timestamp = -1;
-                else
-                    m_audio_stream.next_timestamp = -2;
-            }
-            else
-            {
-                if (m_verbose > 4)
-                {
-                    string why;
-                    if (m_video_stream.enc == nullptr)
-                        why = " video";
-                    if (m_audioIO && m_audio_stream.enc == nullptr)
-                    {
-                        if (!why.empty())
-                            why += " &";
-                        why += " audio";
-                    }
-                    m_log->warn("New TS needed but{} encoder is not ready.",
-                                why);
-                }
-                continue;
-            }
-        }
-
-        // Write audio frames
-        if (m_audio_stream.enc)
-        {
-#if 0
-            m_log->info("Write: video {}"
-                        "\n  audio [{}] {}",
-                        m_video_stream.next_pts,
-                        setw(2) << m_audioIO->BufId(),
-                        m_audio_stream.next_pts);
-#endif
-            if (!write_audio_frame(m_output_format_context,
-                                   &m_audio_stream))
-            {
-                if (++glitch_cnt % 100 == 0)
-                {
-#if 0
-                    HardReset("Audio glitch");
-#else
-                    m_log->info("Audio glitch.");
-#endif
-                }
-                this_thread::sleep_for(chrono::milliseconds(5));
-                continue;
-            }
-            glitch_cnt = 0;
-        }
-
-        // Process video frames
-        while (!m_audio_stream.enc ||
-               m_video_stream.timestamp <= m_audio_stream.next_timestamp)
-        {
-            {
-                std::unique_lock<std::mutex> lock(m_videopool_mutex);
-
-                if (!m_video_stream.enc || m_video_stream.frames_used == 0)
-                {
-                    m_videopool_empty.notify_one();
-                    m_videopool_ready.wait_for(lock,
-                        std::chrono::milliseconds(m_input_frame_wait_ms));
-                    break;
-                }
-
-                if (++m_video_stream.frames_idx_out
-                    == m_video_stream.frames_total)
-                    m_video_stream.frames_idx_out = 0;
-
-                m_video_stream.frame = m_video_stream
-                                       .frames[m_video_stream.frames_idx_out].frame;
-                m_video_stream.timestamp = m_video_stream
-                                           .frames[m_video_stream.frames_idx_out].timestamp;
-            }
-
-            // Encode with appropriate encoder
-            if (m_encoderType == EncoderType::NV)
-                nv_encode();
-            else if (m_encoderType == EncoderType::QSV ||
-                     m_encoderType == EncoderType::VAAPI)
-                qsv_vaapi_encode();
-            else
-            {
-                m_log->critical("Unknown encoderType.");
+                m_log->critical("Failed to allocate codec parameters.");
                 Shutdown();
-                return;
+                break;
             }
 
-            {
-                std::unique_lock<std::mutex> lock(m_videopool_mutex);
-                --m_video_stream.frames_used;
-            }
-            m_videopool_avail.notify_one();
+            avcodec_parameters_from_context(marker.codec_par.get(),
+                                            m_videoStream.enc);
+
+            marker.time_base = m_videoStream.enc->time_base;
+
+            m_videoPktQ.Push(std::move(marker));
         }
-        this_thread::yield();
-    }
-}
 
-/**
- * @brief Clear video frame pool
- * @note Resets video frame pool state
- */
-void OutputTS::ClearVideoPool(void)
-{
-    m_video_stream.frames_idx_in  = -1;
-    m_video_stream.frames_idx_out = -1;
-    m_video_stream.frames_used = 0;
-}
-
-/**
- * @brief Clear image queue and return buffers
- * @note Returns all image buffers to their original source
- */
-void OutputTS::ClearImageQueue(void)
-{
-    imageque_t::iterator Iq;
-    for (Iq = m_imagequeue.begin(); Iq != m_imagequeue.end(); ++Iq)
-        f_image_buffer_available((*Iq).image, (*Iq).pEco);
-    m_imagequeue.clear();
-}
-
-/**
- * @brief Set discard images flag
- * @param val ref count increment
- * @note Clears queues when discarding images
- */
-void OutputTS::DiscardImages(int val, const string & why)
-{
-    const unique_lock<mutex> lock(m_imagequeue_mutex);
-
-    m_discard_images += val;
-    if (m_verbose > 3)
-    {
-        if (val > 0)
-            m_log->info("Discarding images while {} [{}]", why, m_discard_images);
-        else if (val < 0)
-            m_log->info("Stopped discard images because {} [{}]", why, m_discard_images);
-        else
-            m_log->info("Clearing image queue because {} [{}]", why, m_discard_images);
-    }
-
-    if (val >= 0)
-        ClearImageQueue();
-}
-
-/**
- * @brief Copy frames from image queue to frame pool
- * @note Copies frames from image queue to frame pool for encoding
- */
-void OutputTS::copy_to_frame(void)
-{
-    AVFrame* dst_frame;
-    uint8_t* pImage;
-    void*    pEco;
-    int64_t  timestamp;
-#if 0
-    int64_t  prev_ts = -1;
-    int64_t  prev_pts = -1;
-    int      prev_idx = -1;
-#endif
-    int      ret = 0;
-
-    int            vidpool_used_1m  {0};
-    array<int, 5>  vidpool_used_5m  {0};
-    array<int, 10> vidpool_used_10m {0};
-    int            vidpool_5m_idx   {0};
-    int            vidpool_10m_idx  {0};
-    array<int, 5>::iterator  vidpool_5m_max;
-    array<int, 10>::iterator vidpool_10m_max;
-    chrono::seconds total_duration;
-
-    int used = 0;
-
-    chrono::steady_clock::time_point current_tm;
-    chrono::steady_clock::time_point vidpool_tm = chrono::steady_clock::now();
-    int duration;
-
-    while (m_running.load() == true)
-    {
+        //
+        // No encoder active yet
+        //
+        if (!m_videoStream.enc ||
+            !m_videoStream.hw_frames_ctx)
         {
-            unique_lock<mutex> lock(m_imagequeue_mutex);
+            m_log->warn("Dropping frame because encoder "
+                        "is not initialized.");
 
-            for (;;)
+            if (image.pImage)
             {
-                m_videopool_is_empty  = (m_video_stream.frames_used == 0);
-                m_imagequeue_is_empty = m_imagequeue.empty();
-
-                if (m_discard_images > 0)
-                {
-                    ClearImageQueue();
-                    if (m_videopool_is_empty && m_imagequeue_is_empty)
-                        m_imagequeue_empty.notify_one();
-                }
-
-                if (!m_imagequeue_is_empty)
-                {
-                    pImage     = m_imagequeue.front().image;
-                    pEco       = m_imagequeue.front().pEco;
-                    timestamp  = m_imagequeue.front().timestamp;
-
-                    m_imagequeue.pop_front();
-                    break;
-                }
-
-                m_imagequeue_ready.wait_for(lock,
-                        std::chrono::milliseconds(m_input_frame_wait_ms));
-
-                if (m_running.load() == false)
-                    return;
+                f_image_buffer_available(image.pImage,
+                                         image.pEco);
             }
+
+            continue;
         }
 
 
+        if (m_sw_pix_fmt != AV_PIX_FMT_NV12 &&
+            m_sw_pix_fmt != AV_PIX_FMT_P010LE)
         {
-            unique_lock<mutex> lock(m_videopool_mutex);
+            m_log->error("Unsupported input pixel format: {}",
+                         av_get_pix_fmt_name(m_sw_pix_fmt));
 
-            for (;;)
-            {
-                if (m_video_stream.frames_used
-                    < m_video_stream.frames_total)
-                    break;
-                m_videopool_avail.wait_for(lock,
-                           std::chrono::milliseconds(m_input_frame_wait_ms));
-                if (m_running.load() == false)
-                    return;
-            }
+            f_image_buffer_available(image.pImage,
+                                     image.pEco);
 
-            if (++m_video_stream.frames_idx_in == m_video_stream.frames_total)
-                m_video_stream.frames_idx_in = 0;
+            continue;
         }
 
-        m_video_stream.frames[m_video_stream.frames_idx_in]
-            .timestamp = timestamp;
-        AVFrame* frm = m_video_stream
-                       .frames[m_video_stream.frames_idx_in].frame;
+        //
+        // Allocate fresh HW frame
+        //
+        AVFrame* hw_frame = av_frame_alloc();
 
-        frm->pts = av_rescale_q(timestamp,
-                                m_input_time_base,
-                                m_video_stream.enc->time_base);
-
-#if 0
-        if (frm->pts <= prev_pts)
+        if (!hw_frame)
         {
-            m_log->warn("copy_frame: scaled pts did not increase: "
-                        "[{}] -> [{}] / {} / {};"
-                        " {} -> {} . TS {} -> {} diff:{} expected: {}",
-                        prev_idx, m_video_stream.frames_idx_in,
-                        m_video_stream.frames_used,
-                        m_video_stream.frames_total,
-                        prev_pts, frm->pts, prev_ts, timestamp,
-                        timestamp - prev_ts, m_input_frame_duration);
-        }
-        prev_pts = frm->pts;
-        prev_ts = timestamp;
-        prev_idx = m_video_stream.frames_idx_in;
-#endif
+            m_log->critical("Failed to allocate hw_frame.");
 
-        if (m_video_stream.hw_frames_ctx)
-        {
-            for (;;)
-            {
-                // Retrieve HW frame from pool
-                ret = av_hwframe_get_buffer(m_video_stream.hw_frames_ctx,
-                                            frm, 0);
-                if (ret == 0)
-                    break;
-                if (ret == AVERROR(ENOMEM))
-                {
-                    // Must wait for a buffer.
-                    unique_lock<mutex> lock(m_videopool_mutex);
-
-                    m_log->warn("No HW video buffers available.");
-                    m_videopool_avail.wait_for(lock,
-                       std::chrono::milliseconds(m_input_frame_wait_ms));
-                    if (m_running.load() == false)
-                        return;
-                }
-                else
-                {
-                    m_log->critical("HW frame pool in bad state: {}",
-                                    AVerr2str(ret));
-                    Shutdown();
-                    f_image_buffer_available(pImage, pEco);
-                    return;
-                }
-            }
-
-            // Map hardware frame to temporary frame
-            if ((ret = av_hwframe_map(m_video_stream.tmp_frame, frm,
-                                      AV_HWFRAME_MAP_WRITE |
-                                      AV_HWFRAME_MAP_OVERWRITE)) < 0)
-            {
-                m_log->critical("Could not map hw frame: {}",
-                                AVerr2str(ret));
-                Shutdown();
-                return;
-            }
-            dst_frame = m_video_stream.tmp_frame;
-        }
-        else
-            dst_frame = frm;
-
-        uint8_t *src_data[8] = { nullptr };
-        int src_linesize[8]  = { 0 };
-
-        // Map flat incoming pImage buffer to the formatting arrays
-        // Note: Alignment must be 1 since pImage is a flat, packed
-        // byte buffer
-        int required_size = av_image_fill_arrays(src_data,
-                                                 src_linesize,
-                                                 pImage,
-                                                 m_sw_pix_fmt,
-                                                 m_video_stream.enc->width,
-                                                 m_video_stream.enc->height,
-                                                 1);
-
-        if (required_size < 0)
-        {
-            m_log->error("Failed to create array from image: {}",
-                         AVerr2str(required_size));
             Shutdown();
             break;
         }
 
-        // Perform the safe row-by-row memory transfer to mapped
-        // hardware surface
-        av_image_copy(dst_frame->data,
-                      dst_frame->linesize,
-                      (const uint8_t **)src_data,
+        int ret =
+            av_hwframe_get_buffer(m_videoStream.hw_frames_ctx,
+                                  hw_frame,
+                                  0);
+
+        if (ret < 0)
+        {
+            m_log->error("av_hwframe_get_buffer failed: {}",
+                         AVerr2str(ret));
+
+            av_frame_free(&hw_frame);
+
+            f_image_buffer_available(image.pImage,
+                                     image.pEco);
+
+            continue;
+        }
+
+        //
+        // Map HW frame to CPU-visible memory
+        //
+        AVFrame* mapped = av_frame_alloc();
+
+        if (!mapped)
+        {
+            av_frame_free(&hw_frame);
+
+            f_image_buffer_available(image.pImage,
+                                     image.pEco);
+
+            Shutdown();
+            break;
+        }
+
+        ret = av_hwframe_map(mapped,
+                             hw_frame,
+                             AV_HWFRAME_MAP_WRITE);
+
+        if (ret < 0)
+        {
+            m_log->error("av_hwframe_map failed: {}",
+                         AVerr2str(ret));
+
+            av_frame_free(&mapped);
+            av_frame_free(&hw_frame);
+
+            f_image_buffer_available(image.pImage,
+                                     image.pEco);
+
+            continue;
+        }
+
+        av_frame_make_writable(mapped);
+
+        //
+        // Build source plane layout
+        //
+        uint8_t* src_data[4] = { nullptr };
+        int src_linesize[4] = { 0 };
+
+        ret = av_image_fill_arrays(src_data,
+                                   src_linesize,
+                                   image.pImage,
+                                   m_sw_pix_fmt,
+                                   m_input_width,
+                                   m_input_height,
+                                   1);
+
+        if (ret < 0)
+        {
+            m_log->error("av_image_fill_arrays failed: {}",
+                         AVerr2str(ret));
+
+            av_frame_free(&mapped);
+            av_frame_free(&hw_frame);
+
+            f_image_buffer_available(image.pImage,
+                                     image.pEco);
+
+            continue;
+        }
+
+        //
+        // Copy CPU image into mapped QSV surface
+        //
+        av_image_copy(mapped->data,
+                      mapped->linesize,
+                      const_cast<const uint8_t**>(src_data),
                       src_linesize,
                       m_sw_pix_fmt,
-                      m_video_stream.enc->width,
-                      m_video_stream.enc->height
-                      );
+                      m_input_width,
+                      m_input_height);
 
-        if (m_video_stream.hw_frames_ctx)
+        //
+        // Release Magewell buffer IMMEDIATELY
+        //
+        f_image_buffer_available(image.pImage,
+                                 image.pEco);
+
+        //
+        // Assign timing
+        //
+        hw_frame->pts =
+            av_rescale_q(image.timestamp,
+                         m_input_time_base,
+                         m_videoStream.enc->time_base);
+
+        //
+        // Submit frame to encoder
+        //
+        if (!encode_frame(&m_videoStream,
+                          hw_frame,
+                          m_videoPktQ))
         {
-            // Unmap and cleanup
-            av_frame_unref(m_video_stream.tmp_frame);
+            m_log->error("Video encode_frame failed.");
+
+            av_frame_free(&mapped);
+            av_frame_free(&hw_frame);
+
+            continue;
         }
 
-        f_image_buffer_available(pImage, pEco);
+        //
+        // IMPORTANT:
+        // Release local references immediately.
+        //
+        av_frame_free(&mapped);
+        av_frame_free(&hw_frame);
+    }
+
+    //
+    // Final encoder flush
+    //
+    if (m_videoStream.enc)
+    {
+        flush_packets(&m_videoStream,
+                      m_videoPktQ);
+    }
+
+    m_log->info("process_video thread exited.");
+}
+
+void OutputTS::AddVideoFrame(VideoImage&& image)
+{
+    const std::unique_lock<std::mutex> lock(m_imageQ_mutex);
+
+    m_imageQ.push_back(std::move(image));
+    m_imageQ_ready.notify_one();
+}
+
+
+/*
+ * THREAD ENTRY
+ */
+void OutputTS::process_audio(void)
+{
+    while (m_running.load())
+    {
+        AudioSamples audio;
 
         {
-            unique_lock<mutex> lock(m_videopool_mutex);
-            used = ++m_video_stream.frames_used;
+            std::unique_lock<std::mutex> lock(m_audioQ_mutex);
+
+            m_audioQ_ready.wait_for(lock,
+                                    std::chrono::milliseconds
+                                    (m_input_frame_wait_ms), [this]()
+                    {
+                        return !m_running.load() || !m_audioQ.empty();
+                    });
+
+            if (!m_running.load())
+                continue;
+
+            if (m_audioQ.empty())
+                continue;
+
+            audio = std::move(m_audioQ.front());
+
+            m_audioQ.pop_front();
+
         }
-        m_videopool_ready.notify_one();
 
-        if (m_verbose > 1)
+        if (audio.pParams.has_value())
         {
-            if (vidpool_used_1m < used)
-                vidpool_used_1m = used;
-            if (vidpool_used_5m[vidpool_5m_idx] < used)
-                vidpool_used_5m[vidpool_5m_idx] = used;
-            if (vidpool_used_10m[vidpool_10m_idx] < used)
-                vidpool_used_10m[vidpool_10m_idx] = used;
-
-            current_tm = chrono::steady_clock::now();
-            duration = chrono::duration_cast<chrono::seconds>
-                       (current_tm - vidpool_tm).count();
-
-            total_duration = chrono::duration_cast<chrono::seconds>
-                             (chrono::steady_clock::now() - m_start_tm);
-
-            if (duration >= 60)
+            if (audio.pParams->is_lpcm)
             {
-                vidpool_5m_max  = ranges::max_element(vidpool_used_5m);
-                vidpool_10m_max = ranges::max_element(vidpool_used_10m);
-
-                // spdlog doesn't support c++20 format yet, so no :%T.
-                m_log->info(format("     GPU frame pool used 1m:{:<3d} "
-                                   "5m:{:<3d} 10m:{:<3d} "
-                                   "of {:<3d} ({:%T} elapsed)",
-                                   vidpool_used_1m, *vidpool_5m_max,
-                                   *vidpool_10m_max, m_frame_buffers,
-                                   total_duration));
-
-                vidpool_used_1m = 0;
-
-                ++vidpool_5m_idx;
-                vidpool_5m_idx %= 5;
-                vidpool_used_5m[vidpool_5m_idx] = 0;
-
-                ++vidpool_10m_idx;
-                vidpool_10m_idx %= 10;
-                vidpool_used_10m[vidpool_10m_idx] = 0;
-
-                vidpool_tm = current_tm;
+                m_bitstream = false;
+                if (!configure_lpcm(audio))
+                {
+                    Shutdown();
+                    break;
+                }
+            }
+            else
+            {
+                m_bitstream = true;
+                m_bitstream_parser->flush();
             }
         }
 
-        this_thread::yield();
+        if (m_bitstream)
+            process_bitstream(std::move(audio));
+        else
+            process_lpcm(std::move(audio));
+    }
+
+    flush_audio_pipeline();
+
+    m_log->info(
+        "process_audio thread exited.");
+}
+
+/*
+ *  LPCM -> AC3
+ */
+bool OutputTS::configure_lpcm(const AudioSamples& audio)
+{
+    m_bitstream = false;
+
+    // Flush previous encoder
+    if (m_audioStream.enc)
+    {
+        flush_packets(&m_audioStream,
+                      m_audioPktQ);
+    }
+
+    m_audio_params = *audio.pParams;
+
+    Packet marker;
+    marker.is_marker = true;
+    marker.codec_par = make_codec_params();
+    if (!marker.codec_par)
+    {
+        m_log->critical("Failed to allocate codec parameters.");
+        Shutdown();
+        return false;
+    }
+    marker.codec_par->ch_layout.nb_channels = m_audio_params.num_channels;
+
+    // Open new stream
+    if (!open_audio_encoder(marker.codec_par))
+    {
+        m_log->critical("Failed opening audio stream.");
+        return false;
+    }
+
+    m_audio_total_samples = av_rescale_q(audio.timestamp,
+                                         TimeBase::Magewell,
+                                         TimeBase::AUDIO48);
+
+    // Create FIFO for LPCM encode path
+    constexpr int fifo_size = 1536 * 16;
+    m_audio_fifo = av_audio_fifo_alloc(AV_SAMPLE_FMT_FLTP,
+                                       m_audio_params.num_channels,
+                                       fifo_size);
+    if (!m_audio_fifo)
+    {
+        m_log->critical("Failed allocating AVAudioFifo.");
+        return false;
+    }
+
+    m_audioPktQ.Push(std::move(marker));
+    m_pktQ_ready.notify_one();
+
+    return true;
+}
+
+void OutputTS::process_lpcm(const AudioSamples& audio)
+{
+    constexpr int AC3_FRAME_SAMPLES = 1536;
+
+    const int  channels      = m_audio_params.num_channels;
+    const bool is_24bit      = m_audio_params.bits_per_sample > 16;
+    const int  input_samples = m_samples_per_frame;
+
+    //
+    // Temporary planar float buffer
+    //
+    std::vector<float> planar(input_samples * channels);
+
+    float* planes[8] {};
+
+    for (int ch = 0; ch < channels; ++ch)
+    {
+        planes[ch] = planar.data() + (input_samples * ch);
+    }
+
+    //
+    // ========================================================
+    // FAST 16-BIT PATH
+    // ========================================================
+    //
+    if (!is_24bit)
+    {
+        const int16_t* src =
+            reinterpret_cast<const int16_t*>(audio.data.data());
+
+        constexpr float scale = 1.0f / 32768.0f;
+
+        for (int s = 0; s < input_samples; ++s)
+        {
+            for (int ch = 0; ch < channels; ++ch)
+            {
+                planes[ch][s] = static_cast<float>
+                           (src[s * channels + ch]) * scale;
+            }
+        }
+    }
+    //
+    // ========================================================
+    // 24-BIT PATH
+    // ========================================================
+    //
+    else
+    {
+        const int32_t* src =
+            reinterpret_cast<const int32_t*>(audio.data.data());
+
+        constexpr float scale = 1.0f / 8388608.0f;
+
+        for (int s = 0; s < input_samples; ++s)
+        {
+            for (int ch = 0; ch < channels; ++ch)
+            {
+                int32_t v = src[s * channels + ch];
+
+                //
+                // Sign extend packed 24-bit
+                //
+                v <<= 8;
+                v >>= 8;
+
+                planes[ch][s] = static_cast<float>(v) * scale;
+            }
+        }
+    }
+
+    //
+    // ========================================================
+    // PUSH INTO FIFO
+    // ========================================================
+    //
+    if (av_audio_fifo_write(m_audio_fifo,
+                            reinterpret_cast<void**>(planes),
+                            input_samples) < input_samples)
+    {
+        m_log->error("Failed writing audio FIFO.");
+        return;
+    }
+
+    //
+    // ========================================================
+    // ENCODE WHILE ENOUGH SAMPLES EXIST
+    // ========================================================
+    //
+    while (av_audio_fifo_size(m_audio_fifo) >= AC3_FRAME_SAMPLES)
+    {
+        encode_ac3_frame();
     }
 }
 
-/**
- * @brief Add video frame to processing queue
- * @param pImage Pointer to image buffer
- * @param pEco Pointer to ECO context
- * @param imageSize Size of image data
- * @param timestamp Timestamp for frame
- * @return true always
- * @note Adds video frame to queue for processing
- */
-void OutputTS::AddVideoFrame(uint8_t* pImage, void* pEco,
-                             int imageSize, int64_t timestamp)
+//
+// ============================================================
+// ENCODE ONE AC3 FRAME
+// ============================================================
+//
+
+void OutputTS::encode_ac3_frame(void)
 {
-    const std::unique_lock<std::mutex> lock(m_imagequeue_mutex);
+    constexpr int AC3_FRAME_SAMPLES = 1536;
+    constexpr int AC3_SAMPLE_RATE   = 48000;
 
-    if (m_discard_images > 0)
-        f_image_buffer_available(pImage, pEco);
-    else
-        m_imagequeue.push_back(imagepkt_t{timestamp, pImage, pEco, imageSize});
+    AVFrame* frame = av_frame_alloc();
 
-    m_imagequeue_ready.notify_one();
+    if (!frame)
+        return;
+
+    frame->format      = AV_SAMPLE_FMT_FLTP;
+    frame->sample_rate = AC3_SAMPLE_RATE;
+    frame->nb_samples  = AC3_FRAME_SAMPLES;
+    frame->pts         = m_audio_total_samples;
+
+    av_channel_layout_copy(&frame->ch_layout,
+                           &m_audioStream.enc->ch_layout);
+
+    int ret = av_frame_get_buffer(frame, 0);
+    if (ret < 0)
+    {
+        av_frame_free(&frame);
+        return;
+    }
+
+    // Pull exact AC3 frame
+    ret = av_audio_fifo_read(m_audio_fifo,
+                             reinterpret_cast<void**>(frame->data),
+                             AC3_FRAME_SAMPLES);
+
+    if (ret < AC3_FRAME_SAMPLES)
+    {
+        av_frame_free(&frame);
+        return;
+    }
+
+    //
+    // Advance perfect sample clock
+    //
+    m_audio_total_samples += AC3_FRAME_SAMPLES;
+
+    //
+    // Encode
+    //
+    if (!encode_frame(&m_audioStream, frame, m_audioPktQ))
+        m_log->error("encode_frame(audio) failed.");
+
+    av_frame_free(&frame);
+}
+
+void OutputTS::initialize_bitstream_parser(void)
+{
+    BitstreamAudioParser::AccessUnitCallback au_handler =
+        [this](PacketPtr&& pkt)
+    {
+        pkt->stream_index = AUDIO_STREAM_ID;
+
+        Packet qp {
+            .is_marker    = false,
+            .dts          = pkt->dts,
+            .time_base    = TimeBase::Magewell,
+            .pkt          = std::move(pkt),
+            .codec_par    = nullptr
+        };
+
+        m_audioPktQ.Push(std::move(qp));
+        m_pktQ_ready.notify_one();
+    };
+
+    BitstreamAudioParser::ConfigChangeCallback config_handler =
+        [this](const DynamicStreamParams& new_params)
+    {
+        m_log->info("%%%%%% Audio:\n{}", new_params);
+
+        CodecParamsPtr codecpar = make_codec_params();
+        if (!codecpar) {
+            m_log->error("Failed to allocate codec parameters memory block.");
+            return;
+        }
+
+        codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
+        codecpar->sample_rate = new_params.sample_rate;
+        codecpar->ch_layout.nb_channels = new_params.channels;
+
+        if (new_params.codec == DetectedCodec::AC3) {
+            codecpar->codec_id = AV_CODEC_ID_AC3;
+        }
+        else if (new_params.codec == DetectedCodec::EAC3) {
+            codecpar->codec_id = AV_CODEC_ID_EAC3;
+        }
+        else if (new_params.codec == DetectedCodec::AC4) {
+            codecpar->codec_id = AV_CODEC_ID_AC4;
+        }
+
+        this->configure_bitstream(std::move(codecpar));
+    };
+
+    m_bitstream_parser =
+        std::make_unique<BitstreamAudioParser>(std::move(au_handler),
+                                               std::move(config_handler));
+}
+
+void OutputTS::process_bitstream(AudioSamples&& samples)
+{
+    if (m_bitstream_parser)
+    {
+        m_bitstream_parser->consumeBuffer(std::move(samples.data),
+                                          samples.timestamp);
+    }
+}
+
+bool OutputTS::configure_bitstream(CodecParamsPtr codecpar)
+{
+    // Flush previous encoder
+    if (m_audioStream.enc)
+    {
+        flush_packets(&m_audioStream,
+                      m_audioPktQ);
+    }
+
+    Packet marker
+        {
+            .is_marker = true,
+            .time_base = TimeBase::Magewell,
+            .codec_par = std::move(codecpar)
+        };
+
+    m_log->info("Opened passthrough {} stream",
+                avcodec_get_name(marker.codec_par->codec_id));
+
+    m_audioPktQ.Push(std::move(marker));
+    m_pktQ_ready.notify_one();
+
+    return true;
+}
+
+//
+// ============================================================
+// FINAL FLUSH
+// ============================================================
+//
+void OutputTS::flush_audio_pipeline(void)
+{
+    if (m_audioStream.enc)
+        flush_packets(&m_audioStream, m_audioPktQ);
+
+    if (m_audio_fifo)
+    {
+        av_audio_fifo_free(m_audio_fifo);
+        m_audio_fifo = nullptr;
+    }
+}
+
+
+void OutputTS::AddAudioSamples(AudioSamples&& samples)
+{
+    const std::unique_lock<std::mutex> lock(m_audioQ_mutex);
+
+    m_audioQ.push_back(std::move(samples));
+    m_audioQ_ready.notify_one();
+
+    return;
 }

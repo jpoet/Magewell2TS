@@ -29,6 +29,10 @@
 #include <memory>
 #include <format>
 
+#include <fcntl.h>
+#include <unistd.h>
+#include <cstdio>
+
 #include <vector>
 #include <filesystem>
 #include <spdlog/spdlog.h>
@@ -52,15 +56,21 @@ void signal_handler(int signum)
 {
     if (signum == SIGHUP || signum == SIGUSR1)
     {
+#if 0
         g_mw->Reset();
+#endif
     }
     else if (signum == SIGINT || signum == SIGTERM)
     {
-        logger->info("Received SIGINT/SIGTERM.");
+        const char* msg = "Received SIGINT/SIGTERM.\n";
+        write(STDERR_FILENO, msg, strlen(msg));
         g_mw->Shutdown();
     }
     else
-        logger->info("Unhandled interrupt.");
+    {
+        const char* msg = "Unhandled interrupt.\n";
+        write(STDERR_FILENO, msg, strlen(msg));
+    }
 }
 
 void show_help(string_view app)
@@ -74,6 +84,7 @@ void show_help(string_view app)
     clog << "--board (-b)       : board id, if you have more than one [0]\n"
          << "--device (-d)      : vaapi/qsv device (e.g. renderD129) [renderD128]\n"
          << "--input (-i)       : input idx, *required*. Starts at 1\n"
+         << "--settle_time (-s) : How long to wait for signal changes to 'settle' [5000(ms)]\n"
          << "--list (-l)        : List capture card inputs\n"
          << "--mux (-m)         : capture audio and video and mux into TS [false]\n"
          << "--no-audio (-n)    : Only capture video. [false]\n"
@@ -86,8 +97,7 @@ void show_help(string_view app)
          << "--preset (-p)      : encoder preset\n"
          << "--p010             : Force p010 (10bit) video format.\n"
          << "--gop_secs (-g)    : GOP size in seconds [1.5] (0 to disable)\n"
-         << "--gpu-buffers      : GPU video buffers count [8]\n"
-         << "--video-buffers    : Video buffers count (RAM) [8]\n"
+         << "--video-buffers    : Video buffers count (RAM) [16]\n"
          << "--extra-hw-frames  : Extra HW frames used for encoding [32]\n"
          << "--write-edid (-w)  : Write EDID info from file to input\n"
          << "--wait-for         : Wait for given number of inputs to be initialized. 10 second timeout\n";
@@ -105,20 +115,6 @@ void show_help(string_view app)
          << "\n"
          << "\tUse Intel quick-sync to encode h.265 video and pipe it to mpv:\n"
          << "\t" << app << " -b 1 -i 1 -m -n -c hevc_qsv | mpv -\n";
-
-    clog << "\n"
-         << "Video frames are read from the Magewell card and placed on a\n"
-         << "queue in RAM (--video-buffers). Frames from that queue are then\n"
-         << "placed on a queue in VRAM (--gpu-buffers). Frame from the VRAM\n"
-         << "queue are 'sent' to the GPU for encoding. Most of the time, the\n"
-         << "GPU is able to encode faster than 'real time', but some scenes\n"
-         << "can be difficult. The higher the --quality and/or --preset and/or\n"
-         << "--lookahead settings, the more time it will take the encoder to\n"
-         << "encode the scene. HDR or using --p010 doubles that memory size\n"
-         << "which increases the time it takes to transfer frames. Most of the\n"
-         << "time, the buffering (--video-buffers, --gpu-buffers) allows the\n"
-         << "encoder the time it needs for difficult scenes, but if the scene\n"
-         << "is too long, then you will need to increase those sizes.\n";
 
     clog << "\nIntel notes:\n"
          << "  --extra-hw-frames is equivalent to passing that argument\n"
@@ -232,6 +228,7 @@ int main(int argc, char* argv[])
     int    ret = 0;
     int    boardId  = -1;
     int    devIndex = -1;
+    chrono::milliseconds settle_time {5000};
 
     string      logpath;
     int         verbose_level = 1;
@@ -256,18 +253,25 @@ int main(int argc, char* argv[])
     bool        no_audio      = false;
     bool        p010          = false;
 
-    int         gpu_buffers   = 8;
     int         video_buffers = 8;
     int         extra_hw_frames = 32;
 
-    constexpr size_t BUFFER_SIZE = 100 * 1024 * 1024;
-    std::vector<char> buffer(BUFFER_SIZE);
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
 
-    // Set stdout to use this buffer (fully buffered)
-    if (std::setvbuf(stdout, buffer.data(), _IOFBF, BUFFER_SIZE) != 0)
+    int max_pipe_size = 1048576; // 1 Megabyte
+    // Force the STDOUT file descriptor pipe buffer to expand
+    if (fcntl(STDOUT_FILENO, F_SETPIPE_SZ, max_pipe_size) < 0)
     {
-        cerr << "Failed to allocate large buffer for stdout\n";
-        return 1;
+        // Could not set pipe size, so must be file mode.
+        constexpr size_t BUFFER_SIZE = 100 * 1024 * 1024;
+        std::vector<char> buffer(BUFFER_SIZE);
+
+        // Set stdout to use this buffer (fully buffered)
+        if (std::setvbuf(stdout, buffer.data(), _IOFBF, BUFFER_SIZE) != 0)
+        {
+            cerr << "Failed to allocate large buffer for stdout\n";
+            return 1;
+        }
     }
 
     vector<string_view> args(argv + 1, argv + argc);
@@ -345,15 +349,6 @@ int main(int argc, char* argv[])
             write_edid = true;
             edid_file = *(++iter);
         }
-        else if (*iter == "--get-volume")
-        {
-            get_volume = true;
-        }
-        else if (*iter == "--set-volume")
-        {
-            if (!string_to_int(*(++iter), set_volume, "volume"))
-                exit(1);
-        }
         else if (*iter == "-n" || *iter == "--no-audio")
         {
             no_audio = true;
@@ -366,11 +361,12 @@ int main(int argc, char* argv[])
         {
             device = *(++iter);
         }
-        else if (*iter == "--gpu-buffers")
+        else if (*iter == "-s" || *iter == "--settle-time")
         {
-            if (!string_to_int(*(++iter), gpu_buffers,
-                               "GPU buffers"))
+            int ms;
+            if (!string_to_int(*(++iter), ms, "Settle time"))
                 exit(1);
+            settle_time = chrono::milliseconds(ms);
         }
         else if (*iter == "--video-buffers")
         {
@@ -462,7 +458,7 @@ int main(int argc, char* argv[])
     {
         if (!g_mw->Capture(video_codec, preset, quality, look_ahead,
                            no_audio, p010, device, gop_secs, extra_hw_frames,
-                           gpu_buffers, video_buffers))
+                           settle_time, video_buffers))
             return -2;
     }
 
