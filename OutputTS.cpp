@@ -207,7 +207,11 @@ OutputTS::OutputTS(int verbose_level, const string & video_codec_name,
         return;
     }
 
+#if 1
     av_log_set_level(AV_LOG_QUIET);
+#else
+    av_log_set_level(AV_LOG_DEBUG);
+#endif
 
     // Determine encoder type based on codec name
     if (m_video_codec_name.find("qsv") != string::npos)
@@ -753,22 +757,6 @@ bool OutputTS::open_video(void)
         default:
           m_log->error("Could not determine video encoder type.");
           return false;
-    }
-
-    // Set HDR metadata for frames
-    if (m_isHDR)
-    {
-        for (int idx = 0; idx < m_video_stream.frames_total; ++idx)
-        {
-            AVFrame* frm = m_video_stream.frames[idx].frame;
-
-            AVMasteringDisplayMetadata* primaries =
-                av_mastering_display_metadata_create_side_data(frm);
-            *primaries = *m_display_primaries;
-            AVContentLightMetadata* light =
-                av_content_light_metadata_create_side_data(frm);
-            *light = *m_content_light;
-        }
     }
 
     DiscardImages(-1, "done initializing video.");
@@ -1725,6 +1713,16 @@ bool OutputTS::nv_encode(void)
 
     ost->next_pts = m_video_stream.timestamp + 1;
 
+    if (m_isHDR)
+    {
+        AVMasteringDisplayMetadata* primaries =
+            av_mastering_display_metadata_create_side_data(ost->frame);
+        *primaries = *m_display_primaries;
+        AVContentLightMetadata* light =
+            av_content_light_metadata_create_side_data(ost->frame);
+        *light = *m_content_light;
+    }
+
     return write_frame(m_output_format_context,
                        ost->enc, ost->frame, ost);
 }
@@ -1739,6 +1737,16 @@ bool OutputTS::qsv_vaapi_encode(void)
     OutputStream* ost   = &m_video_stream;
 
     ost->next_pts = m_video_stream.timestamp + 1;
+
+    if (m_isHDR)
+    {
+        AVMasteringDisplayMetadata* primaries =
+            av_mastering_display_metadata_create_side_data(ost->frame);
+        *primaries = *m_display_primaries;
+        AVContentLightMetadata* light =
+            av_content_light_metadata_create_side_data(ost->frame);
+        *light = *m_content_light;
+    }
 
     return write_frame(m_output_format_context,
                       ost->enc, ost->frame, ost);

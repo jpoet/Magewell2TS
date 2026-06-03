@@ -1430,7 +1430,9 @@ bool Magewell::update_HDRinfo(void)
     // Check EOTF (Electro-Optical Transfer Function)
     if (static_cast<int>(m_HDRinfo.byEOTF) != 2 &&
         static_cast<int>(m_HDRinfo.byEOTF) != 3)
+    {
         return false;
+    }
 
     // Check if HDR info has changed
     if (memcmp(&m_HDRinfo, &m_HDRinfo_prev,
@@ -1449,62 +1451,62 @@ bool Magewell::update_HDRinfo(void)
 
     // Primaries
     meta->has_primaries = 1;
+    int den = 50000;
 
-    // CIE 1931 xy chromaticity coords of color primaries (r, g, b order)
-    // RED x
+    // Green (P0)
     meta->display_primaries[0][0].num =
         static_cast<int32_t>
         (static_cast<uint16_t>(m_HDRinfo.display_primaries_lsb_x0) |
          (static_cast<uint16_t>(m_HDRinfo.display_primaries_msb_x0) << 8));
-    meta->display_primaries[0][0].den = 1;
+    meta->display_primaries[0][0].den = den;
 
-    // RED y
+
     meta->display_primaries[0][1].num =
         static_cast<int32_t>
         (static_cast<uint16_t>(m_HDRinfo.display_primaries_lsb_y0) |
          (static_cast<uint16_t>(m_HDRinfo.display_primaries_msb_y0) << 8));
-    meta->display_primaries[0][1].den = 1;
+    meta->display_primaries[0][1].den = den;
 
-    // GREEN x
+    // Blue (P1)
     meta->display_primaries[1][0].num =
         static_cast<int32_t>
         (static_cast<uint16_t>(m_HDRinfo.display_primaries_lsb_x1) |
          (static_cast<uint16_t>(m_HDRinfo.display_primaries_msb_x1) << 8));
-    meta->display_primaries[1][0].den = 1;
+    meta->display_primaries[1][0].den = den;
 
-    // GREEN y
+
     meta->display_primaries[1][1].num =
         static_cast<int32_t>
         (static_cast<uint16_t>(m_HDRinfo.display_primaries_lsb_y1) |
          (static_cast<uint16_t>(m_HDRinfo.display_primaries_msb_y1) << 8));
-    meta->display_primaries[1][1].den = 1;
+    meta->display_primaries[1][1].den = den;
 
-    // BLUE x
+    // Red (P2)
     meta->display_primaries[2][0].num =
         static_cast<int32_t>
         (static_cast<uint16_t>(m_HDRinfo.display_primaries_lsb_x2) |
          (static_cast<uint16_t>(m_HDRinfo.display_primaries_msb_x2) << 8));
-    meta->display_primaries[2][0].den = 1;
+    meta->display_primaries[2][0].den = den;
 
-    // BLUE y
     meta->display_primaries[2][1].num =
         static_cast<int32_t>
         (static_cast<uint16_t>(m_HDRinfo.display_primaries_lsb_y2) |
          (static_cast<uint16_t>(m_HDRinfo.display_primaries_msb_y2) << 8));
-    meta->display_primaries[2][1].den = 1;
+    meta->display_primaries[2][1].den = den;
+
 
     // CIE 1931 xy chromaticity coords of white point.
     meta->white_point[0].num  =
         static_cast<int32_t>
         (static_cast<uint16_t>(m_HDRinfo.white_point_lsb_x) |
          (static_cast<uint16_t>(m_HDRinfo.white_point_msb_x) << 8));
-    meta->white_point[0].den  = 1;
+    meta->white_point[0].den  = den;
 
     meta->white_point[1].num  =
         static_cast<int32_t>
         (static_cast<uint16_t>(m_HDRinfo.white_point_lsb_y) |
          (static_cast<uint16_t>(m_HDRinfo.white_point_msb_y) << 8));
-    meta->white_point[1].den  = 1;
+    meta->white_point[1].den  = den;
 
     // Luminance
     meta->has_luminance = 1;
@@ -1514,7 +1516,7 @@ bool Magewell::update_HDRinfo(void)
         static_cast<int32_t>
         (static_cast<uint16_t>(m_HDRinfo.max_display_mastering_lsb_luminance) |
          (static_cast<uint16_t>(m_HDRinfo.max_display_mastering_msb_luminance) << 8));
-    meta->max_luminance.num *= 10000;
+//    meta->max_luminance.num *= 10000;
     meta->max_luminance.den  = 1;
 
     // Min luminance of mastering display (cd/m^2).
@@ -1522,7 +1524,7 @@ bool Magewell::update_HDRinfo(void)
         static_cast<int32_t>
         (static_cast<uint16_t>(m_HDRinfo.min_display_mastering_lsb_luminance) |
          (static_cast<uint16_t>(m_HDRinfo.min_display_mastering_msb_luminance) << 8));
-    meta->min_luminance.den  = 1;
+    meta->min_luminance.den  = 10000;
 
     /* Light level */
     AVContentLightMetadata* light = av_content_light_metadata_alloc(NULL);
@@ -1538,6 +1540,65 @@ bool Magewell::update_HDRinfo(void)
         static_cast<int32_t>
         (static_cast<uint16_t>(m_HDRinfo.maximum_frame_average_light_level_lsb) |
          (static_cast<uint16_t>(m_HDRinfo.maximum_frame_average_light_level_msb) << 8));
+
+
+/*
+ * FFmpeg AVMasteringDisplayMetadata expects:
+ *   display_primaries[0] = Red
+ *   display_primaries[1] = Green
+ *   display_primaries[2] = Blue
+ *
+ * Magewell HDR InfoFrame contains:
+ *   x2/y2 = Red
+ *   x0/y0 = Green
+ *   x1/y1 = Blue
+ */
+
+    /*
+      P3:
+      Green = (13250,34500)
+      Blue  = (7500,3000)
+      Red   = (34000,16000)
+    */
+    m_log->info(
+                "G=({}/{}, {}/{}) "
+                "B=({}/{}, {}/{}) "
+                "R=({}/{}, {}/{})",
+
+                // Green
+                meta->display_primaries[0][0].num,
+                meta->display_primaries[0][0].den,
+                meta->display_primaries[0][1].num,
+                meta->display_primaries[0][1].den,
+
+                // Blue
+                meta->display_primaries[1][0].num,
+                meta->display_primaries[1][0].den,
+                meta->display_primaries[1][1].num,
+                meta->display_primaries[1][1].den,
+
+                // Red
+                meta->display_primaries[2][0].num,
+                meta->display_primaries[2][0].den,
+                meta->display_primaries[2][1].num,
+                meta->display_primaries[2][1].den
+                );
+
+    m_log->info("WP=({}/{}, {}/{})",
+                meta->white_point[0].num,
+                meta->white_point[0].den,
+                meta->white_point[1].num,
+                meta->white_point[1].den);
+
+    m_log->info("HDR metadata : primaries={} luminance={}; "
+                "max={}/{} min={}/{}; MaxCLL={} MaxFALL={}",
+                meta->has_primaries,
+                meta->has_luminance,
+                meta->max_luminance.num,
+                meta->max_luminance.den,
+                meta->min_luminance.num,
+                meta->min_luminance.den,
+                light->MaxCLL, light->MaxFALL);
 
     // Pass metadata to output handler
     m_out2ts->setLight(meta, light);
