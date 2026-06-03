@@ -1516,7 +1516,6 @@ bool Magewell::update_HDRinfo(void)
         static_cast<int32_t>
         (static_cast<uint16_t>(m_HDRinfo.max_display_mastering_lsb_luminance) |
          (static_cast<uint16_t>(m_HDRinfo.max_display_mastering_msb_luminance) << 8));
-//    meta->max_luminance.num *= 10000;
     meta->max_luminance.den  = 1;
 
     // Min luminance of mastering display (cd/m^2).
@@ -1542,24 +1541,23 @@ bool Magewell::update_HDRinfo(void)
          (static_cast<uint16_t>(m_HDRinfo.maximum_frame_average_light_level_msb) << 8));
 
 
-/*
- * FFmpeg AVMasteringDisplayMetadata expects:
- *   display_primaries[0] = Red
- *   display_primaries[1] = Green
- *   display_primaries[2] = Blue
- *
- * Magewell HDR InfoFrame contains:
- *   x2/y2 = Red
- *   x0/y0 = Green
- *   x1/y1 = Blue
- */
-
     /*
-      P3:
-      Green = (13250,34500)
-      Blue  = (7500,3000)
-      Red   = (34000,16000)
+     * FFmpeg AVMasteringDisplayMetadata expects:
+     *   display_primaries[0] = Red
+     *   display_primaries[1] = Green
+     *   display_primaries[2] = Blue
+     *
+     * Magewell HDR InfoFrame contains:
+     *   x0/y0 = Green
+     *   x1/y1 = Blue
+     *   x2/y2 = Red
+     *
+     * P3:
+     *    Green = (13250,34500)
+     *    Blue  = (7500,3000)
+     *    Red   = (34000,16000)
     */
+
     m_log->info(
                 "G=({}/{}, {}/{}) "
                 "B=({}/{}, {}/{}) "
