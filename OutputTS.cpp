@@ -763,6 +763,38 @@ bool OutputTS::open_video(void)
     return true;
 }
 
+void OutputTS::optimize_mpegts(AVFormatContext* format_ctx)
+{
+    // Maximize the OS Kernel pipe capacity for stdout
+    fcntl(STDOUT_FILENO, F_SETPIPE_SZ, 1048576);
+
+    // Enable real-time low-latency packet configurations
+    format_ctx->flags |= AVFMT_FLAG_FLUSH_PACKETS;
+    av_opt_set_int(format_ctx->priv_data, "muxrate",
+                   0, AV_OPT_SEARCH_CHILDREN);
+    av_opt_set_int(format_ctx->priv_data, "pes_payload_size",
+                   0, AV_OPT_SEARCH_CHILDREN);
+
+    // Optimize FFmpeg's internal pipe buffer to match the 1MB
+    // kernel pipe size This stops it from performing hundreds of
+    // tiny, unbuffered 188-byte writes
+    if (format_ctx->pb)
+    {
+        constexpr int PIPE_BUFFER_SIZE = 1048576; // 1MB
+        uint8_t* new_buf = (uint8_t*)av_malloc(PIPE_BUFFER_SIZE);
+        if (new_buf)
+        {
+            // Safely swap out the tiny default 32KB internal
+            // buffer for a 1MB buffer
+            av_free(format_ctx->pb->buffer);
+            format_ctx->pb->buffer = new_buf;
+            format_ctx->pb->buffer_size = PIPE_BUFFER_SIZE;
+            format_ctx->pb->buf_ptr = new_buf;
+            format_ctx->pb->buf_end = new_buf + PIPE_BUFFER_SIZE;
+        }
+    }
+}
+
 /**
  * @brief Open output container for muxing
  * @return true on success, false on failure
@@ -851,6 +883,8 @@ bool OutputTS::open_container(void)
             return false;
         }
     }
+
+    optimize_mpegts(m_output_format_context);
 
     // Write header
     ret = avformat_write_header(m_output_format_context, &opt);

@@ -164,6 +164,8 @@ The application provides help via --help or -h:
 magewell2ts -h
 magewell2ts --list
 magewell2ts -i 1 -m -c hevc_qsv -d renderD129 | mpv -
+
+magewell2ts -i 1 -m -c hevc_qsv -d renderD129 | mpv - --cache=no --demuxer-readahead-secs=0 --video-sync=desync
 ```
 
 ----

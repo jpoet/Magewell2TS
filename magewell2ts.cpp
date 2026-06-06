@@ -28,6 +28,7 @@
 #include <csignal>
 #include <memory>
 #include <format>
+#include <sys/stat.h>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -61,6 +62,11 @@ void signal_handler(int signum)
     else if (signum == SIGINT || signum == SIGTERM)
     {
         logger->info("Received SIGINT/SIGTERM.");
+        g_mw->Shutdown();
+    }
+    else if (signum == SIGPIPE)
+    {
+        std::cerr << "SIGPIPE\n";
         g_mw->Shutdown();
     }
     else
@@ -264,24 +270,6 @@ int main(int argc, char* argv[])
     int         video_buffers = 8;
     int         extra_hw_frames = 32;
 
-    // Attempt to set output PIPE to 1 Megabyte
-    std::setvbuf(stdout, nullptr, _IONBF, 0);
-    int max_pipe_size = 1048576;
-    // Force the STDOUT file descriptor pipe buffer to expand
-    if (fcntl(STDOUT_FILENO, F_SETPIPE_SZ, max_pipe_size) < 0)
-    {
-        // Could not set pipe size, so must be file mode.
-        constexpr size_t BUFFER_SIZE = 100 * 1024 * 1024;
-        std::vector<char> buffer(BUFFER_SIZE);
-
-        // Set stdout to use this buffer (fully buffered)
-        if (std::setvbuf(stdout, buffer.data(), _IOFBF, BUFFER_SIZE) != 0)
-        {
-            cerr << "Failed to allocate large buffer for stdout\n";
-            return 1;
-        }
-    }
-
     vector<string_view> args(argv + 1, argv + argc);
 
     {
@@ -293,6 +281,7 @@ int main(int argc, char* argv[])
         sigaction(SIGTERM, &action, NULL);
         sigaction(SIGHUP, &action, NULL);
         sigaction(SIGUSR1, &action, NULL);
+        sigaction(SIGPIPE, &action, NULL);
     }
 
     for (auto iter = args.begin(); iter != args.end(); ++iter)

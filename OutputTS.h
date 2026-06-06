@@ -135,6 +135,7 @@ class OutputTS
 
     bool open_audio(void);
     bool open_video(void);
+    void optimize_mpegts(AVFormatContext* format_ctx);
     bool open_container(void);
     void close_container(void);
     void close_encoder(OutputStream* ost);
