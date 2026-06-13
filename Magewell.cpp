@@ -1771,7 +1771,7 @@ void Magewell::free_image_buffers(void)
 {
     unique_lock<mutex> lock(m_image_buffer_mutex);
 
-#if 0
+#if 1
     // Wait for all buffers to be returned from output thread
     int idx;
     for (idx = 0;

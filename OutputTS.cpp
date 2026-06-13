@@ -1083,35 +1083,12 @@ void OutputTS::close_stream(OutputStream* ost)
     }
 }
 
-/**
- * @brief Write a frame to output container
- * @param fmt_ctx Format context
- * @param codec_ctx Codec context
- * @param frame Frame to write
- * @param ost Output stream
- * @return true on success, false on failure
- * @note Encodes and writes frame to output container
- */
-bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
-                           AVCodecContext* codec_ctx,
-                           AVFrame* frame,
-                           OutputStream* ost)
+bool OutputTS::queue_packets(AVFormatContext* fmt_ctx,
+                             AVCodecContext* codec_ctx,
+                             OutputStream* ost)
 {
-    int ret;
+    int ret = 0;
     AVPacket* pkt = ost->tmp_pkt;
-
-    // Send frame to encoder
-    ret = avcodec_send_frame(codec_ctx, frame);
-    if (ret < 0)
-    {
-        if (m_verbose > 0)
-        {
-            m_log->warn("Failed sending a frame to the encoder: {}",
-                        AVerr2str(ret));
-        }
-        return false;
-    }
-    av_frame_unref(frame);
 
     // Receive encoded packets
     while (ret >= 0)
@@ -1165,6 +1142,60 @@ bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
     }
 
     return ret == AVERROR_EOF ? false : true;
+}
+
+/**
+ * @brief Write a frame to output container
+ * @param fmt_ctx Format context
+ * @param codec_ctx Codec context
+ * @param frame Frame to write
+ * @param ost Output stream
+ * @return true on success, false on failure
+ * @note Encodes and writes frame to output container
+ */
+bool OutputTS::write_frame(AVFormatContext* fmt_ctx,
+                           AVCodecContext* codec_ctx,
+                           AVFrame* frame,
+                           OutputStream* ost)
+{
+    for (;;)
+    {
+        // Send frame to encoder
+        int ret = avcodec_send_frame(codec_ctx, frame);
+
+        if (ret == AVERROR(EAGAIN))
+        {
+            // The encoder internal buffer is full. We MUST pull
+            // packets out to make room.
+            m_log->warn("Encoder saturated (EAGAIN). "
+                        "Flushing packets to clear space.");
+
+            if (!queue_packets(fmt_ctx, codec_ctx, ost))
+            {
+                m_log->error("Failed draining packets during EAGAIN "
+                             "recovery loop.");
+                return false;
+            }
+
+            // The queue is clear. Loop around and try to send the
+            // exact same frame again.
+            continue;
+        }
+
+        if (ret < 0)
+        {
+            if (m_verbose > 0)
+            {
+                m_log->warn("Failed sending a frame to the encoder: {}",
+                            AVerr2str(ret));
+            }
+        }
+
+        break;
+    }
+    av_frame_unref(frame);
+
+    return queue_packets(fmt_ctx, codec_ctx, ost);
 }
 
 /**

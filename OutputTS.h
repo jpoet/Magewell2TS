@@ -139,6 +139,9 @@ class OutputTS
     void close_container(void);
     void close_encoder(OutputStream* ost);
 
+    bool queue_packets(AVFormatContext* fmt_ctx,
+                       AVCodecContext* codec_ctx,
+                       OutputStream* ost);
     bool write_frame(AVFormatContext* fmt_ctx, AVCodecContext* c,
                      AVFrame* frame, OutputStream* ost);
     // Audio output
