@@ -1,0 +1,188 @@
+#pragma once
+
+#include <string>
+#include <utility>
+#include <optional>
+#include <functional>
+#include <deque>
+
+#include <spdlog/spdlog.h>
+#ifdef SPDLOG_FMT_EXTERNAL
+#include <fmt/format.h>
+#else
+#include <spdlog/fmt/bundled/format.h>
+#endif
+
+extern "C" {
+// FFmpeg structure for HDR
+#include <libavutil/pixdesc.h>
+#include <libavutil/mastering_display_metadata.h>
+}
+
+#include "MediaQueue.h"
+#include "ffmpeg_types.h"
+
+class OutputTS;
+
+class VideoStream
+{
+  public:
+    using MagCallback = std::function<void (uint8_t*, void*)>;
+
+    enum EncoderType { UNKNOWN, NV, VAAPI, QSV };
+
+    struct ColorSpace
+    {
+        AVRational display_primaries[3][2] {};
+        AVRational white_point[2] {};
+        AVRational max_luminance{};
+        AVRational min_luminance{};
+
+        AVColorSpace space { AVCOL_SPC_UNSPECIFIED };
+        AVColorTransferCharacteristic trc { AVCOL_TRC_UNSPECIFIED };
+        AVColorPrimaries primaries { AVCOL_PRI_UNSPECIFIED };
+        unsigned MaxCLL {0};
+        unsigned MaxFALL {0};
+
+        uint8_t EOTF {0};
+        bool is_valid {false};
+        bool is_HDR {false};
+        bool has_primaries {false};
+        bool has_luminance {false};
+
+        bool operator==(const ColorSpace&) const = default;
+    };
+
+    struct Args
+    {
+        std::string device { "renderD128" };
+        std::string codecName { "hevc_qsv" };
+        std::string preset { };
+        int quality { 25 };
+        int lookahead { 35 };
+        int extraHWframes { 32 };
+        float gopSecs { 1.5 };
+        bool p010 { false };
+    };
+
+    struct Params
+    {
+        ColorSpace color;
+
+        EncoderType encoder_type {EncoderType::UNKNOWN};
+        AVPixelFormat pix_fmt {AV_PIX_FMT_NONE};
+        AVRational time_base {0, 1};
+        AVRational frame_duration {1, 0};
+        int width {0};
+        int height {0};
+        int num_pixels {0};
+
+        bool operator==(const Params&) const = default;
+    };
+
+    struct Image
+    {
+        uint8_t* pImage {nullptr};
+        int imageSize {0};
+        int64_t timestamp {-1};
+        void* pEco {nullptr};
+        std::optional<Params> oParams;
+    };
+    using imageque_t = std::deque<Image>;
+
+    VideoStream(OutputTS& parent, int verbose_level, Args& args,
+                Params&& params, MagCallback image_buffer_avail,
+                int64_t timestamp);
+    ~VideoStream(void);
+
+    VideoStream(const VideoStream&) = delete;
+    VideoStream& operator=(const VideoStream&) = delete;
+
+    VideoStream(VideoStream&&) = default;
+    VideoStream& operator=(VideoStream&&) = default;
+
+    bool AddFrame(Image&& image);
+
+    std::string ColorSpaceDesc(void) const;
+
+  private:
+    bool open_video(void);
+    void close_video(void);
+    bool open_nvidia(const AVCodec* codec, AVDictionary** opt_arg);
+    bool open_vaapi(const AVCodec* codec, AVDictionary** opt_arg);
+    bool open_qsv(const AVCodec* codec, AVDictionary** opt_arg);
+
+    void set_light(const ColorSpace& color);
+
+    OutputTS& m_parent;
+    int m_verbose;
+    int m_version {-1};
+
+    // spdlog
+    std::shared_ptr<spdlog::logger> m_log;
+
+    EncoderType m_encoderType { UNKNOWN };
+
+    int m_frame_cnt {0};
+    CodecContextPtr m_encoder;
+
+    BufferRefPtr m_hw_device_ctx;
+    BufferRefPtr m_hw_frames_ctx;
+
+    Args m_args;
+    Params m_params;
+
+    enum AVPixelFormat m_sw_pix_fmt {AV_PIX_FMT_NV12};
+
+    // HDR
+    MasteringDisplayMetadataPtr m_display_primaries;
+    ContentLightMetadataPtr m_content_light;
+
+    MagCallback f_image_avail;
+};
+
+// Custom format specification for spdlog / libfmt
+template <>
+  struct fmt::formatter<VideoStream::Params>
+{
+    constexpr auto parse(format_parse_context& ctx) -> decltype(ctx.begin())
+    {
+        return ctx.begin();
+    }
+
+    template <typename FormatContext>
+      auto format(const VideoStream::Params& params,
+                  FormatContext& ctx) const -> decltype(ctx.out())
+    {
+        // Prevent division by zero if frame_duration isn't set yet
+        double fps = params.frame_duration.den /
+                     params.frame_duration.num;
+//params.frame_duration > 0 ? (double)10000000LL / params.frame_duration : 0.0;
+
+        std::string color = "Unknown";
+        switch (params.color.space)
+        {
+            case AVCOL_SPC_BT470BG:
+              color = "YUV601";
+              break;
+            case AVCOL_SPC_BT709:
+              color = "YUV709";
+              break;
+            case AVCOL_SPC_BT2020_NCL:
+              color = "YUV2020";
+              break;
+            default:
+              break;
+        }
+
+        return fmt::format_to(ctx.out(),
+                              "Video[{}x{}p{:.2f} {} {} FR:{}/{}]",
+                              params.width,
+                              params.height,
+                              fps,
+                              color,
+                              av_get_pix_fmt_name(static_cast<AVPixelFormat>(params.pix_fmt)),
+                              params.frame_duration.den,
+                              params.frame_duration.num);
+    }
+};

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <deque>
@@ -10,238 +11,128 @@
 #include <atomic>
 #include <functional>
 
-#include "AudioIO.h"
+#include <spdlog/spdlog.h>
+#ifdef SPDLOG_FMT_EXTERNAL
+#include <fmt/format.h>
+#else
+#include <spdlog/fmt/bundled/format.h>
+#endif
 
-// FFmpeg structure for HDR
-extern "C" {
-#include <libavutil/mastering_display_metadata.h>
+#include "MediaQueue.h"
+#if 0
+#include "PacketSequence.h"
+#endif
+
+#include "VideoStream.h"
+#include "AudioStream.h"
+
+namespace TimeBase
+{
+inline constexpr AVRational MPEG_TS  {1, 90000};
+inline constexpr AVRational Magewell {1, 10000000};
+inline constexpr AVRational AUDIO48  {1, 48000};
+inline constexpr AVRational MS       {1, 1000};
 }
 
 class OutputTS
 {
   public:
-    using MagCallback = std::function<void (uint8_t*, void*)>;
-    using ResetCallback = std::function<void (void)>;
     using ShutdownCallback = std::function<void (void)>;
 
-    enum EncoderType { UNKNOWN, NV, VAAPI, QSV };
+    enum ID {
+        VIDEO_STREAM_ID = 0,
+        AUDIO_STREAM_ID = 1
+    };
 
-    OutputTS(int verbose, const std::string & video_codec_name,
-             const std::string & preset, int quality, int look_ahead,
-             bool p010, bool isEco, const std::string & device,
-             int extra_hw_frames, int gpu_buffers, float gop_secs,
-             ShutdownCallback shutdown, ResetCallback reset,
-             MagCallback image_buffer_avail);
+    OutputTS(int verbose, bool isEco,
+             VideoStream::Args&& video_args,
+             ShutdownCallback shutdown,
+             VideoStream::MagCallback image_buffer_avail);
     ~OutputTS(void);
 
     void Shutdown(void);
 
     void log_packet(std::string where, const AVFormatContext* fmt_ctx,
-                    const AVPacket* pkt);
+                    const AVPacket* pkt, int version);
 
-    AVColorSpace getColorSpace(void) const { return m_color_space; }
-    AVColorTransferCharacteristic getColorTRC(void) const { return m_color_trc; }
-    AVColorPrimaries getColorPrimaries(void) const { return m_color_primaries; }
+    void setHaveAudio(void) { m_no_audio = false; }
 
-    void setColorSpace(AVColorSpace c) { m_color_space = c; }
-    void setColorTRC(AVColorTransferCharacteristic c) { m_color_trc = c; }
-    void setColorPrimaries(AVColorPrimaries c) { m_color_primaries = c; }
-    bool isHDR(void) const { return m_isHDR; }
+    bool EncodeFrame(int stream_id, int version,
+                     AVCodecContext* enc, AVFrame* frame);
+    bool FlushPackets(int stream_id, int version, AVCodecContext* enc);
 
-    void setLight(AVMasteringDisplayMetadata * display_meta,
-                  AVContentLightMetadata * light_meta);
+    uint GetVideoVersion(void) const { return m_video_current_version; }
+    uint GetAudioVersion(void) const { return m_audio_current_version; }
 
-    EncoderType encoderType(void) const { return m_encoderType; }
-    bool setAudioParams(int num_channels, bool is_lpcm,
-                        int bytes_per_sample, int sample_rate,
-                        int samples_per_frame, int frame_size);
-    bool setVideoParams(int width, int height, bool interlaced,
-                        AVRational time_base, double frame_duration,
-                        AVRational frame_rate, bool is_hdr);
-
-    // Pass-through configuration link to cross the hierarchy layer at startup
-    void LinkAudioSink
-      (std::function<void(AudioBuffer::AudioFrame&&)>& sink_initializer)
-    {
-        m_audioIO->LinkAudioSink(sink_initializer);
-    }
-
-    void ClearVideoPool(void);
-    void ClearImageQueue(void);
-    void DiscardImages(int val, const std::string & why);
-    void AddVideoFrame(uint8_t*  pImage, void* pEco,
-                       int imageSize, int64_t timestamp);
+    int AddMarker(int id, CodecParamsPtr&& codecpar, AVRational timebase,
+                  AVRational framerate, int64_t timestamp);
+    void AddAudioPkt(Packet&& pkt);
+    void AddAudioSamples(AudioStream::Samples&& audio);
+    void AddVideoImage(VideoStream::Image&& image);
 
   private:
+    void sync_markers(void);
     void mux(void);
-    void copy_to_frame(void);
+    bool queue_packets(int stream_id, int version,
+                       AVCodecContext* enc,
+                       MediaQueue& pktQ, bool flushing);
+    void process_video(void);
+    void process_audio(void);
+
+    void optimize_mpegts(AVFormatContext* format_ctx);
+    bool open_container(void);
+    void close_container(void);
 
     // spdlog
     std::shared_ptr<spdlog::logger> m_log;
 
-    // a wrapper around a single output AVStream
-    using OutputStream = struct {
-        AVBufferRef* hw_device_ctx {nullptr};
-        AVBufferRef* hw_frames_ctx {nullptr};
-        bool         hw_device     {false};
+    uint m_generation {0};
 
-        AVStream* st               {nullptr};
-        AVCodecContext* enc        {nullptr};
+    std::optional<Packet> m_video_marker;
+    std::optional<Packet> m_audio_marker;
 
-        /* pts of the next frame that will be generated */
-        int64_t next_pts           {-1};
-        int64_t timestamp          {-1};
-#if 1
-        int64_t next_timestamp     {-1};
-#endif
+    AVFormatContext* m_formatContext {nullptr};
 
-        using FramePool = struct {
-            AVFrame* frame     {nullptr};
-            int64_t  timestamp {-1};
-        };
+    int64_t          m_last_dts      {0};
+    AudioStream*     m_audioStream   {nullptr};
 
-        FramePool* frames          {nullptr};
+    MediaQueue       m_videoPktQ;
+    MediaQueue       m_audioPktQ;
 
-        int frames_written         {0};
-        int frames_idx_in          {-1};
-        int frames_idx_out         {-1};
-        int frames_total           {10};
-        int frames_used            {0};
+    VideoStream::imageque_t m_imageQ;
+    AudioStream::audioque_t m_audioQ;
 
-        int samples_count          {0};
-        AVFrame* frame             {nullptr};
-        AVFrame* tmp_frame         {nullptr};
-#if 0
-        int64_t  prev_pts          {-1};
-#endif
-        int64_t  prev_dts          {-1};
-        AVPacket* tmp_pkt          {nullptr};
-
-        struct SwrContext* swr_ctx {nullptr};
-    };
-
-    using imagepkt_t = struct {
-        int64_t  timestamp;
-        uint8_t* image;
-        void*    pEco;
-        int      image_size;
-    };
-    using imageque_t = std::deque<imagepkt_t>;
-    imageque_t m_imagequeue;
-
-    bool add_stream(OutputStream* ost, AVFormatContext* oc,
-                    const AVCodec* *codec);
-    static void close_stream(OutputStream* ost);
-
-    bool open_audio(void);
-    bool open_video(void);
-    bool open_container(void);
-    void close_container(void);
-    void close_encoder(OutputStream* ost);
-
-    bool queue_packets(AVFormatContext* fmt_ctx,
-                       AVCodecContext* codec_ctx,
-                       OutputStream* ost);
-    bool write_frame(AVFormatContext* fmt_ctx, AVCodecContext* c,
-                     AVFrame* frame, OutputStream* ost);
-    // Audio output
-    AVFrame* alloc_audio_frame(void);
-    AVFrame* prepare_audio_frame(AVFrame* frame, int sample_fmt);
-    AVFrame* get_pcm_audio_frame(OutputStream* ost);
-
-    bool write_pcm_frame(AVFormatContext* oc, OutputStream* ost);
-    bool write_bitstream_frame(AVFormatContext* oc, OutputStream* ost);
-    bool write_audio_frame(AVFormatContext* oc, OutputStream* ost);
-
-    // Video output
-    AVFrame* alloc_picture(enum AVPixelFormat pix_fmt,
-                           int width, int height);
-    AVFrame* alloc_hw_picture(AVBufferRef* hw_frame_ctx,
-                              enum AVPixelFormat pix_fmt,
-                              int width, int height);
-    bool open_nvidia(const AVCodec* codec, OutputStream* ost,
-                     AVDictionary* opt_arg);
-    bool init_hw_buffers(const std::string & type,
-                         const AVCodec* codec,
-                         AVDictionary*  opt,
-                         OutputStream*  ost);
-    bool open_vaapi(const AVCodec* codec, OutputStream* ost,
-                    AVDictionary* opt_arg);
-    bool open_qsv(const AVCodec* codec, OutputStream* ost,
-                  AVDictionary* opt_arg);
-    bool nv_encode(void);
-    bool qsv_vaapi_encode(void);
-
-    EncoderType     m_encoderType  { UNKNOWN };
-
-    AudioIO*        m_audioIO {nullptr};
-
-    const AVOutputFormat* m_fmt   {nullptr};
-    AVFormatContext* m_output_format_context {nullptr};
-    OutputStream m_video_stream { 0 };
-    OutputStream m_audio_stream { 0 };
-
-    int              m_verbose;
-
-    std::string      m_filename               {"pipe:1"};
-
-    bool             m_no_audio               {true};
-    int              m_slow_audio_cnt         {0};
-
-    std::string      m_video_codec_name;
-    std::string      m_device;
-    std::string      m_preset;
-    int              m_quality                {-1};
-    int              m_look_ahead             {-1};
-    float            m_gop_secs               {1.5};
-    int              m_input_width            {1280};
-    int              m_input_height           {720};
-    double           m_input_frame_duration   {0};
-    int              m_input_frame_wait_ms    {17};
-    AVRational       m_input_frame_rate       {10000000, 166817};
-    AVRational       m_input_time_base        {1, 10000000};
-
-    bool             m_interlaced             {false};
-
-    enum AVPixelFormat            m_sw_pix_fmt        {AV_PIX_FMT_NV12};
-    bool                          m_p010              {false};
-    bool                          m_isEco             {false};
-    int                           m_extra_hw_frames   {-1};
-    int                           m_gpu_buffers       {-1};
-    int                           m_frame_buffers     {10};
-
-    // HDR
-    bool                          m_isHDR             {false};
-    AVColorSpace                  m_color_space       {AVCOL_SPC_NB};
-    AVColorTransferCharacteristic m_color_trc         {AVCOL_TRC_NB};
-    AVColorPrimaries              m_color_primaries   {AVCOL_PRI_NB};
-    AVMasteringDisplayMetadata*   m_display_primaries {nullptr};
-    AVContentLightMetadata*       m_content_light     {nullptr};
-
-    std::mutex              m_container_mutex;
+    int                     m_verbose;
+    bool                    m_no_audio     {true};
+    VideoStream::Args       m_video_args;
 
     ShutdownCallback        f_shutdown;
-    ResetCallback           f_reset;
-    MagCallback             f_image_buffer_available;
+    VideoStream::MagCallback f_image_avail;
     std::thread             m_mux_thread;
-    std::thread             m_copy_thread;
+    std::thread             m_audio_thread;
+    std::thread             m_video_thread;
 
-    std::mutex              m_videopool_mutex;
-    std::condition_variable m_videopool_ready;
-    std::condition_variable m_videopool_avail;
-    std::condition_variable m_videopool_empty;
-    bool                    m_videopool_is_empty {true};
+    std::mutex              m_audio_pktQ_mutex;
+    std::mutex              m_video_pktQ_mutex;
+    std::mutex              m_pktQ_mutex;
+    std::condition_variable m_pktQ_ready;
 
-    std::mutex              m_imagequeue_mutex;
-    std::condition_variable m_imagequeue_ready;
-    std::condition_variable m_imagequeue_empty;
-    int                     m_discard_images      {0};
-    bool                    m_imagequeue_is_empty {true};
+    std::mutex              m_imageQ_mutex;
+    std::condition_variable m_imageQ_ready;
+    std::condition_variable m_imageQ_empty;
 
-    std::atomic<bool>       m_running      {true};
-    std::atomic<bool>       m_init_needed  {true};
-    std::mutex              m_ready_mutex;
-    std::condition_variable m_ready_cond;
+    std::mutex              m_audioQ_mutex;
+    std::condition_variable m_audioQ_ready;
+    std::condition_variable m_audioQ_empty;
 
-    std::chrono::steady_clock::time_point m_start_tm;
+    std::atomic<bool>       m_running       {true};
+
+    int                     m_video_current_version {0};
+    int                     m_audio_current_version {0};
+    std::atomic<int>        m_video_latest_version  {0};
+    std::atomic<int>        m_audio_latest_version  {0};
+
+#if 0
+    PacketSequence m_sequence;
+#endif
 };

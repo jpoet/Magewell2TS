@@ -56,15 +56,21 @@ void signal_handler(int signum)
 {
     if (signum == SIGHUP || signum == SIGUSR1)
     {
+#if 0
         g_mw->Reset();
+#endif
     }
     else if (signum == SIGINT || signum == SIGTERM)
     {
-        logger->info("Received SIGINT/SIGTERM.");
+        const char* msg = "Received SIGINT/SIGTERM.\n";
+        write(STDERR_FILENO, msg, strlen(msg));
         g_mw->Shutdown();
     }
     else
-        logger->info("Unhandled interrupt.");
+    {
+        const char* msg = "Unhandled interrupt.\n";
+        write(STDERR_FILENO, msg, strlen(msg));
+    }
 }
 
 void show_help(string_view app)
@@ -78,6 +84,7 @@ void show_help(string_view app)
     clog << "--board (-b)       : board id, if you have more than one [0]\n"
          << "--device (-d)      : vaapi/qsv device (e.g. renderD129) [renderD128]\n"
          << "--input (-i)       : input idx, *required*. Starts at 1\n"
+         << "--settle_time (-s) : How long to wait for signal changes to 'settle' [33(ms)]\n"
          << "--list (-l)        : List capture card inputs\n"
          << "--mux (-m)         : capture audio and video and mux into TS [false]\n"
          << "--no-audio (-n)    : Only capture video. [false]\n"
@@ -90,8 +97,7 @@ void show_help(string_view app)
          << "--preset (-p)      : encoder preset\n"
          << "--p010             : Force p010 (10bit) video format.\n"
          << "--gop_secs (-g)    : GOP size in seconds [1.5] (0 to disable)\n"
-         << "--gpu-buffers      : GPU video buffers count [8]\n"
-         << "--video-buffers    : Video buffers count (RAM) [8]\n"
+         << "--video-buffers    : Video buffers count (RAM) [16]\n"
          << "--extra-hw-frames  : Extra HW frames used for encoding [32]\n"
          << "--write-edid (-w)  : Write EDID info from file to input\n"
          << "--wait-for         : Wait for given number of inputs to be initialized. 10 second timeout\n";
@@ -109,20 +115,6 @@ void show_help(string_view app)
          << "\n"
          << "\tUse Intel quick-sync to encode h.265 video and pipe it to mpv:\n"
          << "\t" << app << " -b 1 -i 1 -m -n -c hevc_qsv | mpv -\n";
-
-    clog << "\n"
-         << "Video frames are read from the Magewell card and placed on a\n"
-         << "queue in RAM (--video-buffers). Frames from that queue are then\n"
-         << "placed on a queue in VRAM (--gpu-buffers). Frame from the VRAM\n"
-         << "queue are 'sent' to the GPU for encoding. Most of the time, the\n"
-         << "GPU is able to encode faster than 'real time', but some scenes\n"
-         << "can be difficult. The higher the --quality and/or --preset and/or\n"
-         << "--lookahead settings, the more time it will take the encoder to\n"
-         << "encode the scene. HDR or using --p010 doubles that memory size\n"
-         << "which increases the time it takes to transfer frames. Most of the\n"
-         << "time, the buffering (--video-buffers, --gpu-buffers) allows the\n"
-         << "encoder the time it needs for difficult scenes, but if the scene\n"
-         << "is too long, then you will need to increase those sizes.\n";
 
     clog << "\nIntel notes:\n"
          << "  --extra-hw-frames is equivalent to passing that argument\n"
@@ -216,9 +208,9 @@ void setup_logging(int verbose_level, const string& logpath)
     // Set logger level based on verbose level
     if (verbose_level < 1)
         logger->set_level(spdlog::level::off);
-    else if (verbose_level < 4)
+    else if (verbose_level < 5)
         logger->set_level(spdlog::level::info);
-    else if (verbose_level == 4)
+    else if (verbose_level == 5)
         logger->set_level(spdlog::level::debug);
     else
         logger->set_level(spdlog::level::trace);
@@ -236,33 +228,24 @@ int main(int argc, char* argv[])
     int    ret = 0;
     int    boardId  = -1;
     int    devIndex = -1;
+    chrono::milliseconds settle_time {66};
 
     string      logpath;
     int         verbose_level = 1;
 
     string_view app_name = argv[0];
     string      edid_file;
-    string      video_codec = "hevc_qsv";
-    string      device      = "renderD128";
-
-    bool        get_volume  = false;
-    int         set_volume  = -1;
 
     bool        list_inputs = false;
     bool        do_capture  = false;
     bool        read_edid   = false;
     bool        write_edid  = false;
-
-    string      preset;
-    int         quality       = 25;
-    int         look_ahead    = 35;
-    float       gop_secs      = 1.5;
     bool        no_audio      = false;
-    bool        p010          = false;
 
-    int         gpu_buffers   = 8;
-    int         video_buffers = 8;
-    int         extra_hw_frames = 32;
+    int         video_buffers = 16;
+
+    VideoStream::Args  video_args;
+
 
     // Attempt to set output PIPE to 1 Megabyte
     std::setvbuf(stdout, nullptr, _IONBF, 0);
@@ -312,21 +295,21 @@ int main(int argc, char* argv[])
         }
         else if (*iter == "-p" || *iter == "--preset")
         {
-            preset = *(++iter);
+            video_args.preset = *(++iter);
         }
         else if (*iter == "-q" || *iter == "--quality")
         {
-            if (!string_to_int(*(++iter), quality, "quality"))
+            if (!string_to_int(*(++iter), video_args.quality, "quality"))
                 exit(1);
         }
         else if (*iter == "-a" || *iter == "--lookahead")
         {
-            if (!string_to_int(*(++iter), look_ahead, "lookahead"))
+            if (!string_to_int(*(++iter), video_args.lookahead, "lookahead"))
                 exit(1);
         }
         else if (*iter == "-g" || *iter == "--gop-secs")
         {
-            if (!string_to_float(*(++iter), gop_secs, "gop-secs"))
+            if (!string_to_float(*(++iter), video_args.gopSecs, "gop-secs"))
                 exit(1);
         }
         else if (*iter == "-m" || *iter == "--mux")
@@ -345,7 +328,7 @@ int main(int argc, char* argv[])
         }
         else if (*iter == "-c" || *iter == "--video-codec")
         {
-            video_codec = *(++iter);
+            video_args.codecName = *(++iter);
         }
         else if (*iter == "-r" || *iter == "--read-edid")
         {
@@ -357,32 +340,24 @@ int main(int argc, char* argv[])
             write_edid = true;
             edid_file = *(++iter);
         }
-        else if (*iter == "--get-volume")
-        {
-            get_volume = true;
-        }
-        else if (*iter == "--set-volume")
-        {
-            if (!string_to_int(*(++iter), set_volume, "volume"))
-                exit(1);
-        }
         else if (*iter == "-n" || *iter == "--no-audio")
         {
             no_audio = true;
         }
         else if (*iter == "--p010")
         {
-            p010 = true;
+            video_args.p010 = true;
         }
         else if (*iter == "-d" || *iter == "--device")
         {
-            device = *(++iter);
+            video_args.device = *(++iter);
         }
-        else if (*iter == "--gpu-buffers")
+        else if (*iter == "-s" || *iter == "--settle-time")
         {
-            if (!string_to_int(*(++iter), gpu_buffers,
-                               "GPU buffers"))
+            int ms;
+            if (!string_to_int(*(++iter), ms, "Settle time"))
                 exit(1);
+            settle_time = chrono::milliseconds(ms);
         }
         else if (*iter == "--video-buffers")
         {
@@ -392,7 +367,7 @@ int main(int argc, char* argv[])
         }
         else if (*iter == "--extra-hw-frames")
         {
-            if (!string_to_int(*(++iter), extra_hw_frames,
+            if (!string_to_int(*(++iter), video_args.extraHWframes,
                                "Extra HW frames"))
                 exit(1);
         }
@@ -450,12 +425,6 @@ int main(int argc, char* argv[])
     if (!g_mw->OpenChannel(devIndex - 1, boardId))
         return -1;
 
-    if (get_volume)
-        g_mw->DisplayVolume();
-    if (set_volume >= 0)
-        if (!g_mw->SetVolume(set_volume))
-            return -1;
-
     if (!edid_file.empty())
     {
         if (read_edid)
@@ -472,9 +441,8 @@ int main(int argc, char* argv[])
 
     if (do_capture)
     {
-        if (!g_mw->Capture(video_codec, preset, quality, look_ahead,
-                           no_audio, p010, device, gop_secs, extra_hw_frames,
-                           gpu_buffers, video_buffers))
+        if (!g_mw->Capture(std::move(video_args), no_audio,
+                           settle_time, video_buffers))
             return -2;
     }
 
