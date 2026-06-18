@@ -1298,13 +1298,15 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
     unsigned int uiValidFlag = 0;
     if (MW_SUCCEEDED != MWGetHDMIInfoFrameValidFlag(m_channel, &uiValidFlag))
     {
-        m_log->info("Not a HDMI info frame");
+        if (m_verbose > 2)
+            m_log->info("Not a HDMI info frame");
         return false;
     }
 
     if (0 == uiValidFlag)
     {
-        m_log->info("No HDMI InfoFrame!");
+        if (m_verbose > 2)
+            m_log->info("No HDMI InfoFrame!");
         return false;
     }
 
@@ -1467,44 +1469,47 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
      *    Red   = (34000,16000)
      */
 
-    m_log->info("G=({}/{}, {}/{}) "
-                "B=({}/{}, {}/{}) "
-                "R=({}/{}, {}/{})",
+    if (m_verbose > 3)
+    {
+        m_log->info("G=({}/{}, {}/{}) "
+                    "B=({}/{}, {}/{}) "
+                    "R=({}/{}, {}/{})",
 
-                // Green
-                color.display_primaries[0][0].num,
-                color.display_primaries[0][0].den,
-                color.display_primaries[0][1].num,
-                color.display_primaries[0][1].den,
+                    // Green
+                    color.display_primaries[0][0].num,
+                    color.display_primaries[0][0].den,
+                    color.display_primaries[0][1].num,
+                    color.display_primaries[0][1].den,
 
-                // Blue
-                color.display_primaries[1][0].num,
-                color.display_primaries[1][0].den,
-                color.display_primaries[1][1].num,
-                color.display_primaries[1][1].den,
+                    // Blue
+                    color.display_primaries[1][0].num,
+                    color.display_primaries[1][0].den,
+                    color.display_primaries[1][1].num,
+                    color.display_primaries[1][1].den,
 
-                // Red
-                color.display_primaries[2][0].num,
-                color.display_primaries[2][0].den,
-                color.display_primaries[2][1].num,
-                color.display_primaries[2][1].den
-                );
+                    // Red
+                    color.display_primaries[2][0].num,
+                    color.display_primaries[2][0].den,
+                    color.display_primaries[2][1].num,
+                    color.display_primaries[2][1].den
+                    );
 
-    m_log->info("WP=({}/{}, {}/{})",
-                color.white_point[0].num,
-                color.white_point[0].den,
-                color.white_point[1].num,
-                color.white_point[1].den);
+        m_log->info("WP=({}/{}, {}/{})",
+                    color.white_point[0].num,
+                    color.white_point[0].den,
+                    color.white_point[1].num,
+                    color.white_point[1].den);
 
-    m_log->info("HDR colordata : primaries={} luminance={}; "
-                "max={}/{} min={}/{}; MaxCLL={} MaxFALL={}",
-                color.has_primaries,
-                color.has_luminance,
-                color.max_luminance.num,
-                color.max_luminance.den,
-                color.min_luminance.num,
-                color.min_luminance.den,
-                color.MaxCLL, color.MaxFALL);
+        m_log->info("HDR colordata : primaries={} luminance={}; "
+                    "max={}/{} min={}/{}; MaxCLL={} MaxFALL={}",
+                    color.has_primaries,
+                    color.has_luminance,
+                    color.max_luminance.num,
+                    color.max_luminance.den,
+                    color.min_luminance.num,
+                    color.min_luminance.den,
+                    color.MaxCLL, color.MaxFALL);
+    }
 
     return true;
 }
@@ -2381,7 +2386,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         }
 
         // Wait for capture completion
-        if (MWWaitEvent(capture_event, m_frame_ms2) <= 0)
+        if (MWWaitEvent(capture_event, 99) <= 0)
         {
             if (m_verbose > 0)
             {

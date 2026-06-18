@@ -582,7 +582,7 @@ bool OutputTS::FlushPackets(int stream_id, int version, AVCodecContext* enc)
     }
 
     queue_packets(stream_id, version, enc, pktQ, true);
-    m_log->info("flush_packets id={} version={} Finished, PktQ size {}",
+    m_log->debug("flush_packets id={} version={} Finished, PktQ size {}",
                 stream_id, version, pktQ.GetSize());
 
     return true;
