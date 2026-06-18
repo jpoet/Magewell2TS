@@ -90,8 +90,7 @@ void VideoStream::close_video(void)
     m_encoder.reset();
     m_hw_frames_ctx.reset();
 
-    m_log->critical("VideoStream:Close {}",
-                    m_params);
+    m_log->info("VideoStream:Close {}", m_params);
 }
 
 string VideoStream::ColorSpaceDesc(void) const
@@ -557,8 +556,12 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
         {
             m_log->warn("qsv: failed to set forced_idr");
         }
+    }
+
+    if (m_args.idrInterval > 0)
+    {
         if (av_opt_set_int(m_encoder->priv_data,
-                           "idr_interval", 1, 0) < 0)
+                           "idr_interval", m_args.idrInterval, 0) < 0)
         {
             m_log->warn("qsv: failed to set idr_interval");
         }

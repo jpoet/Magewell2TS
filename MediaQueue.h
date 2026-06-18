@@ -67,8 +67,9 @@ class MediaQueue
         {
             return true;
         }
+#if 1
         /*
-          If the next packet is market, it is probably followed by a
+          If the next packet is marker, it is probably followed by a
           discontinuity, which can have mixed up packets. Save the
           next six in that situation, so they can be sorted.
         */
@@ -81,6 +82,7 @@ class MediaQueue
             return true;
         }
         FixUpDtsPts();
+#endif
         return false;
     }
 

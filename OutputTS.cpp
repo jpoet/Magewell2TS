@@ -567,7 +567,7 @@ bool OutputTS::FlushPackets(int stream_id, int version, AVCodecContext* enc)
                        ? m_audioPktQ
                        : m_videoPktQ;
 
-    m_log->info("flush_packets id={} version={} Started, PktQ size {}",
+    m_log->debug("flush_packets id={} version={} Started, PktQ size {}",
                 stream_id, version, pktQ.GetSize());
 
     // Enter draining mode by passing nullptr

@@ -1128,7 +1128,7 @@ void Magewell::capture_audio_loop(void)
             {
                 if (EcoEventWait(eco_event, m_frame_ms) <= 0)
                 {
-                    if (m_verbose > 1)
+                    if (m_verbose > 3)
                         m_log->info("Waiting for audio data.");
                     continue;
                 }
@@ -1137,7 +1137,7 @@ void Magewell::capture_audio_loop(void)
             {
                 if (MWWaitEvent(notify_event, m_frame_ms) <= 0)
                 {
-                    if (m_verbose > 1)
+                    if (m_verbose > 3)
                         m_log->info("Waiting for audio data.");
                     continue;
                 }
@@ -1675,7 +1675,7 @@ bool Magewell::add_eco_image_buffers(void)
         {
             auto& buf = m_eco_image_buffers.emplace_back
                         (std::make_unique<MWCAP_VIDEO_ECO_CAPTURE_FRAME>());
-            buf->deinterlaceMode = MWCAP_VIDEO_DEINTERLACE_BLEND;
+//            buf->deinterlaceMode = MWCAP_VIDEO_DEINTERLACE_BLEND;
             buf->cbFrame  = m_image_size;
             buf->cbStride = m_min_stride;
             buf->bBottomUp = false;
@@ -2377,19 +2377,19 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 }
             }
             pro_image_buffer_available(pbImage, nullptr);
-            continue;
+            return false;
         }
 
         // Wait for capture completion
-        if (MWWaitEvent(capture_event, m_frame_ms) <= 0)
+        if (MWWaitEvent(capture_event, m_frame_ms2) <= 0)
         {
             if (m_verbose > 0)
             {
-                m_log->warn("wait capture event error or timeout "
+                m_log->warn("DAMAGED: wait capture event error or timeout "
                             "(frame {})", m_frame_cnt);
             }
             pro_image_buffer_available(pbImage, nullptr);
-            continue;
+            return false;
         }
 
         // Get capture status
@@ -2467,7 +2467,6 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
 
     return true;
 }
-
 
 /**
  * @brief Main video capture loop
@@ -2566,7 +2565,7 @@ bool Magewell::capture_video(void)
                     m_log->warn("Input video signal status: Unsupported");
                 locked = false;
                 state = videoSignalStatus.state;
-                this_thread::sleep_for(chrono::milliseconds(m_frame_ms2));
+                this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
                 continue;
             }
 
@@ -2582,20 +2581,20 @@ bool Magewell::capture_video(void)
                       m_log->warn("Input video signal status: NONE");
                   locked = false;
                   state = videoSignalStatus.state;
-                  this_thread::sleep_for(chrono::milliseconds(m_frame_ms2));
+                  this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
                   continue;
                 case MWCAP_VIDEO_SIGNAL_LOCKING:
                   if (state != videoSignalStatus.state && m_verbose > 0)
                       m_log->warn("Input video signal status: Locking");
                   locked = false;
                   state = videoSignalStatus.state;
-                  this_thread::sleep_for(chrono::milliseconds(m_frame_ms2));
+                  this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
                   continue;
                 default:
                   if (m_verbose > 0)
                       m_log->warn("Video signal status: lost locked.");
                   locked = false;
-                  this_thread::sleep_for(chrono::milliseconds(m_frame_ms2));
+                  this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
                   continue;
             }
 
@@ -2661,39 +2660,13 @@ bool Magewell::capture_video(void)
                                                 m_min_stride); /* * 3 / 2; */
             params.num_pixels = m_min_stride * eco_params.cy;
 
-            eco_params.llFrameDuration = videoSignalStatus.dwFrameDuration;
             params.time_base = time_base;
-#if 0
-            // Lock onto a valid, stable frame rate.
-            params.frame_rate =
-                m_rateDetector.update(params.frame_duration);
-            if (av_cmp_q(params.frame_rate, current_frame_rate) != 0)
-            {
-                if (m_verbose > 1)
-                    m_log->info("Duration: {} -> {}; {}/{} -> {}/{}",
-                                eco_params.llFrameDuration,
-                                videoSignalStatus.dwFrameDuration,
-                                current_frame_rate.num,
-                                current_frame_rate.den,
-                                params.frame_rate.num,
-                                params.frame_rate.den);
-                eco_params.llFrameDuration = videoSignalStatus.dwFrameDuration;
-            }
-            else
-            {
-                current_frame_rate = params.frame_rate;
-                continue;
-            }
-
-            if (params.frame_rate.num == 0)
-                continue;
-#else
+            eco_params.llFrameDuration = videoSignalStatus.dwFrameDuration;
             params.frame_duration = {
                 static_cast<int>(eco_params.llFrameDuration),
                 10000000LL
             };
 
-#endif
             if (params == active_params)
                 break;
 
@@ -2787,14 +2760,20 @@ bool Magewell::capture_video(void)
         }
 
         if (m_isEco)
-            capture_eco_video(eco_params, std::move(oParams),
-                              eco_event, video_notify,
-                              ullStatusBits);
+        {
+            if (!capture_eco_video(eco_params, std::move(oParams),
+                                   eco_event, video_notify,
+                                   ullStatusBits))
+                active_params = {};
+        }
         else
-            capture_pro_video(eco_params, std::move(oParams),
-                              video_notify, notify_event,
-                              capture_event, frame_wrap_idx,
-                              event_mask, ullStatusBits);
+        {
+            if (!capture_pro_video(eco_params, std::move(oParams),
+                                   video_notify, notify_event,
+                                   capture_event, frame_wrap_idx,
+                                   event_mask, ullStatusBits))
+                active_params = {};
+        }
     }
 
     if (m_isEco)

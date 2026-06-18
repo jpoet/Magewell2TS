@@ -62,6 +62,7 @@ class VideoStream
         int lookahead { 35 };
         int extraHWframes { 32 };
         float gopSecs { 1.5 };
+        int idrInterval {0};
         bool p010 { false };
     };
 
@@ -155,9 +156,8 @@ template <>
                   FormatContext& ctx) const -> decltype(ctx.out())
     {
         // Prevent division by zero if frame_duration isn't set yet
-        double fps = params.frame_duration.den /
-                     params.frame_duration.num;
-//params.frame_duration > 0 ? (double)10000000LL / params.frame_duration : 0.0;
+        double fps = static_cast<double>(params.frame_duration.den) /
+                     static_cast<double>(params.frame_duration.num);
 
         std::string color = "Unknown";
         switch (params.color.space)
@@ -176,7 +176,7 @@ template <>
         }
 
         return fmt::format_to(ctx.out(),
-                              "Video[{}x{}p{:.2f} {} {} FR:{}/{}]",
+                              "Video[{}x{}p{:.4f} {} {} FR:{}/{}]",
                               params.width,
                               params.height,
                               fps,
