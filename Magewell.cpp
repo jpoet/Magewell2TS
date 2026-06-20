@@ -2319,7 +2319,8 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             }
             if (!found)
             {
-                m_log->warn("None of the MW card buffers are valid.");
+                if (m_verbose > 3)
+                    m_log->info("None of the MW card buffers are valid.");
                 break;
             }
 

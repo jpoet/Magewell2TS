@@ -17,6 +17,14 @@
 
 // #define DEBUG_TS
 
+namespace TimeBase
+{
+inline constexpr AVRational MPEG_TS  {1, 90000};
+inline constexpr AVRational Magewell {1, 10000000};
+inline constexpr AVRational AUDIO48  {1, 48000};
+inline constexpr AVRational MS       {1, 1000};
+}
+
 struct Packet
 {
     bool is_marker {false};
@@ -162,8 +170,8 @@ class MediaQueue
         // Calculate step size using the first valid packet's frame
         // rate and time_base
         int64_t dts_step = av_rescale_q(1,
-                                        tmpVec[0].frame_duration,
-                                        tmpVec[0].time_base);
+                                        tmpVec[1].frame_duration,
+                                        TimeBase::MPEG_TS);
 
         // Adjust the DTS within the "discontinuity" block backwards
         // from our anchor (Index 5)

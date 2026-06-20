@@ -26,14 +26,6 @@
 #include "VideoStream.h"
 #include "AudioStream.h"
 
-namespace TimeBase
-{
-inline constexpr AVRational MPEG_TS  {1, 90000};
-inline constexpr AVRational Magewell {1, 10000000};
-inline constexpr AVRational AUDIO48  {1, 48000};
-inline constexpr AVRational MS       {1, 1000};
-}
-
 class OutputTS
 {
   public:
