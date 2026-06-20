@@ -175,6 +175,9 @@ void PCMStream::encode_frame(void)
     }
 
     if (!m_parent.EncodeFrame(OutputTS::AUDIO_STREAM_ID, m_version,
+#ifdef DEBUG_TS
+                              m_mw_ts,
+#endif
                               m_encoder.get(), frame))
     {
         m_log->error("encode_frame(audio) failed.");
@@ -259,6 +262,9 @@ void PCMStream::AddSamples(AudioStream::Samples&& audio)
         return;
     }
 
+#ifdef DEBUG_TS
+    m_mw_ts = audio.timestamp;
+#endif
     m_pts = av_rescale_q(audio.timestamp,
                          TimeBase::Magewell,
                          TimeBase::AUDIO48);

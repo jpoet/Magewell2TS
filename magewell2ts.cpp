@@ -91,7 +91,7 @@ void show_help(string_view app)
          << "--no-audio (-n)    : Only capture video. [false]\n"
          << "--read-edid (-r)   : Read EDID info for input to file\n"
          << "--logfile          : Also log messages to the given file\n"
-         << "--color            : Use color when logging to the console\n"
+         << "--color (-o)       : Use color when logging to the console\n"
          << "--verbose (-v)     : message verbose level. 0=completely quiet [1]\n"
          << "--video-codec (-c) : Video codec name (e.g. hevc_qsv, h264_nvenc) [hevc_qsv]\n"
          << "--lookahead (-a)   : How many frames to 'look ahead' [35]\n"
@@ -173,7 +173,7 @@ void setup_logging(int verbose_level, bool color, const string& logpath)
         console_sink =
             std::make_shared<spdlog::sinks::stderr_sink_mt>();
 
-        console_sink->set_pattern("%H:%M:%S.%e %l: %v");
+        console_sink->set_pattern("%l: %v");
     }
 
     // Set console level based on verbose level
@@ -401,7 +401,7 @@ int main(int argc, char* argv[])
                 exit(1);
             g_mw->WaitForInputs(input_count);
         }
-        else if (*iter == "--color")
+        else if (*iter == "-o" || *iter == "--color")
         {
             color = true;
         }

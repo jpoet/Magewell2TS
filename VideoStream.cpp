@@ -819,8 +819,11 @@ bool VideoStream::AddFrame(Image&& image)
         hw_frame->pict_type = AV_PICTURE_TYPE_I;
     }
 
-    bool result = m_parent.EncodeFrame(OutputTS::VIDEO_STREAM_ID,
-                                       m_version, m_encoder.get(), hw_frame);
+    bool result = m_parent.EncodeFrame(OutputTS::VIDEO_STREAM_ID, m_version,
+#ifdef DEBUG_TS
+                                       image.timestamp,
+#endif
+                                       m_encoder.get(), hw_frame);
     if (mapped)
     {
         av_frame_unref(mapped);

@@ -58,6 +58,9 @@ class OutputTS
     void setHaveAudio(void) { m_no_audio = false; }
 
     bool EncodeFrame(int stream_id, int version,
+#ifdef DEBUG_TS
+                     int64_t mw_ts,
+#endif
                      AVCodecContext* enc, AVFrame* frame);
     bool FlushPackets(int stream_id, int version, AVCodecContext* enc);
 
@@ -74,6 +77,10 @@ class OutputTS
     void sync_markers(void);
     void mux(void);
     bool queue_packets(int stream_id, int version,
+#ifdef DEBUG_TS
+                       int64_t mw_ts,
+                       int64_t enc_ts,
+#endif
                        AVCodecContext* enc,
                        MediaQueue& pktQ, bool flushing);
     void process_video(void);

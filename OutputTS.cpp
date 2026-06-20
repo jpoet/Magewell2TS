@@ -183,7 +183,12 @@ OutputTS::OutputTS(int verbose_level, bool isEco,
         return;
     }
 
-    av_log_set_level(AV_LOG_QUIET);
+    if (m_verbose > 4)
+        av_log_set_level(AV_LOG_DEBUG);
+    else if (m_verbose > 3)
+        av_log_set_level(AV_LOG_INFO);
+    else
+        av_log_set_level(AV_LOG_QUIET);
 
     // Initialize atomic runtime state machine flags
     m_running.store(true);
@@ -422,6 +427,10 @@ void OutputTS::close_container(void)
 }
 
 bool OutputTS::queue_packets(int stream_id, int version,
+#ifdef DEBUG_TS
+                             int64_t mw_ts,
+                             int64_t enc_ts,
+#endif
                              AVCodecContext* enc,
                              MediaQueue& pktQ, bool flushing)
 {
@@ -474,7 +483,10 @@ bool OutputTS::queue_packets(int stream_id, int version,
 
         // Some encoders omit DTS
         if (pkt->dts == AV_NOPTS_VALUE)
+        {
+            m_log->warn("Encoder did not generate a DTS. Using PTS.");
             pkt->dts = pkt->pts;
+        }
 
         if (pkt->stream_index != stream_id)
         {
@@ -487,7 +499,11 @@ bool OutputTS::queue_packets(int stream_id, int version,
                 .is_marker    = false,
                 .stream_id    = stream_id,
                 .version      = version,
-                .time_base    = TimeBase::MPEG_TS,
+                .time_base    = enc->time_base,
+#ifdef DEBUG_TS
+                .mw_ts        = mw_ts,
+                .enc_ts       = enc_ts,
+#endif
                 .pkt          = std::move(pkt),
                 .codec_par    = nullptr
             };
@@ -500,6 +516,9 @@ bool OutputTS::queue_packets(int stream_id, int version,
 }
 
 bool OutputTS::EncodeFrame(int stream_id, int version,
+#ifdef DEBUG_TS
+                           int64_t mw_ts,
+#endif
                            AVCodecContext* enc, AVFrame* frame)
 {
     if (!enc)
@@ -508,6 +527,10 @@ bool OutputTS::EncodeFrame(int stream_id, int version,
     MediaQueue& pktQ = (stream_id == AUDIO_STREAM_ID)
                        ? m_audioPktQ
                        : m_videoPktQ;
+
+#ifdef DEBUG_TS
+    int64_t enc_ts = frame->pts;
+#endif
 
     for (;;)
     {
@@ -518,7 +541,12 @@ bool OutputTS::EncodeFrame(int stream_id, int version,
         if (ret == 0)
         {
             // The encoder accepted ownership of the frame buffers.
-            return queue_packets(stream_id, version, enc, pktQ, false);
+            return queue_packets(stream_id, version,
+#ifdef DEBUG_TS
+                                 mw_ts,
+                                 enc_ts,
+#endif
+                                 enc, pktQ, false);
         }
 
         if (ret == AVERROR(EAGAIN))
@@ -528,7 +556,12 @@ bool OutputTS::EncodeFrame(int stream_id, int version,
             m_log->info("Encoder saturated (EAGAIN). "
                         "Flushing packets to clear space.");
 
-            if (!queue_packets(stream_id, version, enc, pktQ, false))
+            if (!queue_packets(stream_id, version,
+#ifdef DEBUG_TS
+                               mw_ts,
+                               enc_ts,
+#endif
+                               enc, pktQ, false))
             {
                 m_log->error("Failed draining packets during EAGAIN "
                              "recovery loop.");
@@ -542,7 +575,12 @@ bool OutputTS::EncodeFrame(int stream_id, int version,
         // If it's EOF (during flush) or another critical error code
         if (ret == AVERROR_EOF)
         {
-            return queue_packets(stream_id, version, enc, pktQ, false);
+            return queue_packets(stream_id, version,
+#ifdef DEBUG_TS
+                                 mw_ts,
+                                 enc_ts,
+#endif
+                                 enc, pktQ, false);
         }
 
         m_log->warn("Critical failure sending a frame to the encoder: {}",
@@ -581,7 +619,12 @@ bool OutputTS::FlushPackets(int stream_id, int version, AVCodecContext* enc)
         return false;
     }
 
-    queue_packets(stream_id, version, enc, pktQ, true);
+    queue_packets(stream_id, version,
+#ifdef DEBUG_TS
+                  AV_NOPTS_VALUE,
+                  AV_NOPTS_VALUE,
+#endif
+                  enc, pktQ, true);
     m_log->debug("flush_packets id={} version={} Finished, PktQ size {}",
                 stream_id, version, pktQ.GetSize());
 
@@ -604,7 +647,6 @@ void OutputTS::sync_markers(void)
     {
         outPkt = m_videoPktQ.PopValue();
         m_video_current_version = outPkt->version;
-
 #if 0
         m_sequence.Push(*outPkt, outPkt->pkt.get());
 #endif
@@ -626,11 +668,27 @@ void OutputTS::sync_markers(void)
 
 void OutputTS::mux(void)
 {
+#ifdef DEBUG_TS
     struct StreamState {
-        int64_t prev_pts{AV_NOPTS_VALUE};
-        int64_t prev_dts{AV_NOPTS_VALUE};
+        int     stream_id{-1};
+        int64_t pts{AV_NOPTS_VALUE};
+        int64_t dts{AV_NOPTS_VALUE};
+        int64_t dur{0};
+        AVRational enc_tb;
+        int64_t  mw_ts {AV_NOPTS_VALUE};
+        int64_t  enc_ts {AV_NOPTS_VALUE};
     };
-    std::unordered_map<int, StreamState> tracks;
+    using StreamStateQ = deque<StreamState>;
+    std::unordered_map<int, StreamStateQ> tracks;
+
+    StreamStateQ globalQ;
+#else
+    struct StreamState {
+        int     stream_id{-1};
+        int64_t pts{AV_NOPTS_VALUE};
+        int64_t dts{AV_NOPTS_VALUE};
+    } prev_state;
+#endif
 
     for (;;)
     {
@@ -688,14 +746,23 @@ void OutputTS::mux(void)
             continue;
         }
 
-        auto& state = tracks[stream_id];
+#ifdef DEBUG_TS
+        auto& stateQ = tracks[stream_id];
+        StreamState prev_state;
+        if (stateQ.empty())
+            prev_state = StreamState {};
+        else
+            prev_state = stateQ.back();
+#endif
 
         // Non-monotonic Timestamp Protection
-        if (state.prev_dts != AV_NOPTS_VALUE && pkt->dts < state.prev_dts)
+        if (prev_state.dts != AV_NOPTS_VALUE && pkt->dts <= prev_state.dts)
         {
-            m_log->warn("MUX Stream {} non-monotonic DTS fix: {:12d} -> {:12d}",
-                        stream_id, pkt->dts, state.prev_dts + 1);
-            pkt->dts = state.prev_dts + 1;
+            m_log->debug("MUX [{}] DTS delta {} non-monotonic: "
+                         "Fix: {:12d} -> {:12d}",
+                         stream_id, pkt->dts - prev_state.dts,
+                         pkt->dts, prev_state.dts + 1);
+            pkt->dts = prev_state.dts + 1;
             pkt->pts = std::max(pkt->pts, pkt->dts);
         }
 
@@ -705,14 +772,28 @@ void OutputTS::mux(void)
             pkt->pts = pkt->dts;
         }
 
-        // Cache state parameters for the next frame iteration on this track
-        state.prev_pts = pkt->pts;
-        state.prev_dts = pkt->dts;
-
         m_log->debug("MUX [id{:<2d} version:{}] pts:{:#018x} dts:{:#018x} "
                      "duration:{} size:{}",
                      stream_id, outPkt->version, pkt->pts, pkt->dts,
                      pkt->duration, pkt->size);
+
+#ifdef DEBUG_TS
+        StreamState state = StreamState {
+            .stream_id = stream_id,
+            .pts = pkt->pts,
+            .dts = pkt->dts,
+            .dur = pkt->duration,
+            .enc_tb = outPkt->time_base,
+            .mw_ts = outPkt->mw_ts,
+            .enc_ts = outPkt->enc_ts
+        };
+#else
+        StreamState state = StreamState {
+            .stream_id = stream_id,
+            .pts = pkt->pts,
+            .dts = pkt->dts
+        };
+#endif
 
 #if 1
         int ret = av_interleaved_write_frame(m_formatContext, pkt.get());
@@ -723,15 +804,62 @@ void OutputTS::mux(void)
         {
             if (ret == AVERROR(EINVAL))
             {
-                m_log->critical("Mux rejected packet id={} pts={} dts={}: {}",
-                                stream_id, state.prev_pts, state.prev_dts,
-                                AVerr2str(ret));
+                m_log->warn("DAMAGED: Mux rejected packet "
+                            "id={} pts={} -> {} dts={} -> {}: {}",
+                            stream_id, prev_state.pts, state.pts,
+                            prev_state.dts, state.dts,
+                            AVerr2str(ret));
+#ifdef DEBUG_TS
+                int64_t prev_dts = state.dts;
+                m_log->info("Previous 10:");
+                for (auto &st : stateQ)
+                {
+                    m_log->info("dts:{} diff:{} pts:{} dur:{} "
+                                "Magewell TS:{} TB:{}/{} "
+                                "Encoder TS:{} TB:{}/{} "
+                                "Stream TB:{}/{}",
+                                st.dts, prev_dts - st.dts, st.pts, st.dur,
+                                st.mw_ts, 1, 10000000,
+                                st.enc_ts, st.enc_tb.num, st.enc_tb.den,
+                                1, 90000);
+
+                    prev_dts = st.dts;
+                }
+
+                m_log->info("Previous a/v mix:");
+                for (auto &st : globalQ)
+                {
+                    m_log->info("[{}] dts:{} pts:{} dur:{} "
+                                "Magewell TS:{} TB:{}/{} "
+                                "Encoder TS:{} TB:{}/{} "
+                                "Stream TB:{}/{}",
+                                st.stream_id,
+                                st.dts, st.pts, st.dur,
+                                st.mw_ts, 1, 10000000,
+                                st.enc_ts, st.enc_tb.num, st.enc_tb.den,
+                                1, 90000);
+                }
+#endif
             }
             else
             {
                 m_log->error("av_interleaved_write_frame stream {} failed: {}",
                              stream_id, AVerr2str(ret));
             }
+        }
+        else
+        {
+#ifdef DEBUG_TS
+            // Cache state parameters for the next frame iteration on this track
+            stateQ.push_back(state);
+            if (stateQ.size() > 20)
+                stateQ.pop_front();
+            globalQ.push_back(state);
+            if (globalQ.size() > 40)
+                globalQ.pop_front();
+#else
+            prev_state = state;
+#endif
         }
     }
 }
