@@ -131,7 +131,7 @@ void PCMStream::close_encoder(void)
             string name = m_encoder->codec
                           ? m_encoder->codec->long_name
                           : "audio";
-            m_log->info("Closing {} m_encoderoder.", name);
+            m_log->info("Closing {}.", name);
         }
     }
 

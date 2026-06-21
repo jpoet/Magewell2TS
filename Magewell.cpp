@@ -923,7 +923,6 @@ void Magewell::capture_audio_loop(void)
 
     MWCAP_AUDIO_SIGNAL_STATUS audio_signal_status;
     int err_cnt = 0;
-    int frame_cnt = 0;
     uint buffered_frame_idx = 512;
 
     int      channel_pairs   = 0;
@@ -1095,7 +1094,7 @@ void Magewell::capture_audio_loop(void)
 
             duration = chrono::duration_cast<chrono::milliseconds>
                        (chrono::steady_clock::now() - stable_start);
-            if (duration > m_settle_time || frame_cnt == 0)
+            if (duration > m_settle_time)
                 break;
 
             std::this_thread::sleep_for
@@ -1118,7 +1117,6 @@ void Magewell::capture_audio_loop(void)
         }
 
         err_cnt = 0;
-        frame_cnt = 0;
         buffered_frame_idx = 512;
 
         while (m_running.load() == true)
@@ -1171,7 +1169,6 @@ void Magewell::capture_audio_loop(void)
 
             while (MW_ENODATA != MWCaptureAudioFrame(m_channel, &macf))
             {
-                ++frame_cnt;
                 if (buffered_frame_idx > macf.cFrameCount)
                 {
                     buffered_frame_idx = macf.iFrame;
@@ -2678,7 +2675,7 @@ bool Magewell::capture_video(void)
 
             duration = chrono::duration_cast<chrono::milliseconds>
                        (chrono::steady_clock::now() - stable_start);
-            if (duration > m_settle_time || m_frame_cnt == 0)
+            if (duration > m_settle_time)
                 break;
 
             std::this_thread::sleep_for
