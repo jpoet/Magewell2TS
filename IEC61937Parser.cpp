@@ -31,6 +31,21 @@ uint16_t IEC61937Parser::read_le16(const uint8_t* p)
             (static_cast<uint16_t>(p[1]) << 8));
 }
 
+#if 0
+uint16_t IEC61937Parser::read_be16(const uint8_t* p)
+{
+    return (static_cast<uint16_t>(p[1]) |
+            (static_cast<uint16_t>(p[0]) << 8));
+}
+#else
+uint16_t IEC61937Parser::read_be16(const uint8_t* p)
+{
+    uint16_t val;
+    std::memcpy(&val, p, 2);
+    return __builtin_bswap16(val); // Instantly swaps the bytes at the hardware register layer
+}
+#endif
+
 std::optional<IEC61937Parser::Frame> IEC61937Parser::PopFrame(void)
 {
     if (m_frameQ.empty())
@@ -70,7 +85,7 @@ CodecParamsPtr
             break;
         }
 
-        uint16_t word = read_le16(&m_stream[m_streamOffset]);
+        uint16_t word = read_be16(&m_stream[m_streamOffset]);
 
         switch (m_state)
         {
@@ -115,7 +130,6 @@ CodecParamsPtr
                 m_pc = word;
                 m_state = State::READ_PD;
                 m_streamOffset += 2;
-
                 break;
             }
 
@@ -125,6 +139,7 @@ CodecParamsPtr
 
                 if (!begin_payload())
                 {
+                    m_streamOffset += 2;
                     m_state = State::FIND_PA;
                     break;
                 }
@@ -153,6 +168,18 @@ CodecParamsPtr
                 size_t available = m_stream.size() - m_streamOffset;
                 size_t needed = EAC3_HEADER_SIZE - m_payload.size();
                 size_t toCopy = std::min(available, needed);
+
+                if (toCopy > 1)
+                {
+                    // Round down to the nearest even number of bytes
+                    toCopy &= ~1;
+                }
+                else if (toCopy == 1 && needed > 1)
+                {
+                    // Wait for the next loop/packet to get the full
+                    // 16-bit word
+                    break;
+                }
 
                 m_payload.insert(m_payload.end(),
                                  m_stream.begin() + m_streamOffset,
@@ -270,7 +297,7 @@ void IEC61937Parser::finalize_frame(void)
     //
     // Validate syncword
     //
-    if (m_payload[0] != 0x77 || m_payload[1] != 0x0B)
+    if (m_payload[0] != 0x0b || m_payload[1] != 0x77)
     {
         spdlog::warn("[IEC61937] Invalid syncword");
         return;

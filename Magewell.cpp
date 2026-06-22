@@ -62,7 +62,7 @@
 #include "IEC61937Parser.h"
 
 // #define DUMP_RAW_AUDIO_ALLBITS
-// #define DUMP_RAW_AUDIO
+#define DUMP_RAW_AUDIO
 
 #if defined(DUMP_RAW_AUDIO) || defined(DUMP_RAW_AUDIO_ALLBITS)
 #include <fstream>
@@ -1206,16 +1206,17 @@ void Magewell::capture_audio_loop(void)
                   Left0, Left1, Left2, Left3, right0, right1, right2,
                   right3.
                 */
-                AudioStream::samples_t samples;
 
+                AudioStream::samples_t samples;
                 samples.resize(active_params.buffer_bytes);
                 uint8_t* output_ptr = samples.data();
+
+                const bool swap_bytes = !params.is_lpcm;
 
                 for (int pair = 0; pair < channel_pairs; ++pair)
                 {
                     const uint32_t* left_samples = &macf.adwSamples[pair];
-                    const uint32_t* right_samples = &macf.adwSamples[pair +
-                                                                     half_channels];
+                    const uint32_t* right_samples = &macf.adwSamples[pair + half_channels];
 
                     for (int sample = 0;
                          sample < MWCAP_AUDIO_SAMPLES_PER_FRAME; ++sample)
@@ -1226,8 +1227,18 @@ void Magewell::capture_audio_loop(void)
                         uint32_t left_val = left_raw >> shift;
                         uint32_t right_val = right_raw >> shift;
 
-                        /* For 32-bit samples, we copy 4 bytes,
-                         * for 16-bit samples, we copy 2 bytes
+                        // Assume bitstream will always be 16bit for
+                        // efficient swapping.
+                        if (swap_bytes)
+                        {
+                            left_val  = ((left_val  & 0x00FF) << 8)
+                                        | ((left_val  & 0xFF00) >> 8);
+                            right_val = ((right_val & 0x00FF) << 8)
+                                        | ((right_val & 0xFF00) >> 8);
+                        }
+
+                        /* For 32-bit samples (LPCM), we copy 4 bytes,
+                         * for 16-bit samples (Bitstream), we copy 2 bytes
                          */
                         std::memcpy(output_ptr, &left_val, even_bytes_per_sample);
                         output_ptr += even_bytes_per_sample;
@@ -1466,7 +1477,7 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
      *    Red   = (34000,16000)
      */
 
-    if (m_verbose > 3)
+    if (m_verbose > 4)
     {
         m_log->info("G=({}/{}, {}/{}) "
                     "B=({}/{}, {}/{}) "

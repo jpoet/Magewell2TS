@@ -55,6 +55,7 @@ class IEC61937Parser
   private:
 
     static uint16_t read_le16(const uint8_t* p);
+    static uint16_t read_be16(const uint8_t* p);
 
     bool begin_payload();
     void finalize_frame();

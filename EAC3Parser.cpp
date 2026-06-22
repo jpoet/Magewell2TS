@@ -14,221 +14,185 @@ EAC3Parser::EAC3Parser(void)
     }
 }
 
-size_t
-  EAC3Parser::getFrameSizeBytes(std::span<const uint8_t> raw_bytes,
-                                CodecType codec_type)
+size_t EAC3Parser::getFrameSizeBytes(std::span<const uint8_t> raw_bytes, CodecType codec_type)
 {
-    if (raw_bytes.size() < 6)
+    // Fast bounds safety evaluation
+    if (raw_bytes.size() < 6) [[unlikely]]
+        return 0;
+
+    uint16_t syncword = (static_cast<uint16_t>(raw_bytes[0]) << 8)
+                        | raw_bytes[1];
+    if (syncword != 0x0B77) [[unlikely]]
     {
         return 0;
     }
 
-    uint16_t syncword = (static_cast<uint16_t>(raw_bytes[1]) << 8) |
-                        raw_bytes[0];
-    if (syncword != 0x0B77)
+    if (codec_type != CodecType::AC3)
     {
-        return 0;
-    }
-
-    uint8_t swapped_2 = raw_bytes[3];
-    uint8_t swapped_3 = raw_bytes[2];
-    uint8_t swapped_4 = raw_bytes[5];
-
-    if (codec_type == CodecType::AC3)
-    {
-        // --- Standard AC-3 Sizing Path ---
-        uint8_t fscod = (swapped_4 >> 6) & 0x03;
-        uint8_t frmsizecod = swapped_4 & 0x3F;
-
-        if (fscod == 3 || frmsizecod >= 38)
-        {
-            return 0;
-        }
-
-        // ATSC A/52 Table 5.18 Words-per-frame mapping (rows:
-        // frmsizecod, cols: fscod)
-        static constexpr uint16_t ac3_words_table[38][3] =
-            {
-                {32,32,32}, {32,32,32}, {40,40,40},
-                {40,40,40}, {48,48,48}, {48,48,48},
-                {56,56,56}, {56,56,56}, {64,64,64},
-                {64,64,64}, {80,80,80}, {80,80,80},
-                {96,96,96}, {96,96,96}, {112,112,112},
-                {112,112,112}, {128,128,128}, {128,128,128},
-                {160,160,160}, {160,160,160}, {192,192,192},
-                {192,192,192}, {224,224,224}, {224,224,224},
-                {256,256,256}, {256,256,256}, {320,320,320},
-                {320,320,320}, {384,384,384}, {384,384,384},
-                {448,448,448}, {448,448,448}, {512,512,512},
-                {512,512,512}, {576,576,576}, {576,576,576},
-                {640,640,640}, {640,640,640}
-            };
-
-        uint16_t words = ac3_words_table[frmsizecod][fscod];
-
-        if (fscod == 1 && (frmsizecod & 1))
-        {
-            words += 1;
-        }
-
-        return words * 2;
-    }
-    else
-    {
-        // --- Enhanced AC-3 Sizing Path ---
-        uint16_t frmsiz = (static_cast<uint16_t>(swapped_2 & 0x07) << 8) |
-                          swapped_3;
+        // E-AC-3 sizing footprint
+        uint16_t frmsiz = (static_cast<uint16_t>(raw_bytes[2] & 0x07) << 8)
+                          | raw_bytes[3];
         return (frmsiz + 1) * 2;
     }
+
+    // Standard AC-3 Path
+    uint8_t swapped_4 = raw_bytes[4];
+    uint8_t fscod = (swapped_4 >> 6) & 0x03;
+    uint8_t frmsizecod = swapped_4 & 0x3F;
+
+    if (fscod == 3 || frmsizecod >= 38) [[unlikely]]
+        return 0;
+
+    static constexpr uint16_t ac3_words_flat[38] = {
+         32,  32,  40,  40,  48,  48,  56,  56,  64,  64,
+         80,  80,  96,  96, 112, 112, 128, 128, 160, 160,
+        192, 192, 224, 224, 256, 256, 320, 320, 384, 384,
+        448, 448, 512, 512, 576, 576, 640, 640
+    };
+
+    uint16_t words = ac3_words_flat[frmsizecod];
+
+    // Branchless conditional add for asymmetric 44.1kHz allocations
+    words += (fscod == 1) & (frmsizecod & 1);
+
+    return words * 2;
 }
 
 std::optional<EAC3MetaData>
-  EAC3Parser::processFrame(std::span<const uint8_t> iec_buffer,
-                           CodecType codec_type)
+EAC3Parser::processFrame(std::span<const uint8_t> iec_buffer,
+                         CodecType codec_type)
 {
-    // Syntax fix: ensure enough room to parse down to the chanmap
-    // mask (up to 8-10 bytes needed)
-    if (iec_buffer.size() < 12)
+    if (iec_buffer.size() < 12) [[unlikely]]
     {
         return std::nullopt;
     }
 
-    // Endianness swap helper for IEC61937 / aligned buffers
-    std::array<uint8_t, 12> head{};
-    for (size_t i = 0; i < 12; i += 2)
-    {
-        head[i] = iec_buffer[i + 1];
-        head[i + 1] = iec_buffer[i];
-    }
+    // Bit stream loader (Load 8 bytes natively into a 64-bit register)
+    // By processing the buffer in Big-Endian, we can pull consecutive
+    // bit fields via direct bit shifts.
+    uint64_t cache;
+    std::memcpy(&cache, iec_buffer.data(), 8);
+    cache = __builtin_bswap64(cache); // Shifts to match big-endian field layouts
 
-    size_t bit_pos = 0;
-    auto read_bits = [&](size_t count) -> uint32_t
-    {
-        uint32_t val = 0;
-        for (size_t i = 0; i < count; ++i)
-        {
-            size_t b_idx = bit_pos / 8;
-            size_t bit_idx = 7 - (bit_pos % 8);
-            uint8_t bit = (head[b_idx] >> bit_idx) & 1;
-            val = (val << 1) | bit;
-            bit_pos++;
-        }
-        return val;
-    };
-
-    // Verify AC3/EAC3 Sync Word (0x0B77)
-    if (read_bits(16) != 0x0B77)
-    {
+    // Header Validation
+    if ((cache >> 48) != 0x0B77) [[unlikely]]
         return std::nullopt;
-    }
 
+    m_log->info("Found header");
     EAC3MetaData out{};
-    uint32_t num_audio_blocks = 6; // Standard default fallback (1536 samples)
+    uint32_t num_audio_blocks = 6;
 
     if (codec_type == CodecType::AC3)
     {
-        // --- Standard AC-3 Decoder Path ---
+        // --- AC-3 Bit Extraction Path ---
         out.codec = CodecType::AC3;
         out.strmtyp = 0;
         out.substreamid = 0;
 
-        uint8_t fscod = read_bits(2);
-        [[maybe_unused]] uint8_t frmsizecod = read_bits(6);
-        [[maybe_unused]] uint8_t bsid_read = read_bits(5);
-        [[maybe_unused]] uint8_t bsmod = read_bits(3);
-        uint8_t acmod = read_bits(3);
+        // Strip bits from the upper register space using direct constants
+        uint8_t fscod       = (cache >> 46) & 0x03;
+        uint8_t acmod       = (cache >> 32) & 0x07;
 
+        // Emulate conditional skips based on standard ATSC A/52 bit patterns
+        size_t bit_offset = 32; // Marker location where acmod concludes
         if ((acmod & 0x01) && (acmod != 0x01))
-        {
-            read_bits(2);
-        }
+            bit_offset -= 2; // skip center mix levels
         if (acmod & 0x04)
-        {
-            read_bits(2);
-        }
+            bit_offset -= 2; // skip surround mix levels
         if (acmod == 0x02)
-        {
-            read_bits(2);
-        }
-        uint8_t lfeon = read_bits(1);
+            bit_offset -= 2; // skip dolby surround mode flags
+
+        uint8_t lfeon = (cache >> (bit_offset - 1)) & 0x01;
 
         static constexpr uint32_t ac3_rates[] = { 48000, 44100, 32000, 0 };
-        out.sample_rate_hz = ac3_rates[fscod & 0x03];
-        if (out.sample_rate_hz == 0)
+        out.sample_rate_hz = ac3_rates[fscod];
+        if (out.sample_rate_hz == 0) [[unlikely]]
         {
             return std::nullopt;
         }
 
-        out.payload_size_bytes = getFrameSizeBytes(iec_buffer.subspan(0, 6),
-                                                   CodecType::AC3);
+        out.payload_size_bytes =
+            getFrameSizeBytes(iec_buffer.subspan(0, 6), CodecType::AC3);
 
         base_channels.clear();
         extension_channels.clear();
         has_lfe = (lfeon == 1);
         append_acmod(acmod, base_channels);
 
-        out.total_channels = static_cast<uint8_t>(base_channels.size() +
-                                                  (has_lfe ? 1 : 0));
+        out.total_channels =
+            static_cast<uint8_t>(base_channels.size() + (has_lfe ? 1 : 0));
         out.channel_layout = generate_layout();
 
-        // Standard AC3 is always 6 blocks * 256 samples = 1536 samples
-        out.duration = (1536LL * 10000000LL) / out.sample_rate_hz;
+        // 1536LL * 10000000LL = 15360000000LL
+        out.duration = 15360000000LL / out.sample_rate_hz;
         return out;
     }
     else
     {
-        // --- Enhanced AC-3 (E-AC-3) Decoder Path ---
+        // --- Enhanced AC-3 (E-AC-3) Bit Extraction Path ---
         out.codec = CodecType::EAC3;
-        uint8_t strmtyp = read_bits(2);
-        uint8_t substreamid = read_bits(3);
-        uint16_t frmsiz = read_bits(11);
 
-        uint8_t fscod = read_bits(2);
+        uint8_t strmtyp     = (cache >> 46) & 0x03;
+        uint8_t substreamid = (cache >> 43) & 0x07;
+        uint16_t frmsiz     = (cache >> 32) & 0x07FF;
+        uint8_t fscod       = (cache >> 30) & 0x03;
+
+        uint32_t active_sample_rate = 0;
+
         if (fscod == 3)
         {
-            uint8_t fscod2 = read_bits(2);
-            uint8_t numblks_code = read_bits(2);
+            uint8_t fscod2      = (cache >> 28) & 0x03;
+            uint8_t numblks_code = (cache >> 26) & 0x03;
 
-            // Map sub-frame block count configurations
             static constexpr uint32_t blocks_per_mode[] = { 1, 2, 3, 6 };
-            num_audio_blocks = blocks_per_mode[numblks_code & 0x03];
+            num_audio_blocks = blocks_per_mode[numblks_code];
 
             static constexpr uint32_t half_rates[] = { 24000, 22050, 16000, 0 };
-            active_sample_rate = half_rates[fscod2 & 0x03];
+            active_sample_rate = half_rates[fscod2];
+
+            // Advance variable tracker past fscod == 3 variations
+            [[maybe_unused]] uint8_t acmod = (cache >> 23) & 0x07;
+            [[maybe_unused]] uint8_t lfeon = (cache >> 22) & 0x01;
+            out.sample_rate_hz = active_sample_rate;
+            // Capture these for channel matrix lookups later
+            out.strmtyp = strmtyp;
+            out.substreamid = substreamid;
         }
         else
         {
-            uint8_t numblks_code = read_bits(2);
-            // If numblks_code == 3, it's 6 blocks. Otherwise, it
-            // indicates reduced frames.
+            uint8_t numblks_code = (cache >> 28) & 0x03;
             num_audio_blocks = (numblks_code == 3) ? 6 : (numblks_code + 1);
 
             static constexpr uint32_t norm_rates[] = { 48000, 44100, 32000, 0 };
-            active_sample_rate = norm_rates[fscod & 0x03];
+            active_sample_rate = norm_rates[fscod];
+
+            [[maybe_unused]] uint8_t acmod = (cache >> 25) & 0x07;
+            [[maybe_unused]] uint8_t lfeon = (cache >> 24) & 0x01;
+            out.sample_rate_hz = active_sample_rate;
         }
 
-        if (active_sample_rate == 0)
+        if (out.sample_rate_hz == 0) [[unlikely]]
         {
             return std::nullopt;
         }
 
-        uint8_t acmod = read_bits(3);
-        uint8_t lfeon = read_bits(1);
+        // Re-extract unified positioning variables past the rate
+        // calculation matrix. We know exactly where acmod and lfeon
+        // sit depending on fscod
+        size_t acmod_shift = (fscod == 3) ? 23 : 25;
+        uint8_t acmod = (cache >> acmod_shift) & 0x07;
+        uint8_t lfeon = (cache >> (acmod_shift - 1)) & 0x01;
 
         out.substreamid = substreamid;
         out.strmtyp = strmtyp;
-        out.sample_rate_hz = active_sample_rate;
         out.payload_size_bytes = (frmsiz + 1) * 2;
 
-        // Calculate frame duration cleanly based on true bitstream
-        // sample parameters
         uint32_t total_samples = num_audio_blocks * 256;
         out.duration = (static_cast<int64_t>(total_samples) * 10000000LL) /
                        out.sample_rate_hz;
 
         if (strmtyp == 0)
         {
-            // Reset both caches cleanly on a brand new Independent frame block
             base_channels.clear();
             extension_channels.clear();
             has_lfe = (lfeon == 1);
@@ -241,36 +205,40 @@ std::optional<EAC3MetaData>
         }
         else if (strmtyp == 1)
         {
-            // Clear previous dependent leftovers to prevent 7.1
-            // vector accumulation leakage
             extension_channels.clear();
-            if (lfeon)
-            {
-                has_lfe = true;
-            }
+            if (lfeon) has_lfe = true;
 
-            bool chanmap_exists = (read_bits(1) == 1);
+            // Dependent streams channel mask parsing
+            size_t next_bit = (fscod == 3)
+                              ? 42
+                              : 40; // Track precise bit pointer position
+            bool chanmap_exists = ((cache >> (63 - next_bit)) & 0x01) == 1;
+            next_bit += 1;
+
             if (chanmap_exists)
             {
-                uint16_t mask = read_bits(16);
-                static const std::pair<uint16_t, std::string> bits[] =
-                    {
-                        {0x8000,"Lp"}, {0x4000,"Cp"}, {0x2000,"Rp"},
-                        {0x1000,"Ls"}, {0x0800,"Rs"}, {0x0400,"Lc"},
-                        {0x0200,"Rc"}, {0x0100,"Lrs"}, {0x0080,"Rrs"},
-                        {0x0040,"Lw"}, {0x0020,"Rw"}, {0x0001,"LFE"}
-                    };
-                for (const auto& [bit, lbl] : bits)
+                uint16_t mask = (cache >> (63 - (next_bit + 15))) & 0xFFFF;
+
+                // Bit Check Array
+                static constexpr uint16_t mask_bits[] = {
+                    0x8000, 0x4000, 0x2000, 0x1000, 0x0800, 0x0400,
+                    0x0200, 0x0100, 0x0080, 0x0040, 0x0020, 0x0001
+                };
+                static const char* const mask_labels[] = {
+                    "Lp", "Cp", "Rp", "Ls", "Rs", "Lc",
+                    "Rc", "Lrs", "Rrs", "Lw", "Rw", "LFE"
+                };
+
+                for (size_t i = 0; i < 12; ++i)
                 {
-                    if (mask & bit)
+                    if (mask & mask_bits[i])
                     {
-                        if (bit == 0x0001)
+                        if (mask_bits[i] == 0x0001)
                         {
                             has_lfe = true;
-                        }
-                        else
+                        } else
                         {
-                            extension_channels.push_back(lbl);
+                            extension_channels.push_back(mask_labels[i]);
                         }
                     }
                 }
@@ -280,10 +248,9 @@ std::optional<EAC3MetaData>
                 append_acmod(acmod, extension_channels);
             }
 
-            out.total_channels =
-                static_cast<uint8_t>(base_channels.size() +
-                                     extension_channels.size() +
-                                     (has_lfe ? 1 : 0));
+            out.total_channels = static_cast<uint8_t>(base_channels.size()
+                                              + extension_channels.size()
+                                              + (has_lfe ? 1 : 0));
             out.channel_layout = generate_layout();
             return out;
         }
