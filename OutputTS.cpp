@@ -147,15 +147,6 @@ inline std::string DumpAVFormat(const AVFormatContext* fmtctx)
                                     (cp->format)));
                 }
 #endif
-
-                if (st->avg_frame_rate.num)
-                {
-                    fmt::format_to(std::back_inserter(out),
-                                   " {:.2f}/s",
-                                   av_q2d(st->avg_frame_rate));
-                }
-
-                break;
             }
 
             default:
