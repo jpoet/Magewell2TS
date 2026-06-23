@@ -61,6 +61,9 @@
 #include "Magewell.h"
 #include "IEC61937Parser.h"
 
+#include <sched.h>
+#include <sys/prctl.h>
+
 // #define DUMP_RAW_AUDIO_ALLBITS
 #define DUMP_RAW_AUDIO
 
@@ -2200,12 +2203,27 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     // Main capture loop
     while (m_running.load() == true)
     {
-        // Wait for notification
-        if (MWWaitEvent(notify_event, m_frame_ms2) <= 0)
+        // Check signal lock status
+        MWGetVideoSignalStatus(m_channel, &videoSignalStatus);
+        if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
         {
+            if (m_frame_cnt > 2000)
+            {
+                m_log->warn("DAMAGED: Video signal lost lock. (frame {})",
+                            m_frame_cnt);
+            }
+            this_thread::sleep_for(chrono::milliseconds(5));
+            return false;
+        }
+
+        // Wait for notification
+        if (MWWaitEvent(notify_event, m_frame_ms) <= 0)
+        {
+#if 0
             if (m_verbose > 1)
                 m_log->info("Waiting for video data (frame {})",
                             m_frame_cnt);
+#endif
             continue;
         }
 
@@ -2228,19 +2246,6 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             {
                 m_log->warn("DAMAGED: Magewell lost video sync.");
             }
-            return false;
-        }
-
-        // Check signal lock status
-        MWGetVideoSignalStatus(m_channel, &videoSignalStatus);
-        if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
-        {
-            if (m_frame_cnt > 2000)
-            {
-                m_log->warn("DAMAGED: Video signal lost lock. (frame {})",
-                            m_frame_cnt);
-            }
-            this_thread::sleep_for(chrono::milliseconds(5));
             return false;
         }
 
@@ -2347,7 +2352,6 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             frame_idx = min_idx;
             timestamp = min_ts;
         }
-        m_expected_ts = timestamp + eco_params.llFrameDuration;
 
         // Get available buffer
         {
@@ -2399,12 +2403,13 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         {
             if (m_verbose > 0)
             {
-                m_log->warn("DAMAGED: wait capture event error or timeout "
+                m_log->warn("wait capture event error or timeout "
                             "(frame {})", m_frame_cnt);
             }
             pro_image_buffer_available(pbImage, nullptr);
-            return false;
+            continue;
         }
+        m_expected_ts = timestamp + eco_params.llFrameDuration;
 
         // Get capture status
         MWCAP_VIDEO_CAPTURE_STATUS captureStatus;
@@ -2457,7 +2462,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                     tok = true;
                 }
 
-                m_log->info("Magewell frame pool used 1m:{:<3d} "
+                m_log->info("Video frame pool used 1m:{:<3d} "
                             "5m:{:<3d} 10m:{:<3d} of {:<3d} "
                             "({})",
                             vidpool_used_1m, *vidpool_5m_max,
@@ -2828,7 +2833,7 @@ bool Magewell::capture_video(void)
 
 bool Magewell::Capture(VideoStream::Args&& video_args,
                        bool no_audio, std::chrono::milliseconds settle_time,
-                       int video_buffers)
+                       int video_buffers, bool realtime)
 {
     m_image_buffers = video_buffers;
     m_settle_time   = settle_time;
@@ -2886,6 +2891,49 @@ bool Magewell::Capture(VideoStream::Args&& video_args,
         pthread_setname_np(m_audio_thread.native_handle(),
                            "capture_audio");
         this_thread::sleep_for(chrono::milliseconds(1));
+    }
+
+    if (prctl(PR_SET_NAME, "capture_video", 0, 0, 0) != 0)
+    {
+        m_log->warn("Failed to set video thread name: {}",
+                    std::strerror(errno));
+    }
+
+    if (realtime)
+    {
+        struct sched_param audio_param;
+        audio_param.sched_priority = 80;
+        int a_result = pthread_setschedparam(m_audio_thread.native_handle(),
+                                             SCHED_RR, &audio_param);
+        if (a_result != 0)
+        {
+            m_log->warn("Failed to set Audio real-time priority. "
+                        "Error: {} Code: {}",
+                        std::strerror(a_result),
+                        a_result);
+        }
+        else
+        {
+            m_log->info("Audio thread isolated at SCHED_RR priority {}.",
+                        audio_param.sched_priority);
+        }
+
+        struct sched_param video_param;
+        video_param.sched_priority = 50;
+        int v_result = pthread_setschedparam(pthread_self(),
+                                             SCHED_RR, &video_param);
+        if (v_result != 0)
+        {
+            m_log->warn("Failed to set Video real-time priority. "
+                        "Error: {} Code: {}",
+                        std::strerror(v_result),
+                        v_result);
+        }
+        else
+        {
+            m_log->info("Video thread isolated at SCHED_RR priority {}.",
+                        video_param.sched_priority);
+        }
     }
 
     // Start video capture

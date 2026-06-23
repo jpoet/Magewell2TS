@@ -157,3 +157,13 @@ ADD_CUSTOM_TARGET(release
   COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target all
   COMMENT "Switch CMAKE_BUILD_TYPE to Release"
   )
+
+install(CODE "
+  execute_process(
+    COMMAND sudo setcap cap_sys_nice+ep \${CMAKE_INSTALL_PREFIX}/${INSTALL_BIN_DIR}/magewell2ts
+    RESULT_VARIABLE SETCAP_RESULT
+  )
+  if(NOT SETCAP_RESULT EQUAL 0)
+    message(WARNING \"Failed to apply setcap to magewell2ts. Real-time scheduling may fail.\")
+  endif()
+")

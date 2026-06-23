@@ -109,7 +109,7 @@ class Magewell
 
     bool Capture(VideoStream::Args&& video_args,
                  bool no_audio, std::chrono::milliseconds settle_time,
-                 int video_buffers);
+                 int video_buffers, bool realtime);
 
     /**
      * @brief Shutdown the capture process

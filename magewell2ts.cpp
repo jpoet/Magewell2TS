@@ -103,7 +103,8 @@ void show_help(string_view app)
          << "--video-buffers    : Video buffers count (RAM) [16]\n"
          << "--extra-hw-frames  : Extra HW frames used for encoding [32]\n"
          << "--write-edid (-w)  : Write EDID info from file to input\n"
-         << "--wait-for         : Wait for given number of inputs to be initialized. 10 second timeout\n";
+         << "--wait-for         : Wait for given number of inputs to be initialized. 10 second timeout\n"
+         << "--realtime         : Enable real-time priority threads.\n";
 
     clog << "\n"
          << "Examples:\n"
@@ -249,6 +250,7 @@ int main(int argc, char* argv[])
     string      logpath;
     int         verbose_level = 1;
     bool        color = false;
+    bool        realtime = false;
 
     string_view app_name = argv[0];
     string      edid_file;
@@ -422,6 +424,10 @@ int main(int argc, char* argv[])
             clog << format("Version: {}\n", project::version::full_version);
             exit(0);
         }
+        else if (*iter == "--realtime")
+        {
+            realtime = true;
+        }
         else
         {
             cerr << "Unrecognized option " << *iter << endl;
@@ -469,7 +475,7 @@ int main(int argc, char* argv[])
     if (do_capture)
     {
         if (!g_mw->Capture(std::move(video_args), no_audio,
-                           settle_time, video_buffers))
+                           settle_time, video_buffers, realtime))
             return -2;
     }
 

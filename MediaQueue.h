@@ -82,7 +82,7 @@ class MediaQueue
         {
             return true;
         }
-#if 1
+#if 0 // This is very dependant on the (video) encoder driver
         /*
           If the next packet is marker, it is probably followed by a
           discontinuity, which can have mixed up packets. Save the
