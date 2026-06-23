@@ -349,6 +349,7 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
     }
 
     m_encoder->hw_device_ctx = av_buffer_ref(m_hw_device_ctx.get());
+    m_encoder->thread_count = 1;
 
     // Codec initialization & encoder activation
     // Commit the local options dictionary parameters during encoder activation
@@ -488,6 +489,7 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
     // The encoder takes ownership of this reference, and will clean
     // it up automatically via avcodec_free_context().
     m_encoder->hw_frames_ctx = av_buffer_ref(m_hw_frames_ctx.get());
+    m_encoder->thread_count = 1;
 
     // Kernel initialization codec activation
     ret = avcodec_open2(m_encoder.get(), codec, nullptr);
@@ -659,6 +661,7 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
         av_buffer_unref(&m_encoder->hw_frames_ctx);
     }
     m_encoder->hw_frames_ctx = av_buffer_ref(m_hw_frames_ctx.get());
+    m_encoder->thread_count = 1;
 
     // Intel kernel initialization codec activation
     ret = avcodec_open2(m_encoder.get(), codec, nullptr);
