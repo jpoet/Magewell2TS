@@ -65,7 +65,7 @@
 #include <sys/prctl.h>
 
 // #define DUMP_RAW_AUDIO_ALLBITS
-#define DUMP_RAW_AUDIO
+// #define DUMP_RAW_AUDIO
 
 #if defined(DUMP_RAW_AUDIO) || defined(DUMP_RAW_AUDIO_ALLBITS)
 #include <fstream>
@@ -1127,7 +1127,7 @@ void Magewell::capture_audio_loop(void)
             // Wait for notification
             if (m_isEco)
             {
-                if (EcoEventWait(eco_event, m_frame_ms) <= 0)
+                if (EcoEventWait(eco_event, m_frame_ms2) <= 0)
                 {
                     if (m_verbose > 3)
                         m_log->info("Waiting for audio data.");
@@ -1136,7 +1136,7 @@ void Magewell::capture_audio_loop(void)
             }
             else
             {
-                if (MWWaitEvent(notify_event, m_frame_ms) <= 0)
+                if (MWWaitEvent(notify_event, m_frame_ms2) <= 0)
                 {
                     if (m_verbose > 3)
                         m_log->info("Waiting for audio data.");
