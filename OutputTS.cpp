@@ -1089,8 +1089,7 @@ void OutputTS::process_video(void)
                 vidpool_5m_max  = ranges::max_element(vidpool_used_5m);
                 vidpool_10m_max = ranges::max_element(vidpool_used_10m);
 
-                // spdlog doesn't support c++20 format yet, so no :%T.
-                m_log->info(format("     GPU frame pool used 1m:{:<3d} "
+                m_log->info(format("GPU frame pool used 1m:{:<3d} "
                                    "5m:{:<3d} 10m:{:<3d} "
                                    "of {:<3d} ({:%T} elapsed)",
                                    vidpool_used_1m, *vidpool_5m_max,

@@ -684,7 +684,6 @@ bool VideoStream::EncodeFrame(void)
 
 int VideoStream::AddImage(Image&& image)
 {
-    // Nvidia mode bypass: Don't require m_hw_frames_ctx for Nvidia/NVENC
     if (!m_encoder || (m_params.encoder_type != NV && !m_hw_frames_ctx))
     {
         m_log->warn("Video encoder is not initialized or open");

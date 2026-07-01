@@ -1515,7 +1515,7 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
 
     // Example output: "HDR | Space:bt2020nc | TRC:smpte2084 | Rng:tv | Luma:1000 nits | CLL:1000/400"
     color.description = std::format(
-            "HDR | Space:{} | TRC:{} | Rng:{} | Luma:{:.0f}nits | CLL:{}/{}",
+            "HDR Space:{} TRC:{} Rng:{} Luma:{:.0f}nits CLL:{}/{}",
             s_str, t_str, r_str, max_nits, color.MaxCLL, color.MaxFALL
     );
 
@@ -2184,7 +2184,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                     tok = true;
                 }
 
-                m_log->info("Magewell frame pool used 1m:{:<3d} "
+                m_log->info("Mag frame pool used 1m:{:<3d} "
                             "5m:{:<3d} 10m:{:<3d} of {:<3d} "
                             "({})",
                             vidpool_used_1m, *vidpool_5m_max,
@@ -2515,7 +2515,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 string extra = format("Temp {:.1f}ºC",
                                       static_cast<float>(temperature) / 10);
 
-                m_log->info("Magewell frame pool used 1m:{:<3d} "
+                m_log->info("Mag frame pool used 1m:{:<3d} "
                             "5m:{:<3d} 10m:{:<3d} of {:<3d} "
                             "({})",
                             vidpool_used_1m, *vidpool_5m_max,
