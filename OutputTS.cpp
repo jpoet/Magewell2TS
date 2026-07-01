@@ -56,7 +56,8 @@ extern "C" {
 
 using namespace std;
 
-inline std::string DumpAVFormat(const AVFormatContext* fmtctx)
+inline std::string DumpAVFormat(const AVFormatContext* fmtctx,
+                                string color_desc)
 {
     fmt::memory_buffer out;
 
@@ -101,9 +102,6 @@ inline std::string DumpAVFormat(const AVFormatContext* fmtctx)
         {
             case AVMEDIA_TYPE_VIDEO:
             {
-                const char* cs_name = av_color_space_name(cp->color_space);
-                std::string space_name = cs_name ? cs_name : "unknown";
-
                 fmt::format_to(std::back_inserter(out), " {}x{}p{:.2f}",
                                cp->width, cp->height,
                                av_q2d(st->avg_frame_rate));
@@ -114,7 +112,7 @@ inline std::string DumpAVFormat(const AVFormatContext* fmtctx)
                 if (pix)
                 {
                     fmt::format_to(std::back_inserter(out), " {}({})",
-                                   pix->name, space_name);
+                                   pix->name, color_desc);
                 }
 
                 break;
@@ -186,10 +184,10 @@ OutputTS::OutputTS(int verbose_level, bool isEco,
 
     // Start up threads last
     m_audio_thread = std::thread(&OutputTS::process_audio, this);
-    pthread_setname_np(m_audio_thread.native_handle(), "audio");
+    pthread_setname_np(m_audio_thread.native_handle(), "audenc");
 
     m_video_thread = std::thread(&OutputTS::process_video, this);
-    pthread_setname_np(m_video_thread.native_handle(), "video");
+    pthread_setname_np(m_video_thread.native_handle(), "vidcpy");
 
     m_mux_thread = std::thread(&OutputTS::mux, this);
     pthread_setname_np(m_mux_thread.native_handle(), "mux");
@@ -353,7 +351,16 @@ bool OutputTS::open_container(void)
     }
 
     if (m_verbose > 0)
-        m_log->info(DumpAVFormat(m_formatContext));
+    {
+        string color_desc;
+        {
+            std::scoped_lock lock(m_videoStream_mutex);
+            if (m_videoStream)
+                color_desc = m_videoStream->ColorSpaceDesc();
+        }
+
+        m_log->info(DumpAVFormat(m_formatContext, color_desc));
+    }
 
     AVDictionary* muxer_opts = nullptr;
     // Force the muxer to insert a PCR timestamp at minimum every 20ms to 40ms
@@ -683,19 +690,36 @@ void OutputTS::mux(void)
 
     for (;;)
     {
+        std::shared_ptr<VideoStream> vidStream = nullptr;
+
         {
             std::unique_lock<std::mutex> cv_lock(m_pktQ_mutex);
-
             m_pktQ_ready.wait(cv_lock, [this] {
-                return !m_running || !m_videoPktQ.IsEmpty();
+                return (!m_running || !m_videoPktQ.IsEmpty() ||
+                        m_videoQsize.load(std::memory_order_acquire) > 0);
             });
+        }
 
-            if (m_videoPktQ.IsEmpty())
-            {
-                if (!m_running)
-                    break; // shutdown
-                continue; // Catch spurious wakeups
-            }
+        if (m_videoQsize.load(std::memory_order_relaxed) > 0)
+        {
+            std::scoped_lock lock(m_videoStream_mutex);
+            if (m_videoStream)
+                vidStream = m_videoStream;
+        }
+
+        if (vidStream)
+        {
+            if (vidStream->EncodeFrame())
+                m_videoQsize.fetch_sub(1, std::memory_order_release);
+            else
+                m_videoQsize.store(0, std::memory_order_release);
+        }
+
+        if (m_videoPktQ.IsEmpty())
+        {
+            if (!m_running)
+                break; // shutdown
+            continue; // Catch spurious wakeups
         }
 
         auto* targetQ = &m_videoPktQ;
@@ -905,7 +929,7 @@ void OutputTS::AddAudioPkt(Packet&& pkt)
 // Thread entry
 void OutputTS::process_audio(void)
 {
-    AudioStream* audioS {nullptr};
+    AudioStream* audioStream {nullptr};
 
     for (;;)
     {
@@ -933,31 +957,31 @@ void OutputTS::process_audio(void)
         {
             std::scoped_lock lock(m_audio_pktQ_mutex);
 
-            delete audioS;
+            delete audioStream;
             if (audio.oParams->is_lpcm)
             {
-                audioS = new PCMStream(*this, m_verbose,
-                                       std::move(*audio.oParams),
-                                       audio.timestamp);
+                audioStream = new PCMStream(*this, m_verbose,
+                                            std::move(*audio.oParams),
+                                            audio.timestamp);
             }
             else
             {
-                audioS = new BitStream(*this, m_verbose,
-                                       std::move(*audio.oParams),
-                                       audio.timestamp);
+                audioStream = new BitStream(*this, m_verbose,
+                                            std::move(*audio.oParams),
+                                            audio.timestamp);
             }
         }
 
-        audioS->AddSamples(std::move(audio));
+        audioStream->AddSamples(std::move(audio));
     }
 
-    delete audioS;
+    delete audioStream;
     m_log->info("process_audio thread exited.");
 }
 
 void OutputTS::AddAudioSamples(AudioStream::Samples&& samples)
 {
-    const std::unique_lock<std::mutex> lock(m_audioQ_mutex);
+    std::scoped_lock lock(m_audioQ_mutex);
 
     m_audioQ.push_back(std::move(samples));
     m_audioQ_ready.notify_one();
@@ -968,7 +992,21 @@ void OutputTS::AddAudioSamples(AudioStream::Samples&& samples)
 // Thread entry
 void OutputTS::process_video(void)
 {
-    VideoStream*     videoS   {nullptr};
+    int            vidpool_used_1m  {0};
+    array<int, 5>  vidpool_used_5m  {0};
+    array<int, 10> vidpool_used_10m {0};
+    int            vidpool_5m_idx   {0};
+    int            vidpool_10m_idx  {0};
+    array<int, 5>::iterator  vidpool_5m_max;
+    array<int, 10>::iterator vidpool_10m_max;
+    chrono::seconds total_duration;
+
+    int used = 0;
+
+    chrono::steady_clock::time_point start_tm   = chrono::steady_clock::now();
+    chrono::steady_clock::time_point vidpool_tm = start_tm;
+    chrono::steady_clock::time_point current_tm;
+    int duration;
 
     for (;;)
     {
@@ -996,28 +1034,93 @@ void OutputTS::process_video(void)
         // Encoder reconfiguration request
         if (image.oParams.has_value())
         {
-            std::scoped_lock lock(m_video_pktQ_mutex);
+            std::scoped_lock lock(m_videoStream_mutex);
+            m_videoStream = std::make_shared<VideoStream>
+                            (*this, m_verbose,
+                             m_video_args,
+                             std::move(*image.oParams),
+                             f_image_avail,
+                             image.timestamp);
 
-            delete videoS;
-            videoS = new VideoStream(*this, m_verbose,
-                                       m_video_args,
-                                       std::move(*image.oParams),
-                                       f_image_avail,
-                                       image.timestamp);
+            m_videoQsize.exchange(0, std::memory_order_acq_rel);
         }
 
-        if (!videoS->AddFrame(std::move(image)))
-            Shutdown();
+        while (m_running.load())
+        {
+            if (m_videoQsize.load(std::memory_order_acquire) <
+                m_video_args.buffers)
+            {
+                int res;
+
+                if ((res = m_videoStream->AddImage(std::move(image))) < 0)
+                {
+                    Shutdown();
+                }
+                if (res > 0)
+                {
+                    used = m_videoQsize.fetch_add(1, std::memory_order_release)
+                           + 1; // Returns the previous value
+                    break;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        m_pktQ_ready.notify_one();
+
+
+        if (m_verbose > 1)
+        {
+            if (vidpool_used_1m < used)
+                vidpool_used_1m = used;
+            if (vidpool_used_5m[vidpool_5m_idx] < used)
+                vidpool_used_5m[vidpool_5m_idx] = used;
+            if (vidpool_used_10m[vidpool_10m_idx] < used)
+                vidpool_used_10m[vidpool_10m_idx] = used;
+
+            current_tm = chrono::steady_clock::now();
+            duration = chrono::duration_cast<chrono::seconds>
+                       (current_tm - vidpool_tm).count();
+
+            total_duration = chrono::duration_cast<chrono::seconds>
+                             (chrono::steady_clock::now() - start_tm);
+
+            if (duration >= 60)
+            {
+                vidpool_5m_max  = ranges::max_element(vidpool_used_5m);
+                vidpool_10m_max = ranges::max_element(vidpool_used_10m);
+
+                // spdlog doesn't support c++20 format yet, so no :%T.
+                m_log->info(format("     GPU frame pool used 1m:{:<3d} "
+                                   "5m:{:<3d} 10m:{:<3d} "
+                                   "of {:<3d} ({:%T} elapsed)",
+                                   vidpool_used_1m, *vidpool_5m_max,
+                                   *vidpool_10m_max, m_video_args.buffers,
+                                   total_duration));
+
+                vidpool_used_1m = 0;
+
+                ++vidpool_5m_idx;
+                vidpool_5m_idx %= 5;
+                vidpool_used_5m[vidpool_5m_idx] = 0;
+
+                ++vidpool_10m_idx;
+                vidpool_10m_idx %= 10;
+                vidpool_used_10m[vidpool_10m_idx] = 0;
+
+                vidpool_tm = current_tm;
+            }
+        }
     }
 
-    delete videoS;
+    std::scoped_lock lock(m_videoStream_mutex);
+    m_videoStream.reset();
     m_log->info("process_video thread exited.");
 }
 
 
 void OutputTS::AddVideoImage(VideoStream::Image&& image)
 {
-    const std::unique_lock<std::mutex> lock(m_imageQ_mutex);
+    std::scoped_lock lock(m_imageQ_mutex);
 
     if (m_running.load() == false)
     {

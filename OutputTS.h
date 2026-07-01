@@ -84,8 +84,13 @@ class OutputTS
 
     // spdlog
     std::shared_ptr<spdlog::logger> m_log;
+    int                     m_verbose;
 
     uint m_generation {0};
+
+    std::shared_ptr<VideoStream> m_videoStream {nullptr};
+    std::mutex            m_videoStream_mutex;
+    std::atomic<int>      m_videoQsize  {0};
 
     std::optional<Packet> m_video_marker;
     std::optional<Packet> m_audio_marker;
@@ -93,7 +98,6 @@ class OutputTS
     AVFormatContext* m_formatContext {nullptr};
 
     int64_t          m_last_dts      {0};
-    AudioStream*     m_audioStream   {nullptr};
 
     MediaQueue       m_videoPktQ;
     MediaQueue       m_audioPktQ;
@@ -101,7 +105,6 @@ class OutputTS
     VideoStream::imageque_t m_imageQ;
     AudioStream::audioque_t m_audioQ;
 
-    int                     m_verbose;
     bool                    m_no_audio     {true};
     VideoStream::Args       m_video_args;
 

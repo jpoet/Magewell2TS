@@ -1321,48 +1321,95 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
         return false;
     }
 
+    HDMI_INFOFRAME_PACKET info_packet;
+    HDMI_HDR_INFOFRAME_PAYLOAD& hdr_info = info_packet.hdrInfoFramePayload;
+
+#if 0
+    color.is_HDR    = false;
+    color.has_primaries = false;
+    color.range     = AVCOL_RANGE_MPEG;
     color.space     = AVCOL_SPC_BT709;
     color.primaries = AVCOL_PRI_BT709;
     color.trc       = AVCOL_TRC_BT709;
+#endif
 
-    // Get HDR info frame
-    HDMI_INFOFRAME_PACKET info_packet;
-    if (MW_SUCCEEDED != MWGetHDMIInfoFramePacket(m_channel,
-                                                 MWCAP_HDMI_INFOFRAME_ID_HDR,
-                                                 &info_packet))
+    // CHOOSE COLOR RANGE QUANTIZATION SPECTRUM
+    if (signal_status.quantRange == MWCAP_VIDEO_QUANTIZATION_FULL)
     {
-        return false;
+        color.range = AVCOL_RANGE_JPEG; // Full 0-255 range mapping
     }
-    HDMI_HDR_INFOFRAME_PAYLOAD& hdr_info = info_packet.hdrInfoFramePayload;
+    else
+    {
+        // Default fallback (MWCAP_VIDEO_QUANTIZATION_LIMITED or UNKNOWN)
+        color.range = AVCOL_RANGE_MPEG; // Limited broadcast range
+    }
 
-    // Handle YUV601 color space
+    // DISPATCH SUB-COLOR METADATA SPACES
     if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV601)
     {
         color.space     = AVCOL_SPC_BT470BG;
         color.primaries = AVCOL_PRI_BT470BG;
         color.trc       = AVCOL_TRC_SMPTE170M;
     }
-    // Handle YUV2020 color space
+    else if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV709)
+    {
+        color.space     = AVCOL_SPC_BT709;
+        color.primaries = AVCOL_PRI_BT709;
+        color.trc       = AVCOL_TRC_BT709;
+    }
     else if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV2020)
     {
+        // Get HDR info frame
+        if (MW_SUCCEEDED != MWGetHDMIInfoFramePacket(m_channel,
+                                             MWCAP_HDMI_INFOFRAME_ID_HDR,
+                                             &info_packet))
+            return false;
+
         color.space     = AVCOL_SPC_BT2020_NCL;
         color.primaries = AVCOL_PRI_BT2020;
         switch (static_cast<int>(hdr_info.byEOTF))
         {
-            case 2: // HDR10
+            case 2: // HDR10 / PQ
               color.trc = AVCOL_TRC_SMPTE2084;
               break;
             case 3: // HLG
               color.trc = AVCOL_TRC_ARIB_STD_B67;
               break;
-            default:
+            default: // Standard Dynamic Range BT.2020
               color.trc = AVCOL_TRC_BT2020_10;
               break;
         }
     }
+    else if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_RGB)
+    {
+        color.space     = AVCOL_SPC_RGB;
+        color.primaries = AVCOL_PRI_BT709;
+        color.trc       = AVCOL_TRC_IEC61966_2_1;
+        color.range     = AVCOL_RANGE_JPEG;
+    }
+
+    const char* range_name = av_color_range_name(color.range);
+    const char* space_name = av_color_space_name(color.space);
+    const char* trc_name   = av_color_transfer_name(color.trc);
+
+    std::string r_str = (range_name && color.range != AVCOL_RANGE_UNSPECIFIED)
+                        ? range_name
+                        : "unk";
+    std::string s_str = (space_name && color.space != AVCOL_SPC_UNSPECIFIED)
+                        ? space_name
+                        : "unk";
+    std::string t_str = (trc_name   && color.trc   != AVCOL_TRC_UNSPECIFIED)
+                        ? trc_name
+                        : "unk";
+
+    // Example output: "SDR | Space:bt709 | TRC:bt709 | Rng:tv"
+    color.description = std::format("SDR | Space:{} | TRC:{} | Rng:{}",
+                                        s_str, t_str, r_str);
 
     if (0 == (uiValidFlag & MWCAP_HDMI_INFOFRAME_MASK_HDR))
+    {
         return false;
+    }
 
 
     if (hdr_info.byEOTF != HDMI_EOTF_ST2084_PQ &&
@@ -1373,7 +1420,7 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
 
     // Primaries
     color.is_HDR = true;
-    color.has_primaries = 1;
+    color.has_primaries = true;
     int den = 50000;
 
     // Green (P0)
@@ -1431,7 +1478,7 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
     color.white_point[1].den  = den;
 
     // Luminance
-    color.has_luminance = 1;
+    color.has_luminance = true;
 
     // Max luminance of mastering display (cd/m^2).
     color.max_luminance.num  =
@@ -1463,6 +1510,15 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
          (static_cast<uint16_t>(hdr_info.maximum_frame_average_light_level_msb) << 8));
 
 
+    // Calculate decimal nits safely using av_q2d
+    double max_nits = av_q2d(color.max_luminance);
+
+    // Example output: "HDR | Space:bt2020nc | TRC:smpte2084 | Rng:tv | Luma:1000 nits | CLL:1000/400"
+    color.description = std::format(
+            "HDR | Space:{} | TRC:{} | Rng:{} | Luma:{:.0f}nits | CLL:{}/{}",
+            s_str, t_str, r_str, max_nits, color.MaxCLL, color.MaxFALL
+    );
+
     /*
      * FFmpeg AVMasteringDisplayMetadata expects:
      *   display_primaries[0] = Red
@@ -1480,6 +1536,7 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
      *    Red   = (34000,16000)
      */
 
+#if 0
     if (m_verbose > 4)
     {
         m_log->info("G=({}/{}, {}/{}) "
@@ -1521,6 +1578,62 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
                     color.min_luminance.den,
                     color.MaxCLL, color.MaxFALL);
     }
+#else
+    if (m_verbose > 3)
+    {
+        // Calculate readable floats using standard av_q2d conversions
+        double g_x  = av_q2d(color.display_primaries[0][0]);
+        double g_y  = av_q2d(color.display_primaries[0][1]);
+
+        double b_x  = av_q2d(color.display_primaries[1][0]);
+        double b_y  = av_q2d(color.display_primaries[1][1]);
+
+        double r_x  = av_q2d(color.display_primaries[2][0]);
+        double r_y  = av_q2d(color.display_primaries[2][1]);
+
+        double wp_x = av_q2d(color.white_point[0]);
+        double wp_y = av_q2d(color.white_point[1]);
+
+        double max_lum = av_q2d(color.max_luminance);
+        double min_lum = av_q2d(color.min_luminance);
+
+        // Print out the channels clearly matching your hardware translation
+        m_log->info("Magewell HDR Translation (CTA-861-G -> FFmpeg):");
+        m_log->info("  G (Index 0)=({}/{}, {}/{}) -> [{:.4f}, {:.4f}]",
+                    color.display_primaries[0][0].num,
+                    color.display_primaries[0][0].den,
+                    color.display_primaries[0][1].num,
+                    color.display_primaries[0][1].den, g_x, g_y);
+
+        m_log->info("  B (Index 1)=({}/{}, {}/{}) -> [{:.4f}, {:.4f}]",
+                    color.display_primaries[1][0].num,
+                    color.display_primaries[1][0].den,
+                    color.display_primaries[1][1].num,
+                    color.display_primaries[1][1].den, b_x, b_y);
+
+        m_log->info("  R (Index 2)=({}/{}, {}/{}) -> [{:.4f}, {:.4f}]",
+                    color.display_primaries[2][0].num,
+                    color.display_primaries[2][0].den,
+                    color.display_primaries[2][1].num,
+                    color.display_primaries[2][1].den, r_x, r_y);
+
+        m_log->info("WP=({}/{}, {}/{}) -> [{:.4f}, {:.4f}]",
+                    color.white_point[0].num, color.white_point[0].den,
+                    color.white_point[1].num, color.white_point[1].den,
+                    wp_x, wp_y);
+
+        m_log->info("HDR Data Mastering Properties (primaries={}, luminance={})",
+                    color.has_primaries, color.has_luminance);
+
+        m_log->info("  Luma Bounds: max={}/{} ({:.2f} nits), min={}/{} ({:.4f} nits)",
+                    color.max_luminance.num, color.max_luminance.den, max_lum,
+                    color.min_luminance.num, color.min_luminance.den, min_lum);
+
+        m_log->info("  Light Levels: MaxCLL={} nits, MaxFALL={} nits",
+                    color.MaxCLL, color.MaxFALL);
+    }
+#endif
+
 
     return true;
 }
@@ -1564,7 +1677,7 @@ uint8_t* Magewell::GetFrameImage(size_t frame_index)
  */
 void Magewell::pro_image_buffer_available(uint8_t* pbImage, void* buf)
 {
-    unique_lock<mutex> lock(m_image_buffer_mutex);
+    std::scoped_lock lock(m_image_buffer_mutex);
 
     m_avail_image_buffers.push_back(pbImage);
     ++m_image_buffers_avail;
@@ -1581,7 +1694,7 @@ void Magewell::pro_image_buffer_available(uint8_t* pbImage, void* buf)
  */
 void Magewell::eco_image_buffer_available(uint8_t* pbImage, void* buf)
 {
-    unique_lock<mutex> lock(m_image_buffer_mutex);
+    std::scoped_lock lock(m_image_buffer_mutex);
 
     MWCAP_VIDEO_ECO_CAPTURE_FRAME* pEco =
         reinterpret_cast<MWCAP_VIDEO_ECO_CAPTURE_FRAME *>(buf);
@@ -1603,14 +1716,14 @@ void Magewell::free_image_buffers(void)
 {
     m_log->debug("free_image_buffers");
 
-    unique_lock<mutex> lock(m_image_buffer_mutex);
+    std::unique_lock<std::mutex> lock(m_image_buffer_mutex);
 
     while (m_image_buffers_total > m_image_buffers_avail)
     {
         m_log->info("Waiting for Magewell buffers to be returned. "
                     "Total: {} avail: {}", m_image_buffers_total,
                     m_image_buffers_avail);
-        if (m_image_returned.wait_for(lock, chrono::seconds(2))
+        if (m_image_returned.wait_for(lock, chrono::seconds(1))
             == cv_status::timeout)
         {
             if (m_running == false)
@@ -2198,7 +2311,6 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     chrono::steady_clock::time_point vidpool_tm = chrono::steady_clock::now();
 
     int duration;
-    bool tok {false};
 
     // Main capture loop
     while (m_running.load() == true)
@@ -2444,25 +2556,12 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 vidpool_5m_max  = ranges::max_element(vidpool_used_5m);
                 vidpool_10m_max = ranges::max_element(vidpool_used_10m);
 
-                string extra;
-                if (tok)
-                {
-                    chrono::seconds total_duration =
-                        chrono::duration_cast<chrono::seconds>
-                        (chrono::steady_clock::now() - m_start_tm);
-                    extra = format("{:%T} elapsed", total_duration);
-                    tok = false;
-                }
-                else
-                {
-                    uint temperature;
-                    MWGetTemperature(m_channel, &temperature);
-                    extra = format("Temp {:.1f}ºC",
-                                   static_cast<float>(temperature) / 10);
-                    tok = true;
-                }
+                uint temperature;
+                MWGetTemperature(m_channel, &temperature);
+                string extra = format("Temp {:.1f}ºC",
+                                      static_cast<float>(temperature) / 10);
 
-                m_log->info("Video frame pool used 1m:{:<3d} "
+                m_log->info("Magewell frame pool used 1m:{:<3d} "
                             "5m:{:<3d} 10m:{:<3d} of {:<3d} "
                             "({})",
                             vidpool_used_1m, *vidpool_5m_max,
@@ -2556,6 +2655,16 @@ bool Magewell::capture_video(void)
             Shutdown();
         }
     }
+
+#if 0
+    MWCAP_VIDEO_CAPTURE_SETTING captureSettings;
+
+// Force the Magewell FPGA to automatically scale full-range inputs
+// down to limited-range P010 buffers before DMA copying to RAM
+    captureSettings.quantizationRange = MWCAP_VIDEO_QUANTIZATION_RANGE_LIMITED;
+
+    MWSetVideoFormat(m_channel, &captureSettings);
+#endif
 
     VideoStream::Params active_params;
     std::optional<VideoStream::Params> oParams = std::nullopt;
@@ -2889,11 +2998,11 @@ bool Magewell::Capture(VideoStream::Args&& video_args,
     {
         m_audio_thread = thread(&Magewell::capture_audio, this);
         pthread_setname_np(m_audio_thread.native_handle(),
-                           "capture_audio");
+                           "audcap");
         this_thread::sleep_for(chrono::milliseconds(1));
     }
 
-    if (prctl(PR_SET_NAME, "capture_video", 0, 0, 0) != 0)
+    if (prctl(PR_SET_NAME, "vidcap", 0, 0, 0) != 0)
     {
         m_log->warn("Failed to set video thread name: {}",
                     std::strerror(errno));

@@ -93,29 +93,14 @@ void VideoStream::close_video(void)
     m_log->info("VideoStream:Close {}", m_params);
 }
 
-string VideoStream::ColorSpaceDesc(void) const
-{
-    switch (m_params.color.space)
-    {
-        case AVCOL_SPC_BT470BG:
-          return "YUV601";
-        case AVCOL_SPC_BT2020_NCL:
-          return "YUV2020";
-        case AVCOL_SPC_BT709:
-          return "YUV709";
-        default:
-          return "Unknown";
-    }
-}
-
 /*
  * Set HDR light metadata
  * Copies HDR metadata for use in video encoding
  */
 void VideoStream::set_light(const ColorSpace& color)
 {
-    m_display_primaries->has_primaries = 1;
-    m_display_primaries->has_luminance = 1;
+    m_display_primaries->has_primaries = false;
+    m_display_primaries->has_luminance = false;
 
     std::copy(&color.display_primaries[0][0],
               &color.display_primaries[0][0] + (3 * 2),
@@ -213,21 +198,11 @@ bool VideoStream::open_video(void)
                         m_encoder->gop_size);
     }
 
-    // Apply color mastering tags dynamically from the payload flag
-    if (m_params.color.is_HDR)
-    {
-        m_log->info("Configuring encoder context for HDR streaming.");
-        m_encoder->color_range = AVCOL_RANGE_JPEG;
-    }
-    else
-    {
-        m_encoder->color_range = AVCOL_RANGE_UNSPECIFIED;
-    }
-
     // Assign color spaces using existing baseline tracking variables
+    m_encoder->color_range     = m_params.color.range;
     m_encoder->color_primaries = m_params.color.primaries;
-    m_encoder->color_trc = m_params.color.trc;
-    m_encoder->colorspace = m_params.color.space;
+    m_encoder->color_trc       = m_params.color.trc;
+    m_encoder->colorspace      = m_params.color.space;
 
     // Evaluate hardware thread slicing permissions
     if (m_encoder->codec->capabilities & AV_CODEC_CAP_SLICE_THREADS)
@@ -349,7 +324,7 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
     }
 
     m_encoder->hw_device_ctx = av_buffer_ref(m_hw_device_ctx.get());
-    m_encoder->thread_count = 1;
+//    m_encoder->thread_count = 1;
 
     // Codec initialization & encoder activation
     // Commit the local options dictionary parameters during encoder activation
@@ -405,8 +380,7 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
     }
 
     av_opt_set(m_encoder->priv_data, "async_depth", "4", 0);
-
-    int surface_count_padding = m_args.extraHWframes + 4;
+    int surface_count_padding = m_args.extraHWframes + m_args.buffers + 4;
     if (m_args.lookahead > 0)
     {
         surface_count_padding += m_args.lookahead;
@@ -489,7 +463,7 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
     // The encoder takes ownership of this reference, and will clean
     // it up automatically via avcodec_free_context().
     m_encoder->hw_frames_ctx = av_buffer_ref(m_hw_frames_ctx.get());
-    m_encoder->thread_count = 1;
+//    m_encoder->thread_count = 1;
 
     // Kernel initialization codec activation
     ret = avcodec_open2(m_encoder.get(), codec, nullptr);
@@ -661,7 +635,7 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
         av_buffer_unref(&m_encoder->hw_frames_ctx);
     }
     m_encoder->hw_frames_ctx = av_buffer_ref(m_hw_frames_ctx.get());
-    m_encoder->thread_count = 1;
+//    m_encoder->thread_count = 1;
 
     // Intel kernel initialization codec activation
     ret = avcodec_open2(m_encoder.get(), codec, nullptr);
@@ -679,7 +653,37 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     return true;
 }
 
-bool VideoStream::AddFrame(Image&& image)
+bool VideoStream::EncodeFrame(void)
+{
+    AVFrame* frame;
+    {
+        std::scoped_lock lock(m_queue_mutex);
+        if (m_frames.empty())
+            return false;
+        frame = m_frames.front();
+        m_frames.pop_front();
+    }
+
+    bool result = m_parent.EncodeFrame(OutputTS::VIDEO_STREAM_ID,
+                                       m_version,
+#ifdef DEBUG_TS
+                                       frame->pts,
+#endif
+                                       m_encoder.get(), frame);
+
+    av_frame_free(&frame);
+
+    if (!result)
+    {
+        m_log->error("Video encode_frame pipeline step dropped out or failed.");
+        return false;
+    }
+
+    return true;
+}
+
+
+int VideoStream::AddImage(Image&& image)
 {
     // Nvidia mode bypass: Don't require m_hw_frames_ctx for Nvidia/NVENC
     if (!m_encoder || (m_params.encoder_type != NV && !m_hw_frames_ctx))
@@ -689,7 +693,7 @@ bool VideoStream::AddFrame(Image&& image)
         {
             f_image_avail(image.pImage, image.pEco);
         }
-        return false;
+        return -1;
     }
 
     AVFrame* hw_frame = av_frame_alloc();
@@ -700,7 +704,7 @@ bool VideoStream::AddFrame(Image&& image)
         {
             f_image_avail(image.pImage, image.pEco);
         }
-        return false;
+        return -1;
     }
 
     AVFrame* write_target = nullptr;
@@ -709,7 +713,7 @@ bool VideoStream::AddFrame(Image&& image)
     if (m_params.encoder_type == NV)
     {
         // Nvidia pathway: Allocate a standard host memory surface structure
-        hw_frame->width = m_params.width;
+        hw_frame->width  = m_params.width;
         hw_frame->height = m_params.height;
         hw_frame->format = m_sw_pix_fmt;
 
@@ -720,7 +724,7 @@ bool VideoStream::AddFrame(Image&& image)
                          AVerr2str(ret));
             av_frame_free(&hw_frame);
             f_image_avail(image.pImage, image.pEco);
-            return false;
+            return -1;
         }
         write_target = hw_frame;
     }
@@ -729,12 +733,13 @@ bool VideoStream::AddFrame(Image&& image)
         // Intel QSV / VAAPI pathways: Allocate surface from the
         // pre-defined hardware pool
         int ret = av_hwframe_get_buffer(m_hw_frames_ctx.get(), hw_frame, 0);
+        if (ret == AVERROR(ENOMEM))
+            return 0;
         if (ret < 0)
         {
-            m_log->error("av_hwframe_get_buffer failed: {}", AVerr2str(ret));
             av_frame_free(&hw_frame);
             f_image_avail(image.pImage, image.pEco);
-            return false;
+            return -1;
         }
 
         mapped = av_frame_alloc();
@@ -743,22 +748,25 @@ bool VideoStream::AddFrame(Image&& image)
             m_log->error("Failed to allocate mapped frame reference structure");
             av_frame_free(&hw_frame);
             f_image_avail(image.pImage, image.pEco);
-            return false;
+            return -1;
         }
 
-        ret = av_hwframe_map(mapped, hw_frame, AV_HWFRAME_MAP_WRITE);
+        ret = av_hwframe_map(mapped, hw_frame,
+                             AV_HWFRAME_MAP_WRITE | AV_HWFRAME_MAP_OVERWRITE);
         if (ret < 0)
         {
             m_log->error("av_hwframe_map failed: {}", AVerr2str(ret));
             av_frame_free(&mapped);
             av_frame_free(&hw_frame);
             f_image_avail(image.pImage, image.pEco);
-            return false;
+            return -1;
         }
         write_target = mapped;
     }
 
+#if 0
     av_frame_make_writable(write_target);
+#endif
 
     // Build the plane slice mapping matrices
     uint8_t* src_data[4] = { nullptr };
@@ -777,7 +785,7 @@ bool VideoStream::AddFrame(Image&& image)
         }
         av_frame_free(&hw_frame);
         f_image_avail(image.pImage, image.pEco);
-        return false;
+        return -1;
     }
 
     // Direct accelerated data block transfer
@@ -788,10 +796,19 @@ bool VideoStream::AddFrame(Image&& image)
     // Release Magewell hardware locked memory block back to the
     // driver ASAP
     f_image_avail(image.pImage, image.pEco);
+    if (mapped)
+    {
+        av_frame_free(&mapped);
+    }
+
+    hw_frame->colorspace      = m_params.color.space;
+    hw_frame->color_primaries = m_params.color.primaries;
+    hw_frame->color_trc       = m_params.color.trc;
+    hw_frame->color_range     = m_params.color.range;
 
     // Set Presentation Timestamps
     hw_frame->pts = av_rescale_q(image.timestamp, TimeBase::Magewell,
-                                 m_encoder->time_base);
+                                     m_encoder->time_base);
 
     // Inject HDR metadata properties safely if present
     if (m_params.color.is_HDR)
@@ -817,29 +834,9 @@ bool VideoStream::AddFrame(Image&& image)
         }
     }
 
-    if (m_frame_cnt++ == 0)
-    {
-        hw_frame->pict_type = AV_PICTURE_TYPE_I;
-    }
+    std::scoped_lock lock(m_queue_mutex);
+    m_frames.push_back(hw_frame);
+    hw_frame = nullptr;
 
-    bool result = m_parent.EncodeFrame(OutputTS::VIDEO_STREAM_ID, m_version,
-#ifdef DEBUG_TS
-                                       image.timestamp,
-#endif
-                                       m_encoder.get(), hw_frame);
-    if (mapped)
-    {
-        av_frame_unref(mapped);
-        av_frame_free(&mapped);
-    }
-
-    av_frame_free(&hw_frame);
-
-    if (!result)
-    {
-        m_log->error("Video encode_frame pipeline step dropped out or failed.");
-        return false;
-    }
-
-    return true;
+    return m_frames.size();
 }

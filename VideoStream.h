@@ -38,6 +38,7 @@ class VideoStream
         AVRational max_luminance{};
         AVRational min_luminance{};
 
+        AVColorRange range { AVCOL_RANGE_UNSPECIFIED };
         AVColorSpace space { AVCOL_SPC_UNSPECIFIED };
         AVColorTransferCharacteristic trc { AVCOL_TRC_UNSPECIFIED };
         AVColorPrimaries primaries { AVCOL_PRI_UNSPECIFIED };
@@ -50,6 +51,8 @@ class VideoStream
         bool has_primaries {false};
         bool has_luminance {false};
 
+        std::string description;
+
         bool operator==(const ColorSpace&) const = default;
     };
 
@@ -58,12 +61,13 @@ class VideoStream
         std::string device { "renderD128" };
         std::string codecName { "hevc_qsv" };
         std::string preset { };
-        int quality { 25 };
-        int lookahead { 35 };
+        int quality       { 25 };
+        int lookahead     { 35 };
+        int buffers       {  4 };
         int extraHWframes { 32 };
-        float gopSecs { 1.5 };
-        int idrInterval {0};
-        bool p010 { false };
+        float gopSecs     { 1.5 };
+        int idrInterval   {  0  };
+        bool p010         { false };
     };
 
     struct Params
@@ -90,6 +94,7 @@ class VideoStream
         std::optional<Params> oParams;
     };
     using imageque_t = std::deque<Image>;
+    using frameque_t = std::deque<AVFrame*>;
 
     VideoStream(OutputTS& parent, int verbose_level, Args& args,
                 Params&& params, MagCallback image_buffer_avail,
@@ -102,9 +107,11 @@ class VideoStream
     VideoStream(VideoStream&&) = default;
     VideoStream& operator=(VideoStream&&) = default;
 
-    bool AddFrame(Image&& image);
+    int  AddImage(Image&& image);
+    bool EncodeFrame(void);
 
-    std::string ColorSpaceDesc(void) const;
+    std::string ColorSpaceDesc(void) const
+        { return m_params.color.description; }
 
   private:
     bool open_video(void);
@@ -139,6 +146,8 @@ class VideoStream
     MasteringDisplayMetadataPtr m_display_primaries;
     ContentLightMetadataPtr m_content_light;
 
+    frameque_t  m_frames;
+    std::mutex  m_queue_mutex;
     MagCallback f_image_avail;
 };
 
@@ -176,13 +185,14 @@ template <>
         }
 
         return fmt::format_to(ctx.out(),
-                              "Video[{}x{}p{:.4f} {} {} FR:{}/{}]",
+                              "Video[{}x{}p{:.4f} {} {} FR:{}/{} {}]",
                               params.width,
                               params.height,
                               fps,
                               color,
                               av_get_pix_fmt_name(static_cast<AVPixelFormat>(params.pix_fmt)),
                               params.frame_duration.den,
-                              params.frame_duration.num);
+                              params.frame_duration.num,
+                              params.color.description);
     }
 };

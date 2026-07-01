@@ -100,7 +100,8 @@ void show_help(string_view app)
          << "--p010             : Force p010 (10bit) video format.\n"
          << "--gop_secs (-g)    : GOP size in seconds [1.5] (0 to disable)\n"
          << "--idr-interval     : Frequency that keyframe will be IDR [0]\n"
-         << "--video-buffers    : Video buffers count (RAM) [16]\n"
+         << "--gpu-buffers      : GPU video buffers count [4]\n"
+         << "--video-buffers    : Video buffers count (RAM) [12]\n"
          << "--extra-hw-frames  : Extra HW frames used for encoding [32]\n"
          << "--write-edid (-w)  : Write EDID info from file to input\n"
          << "--wait-for         : Wait for given number of inputs to be initialized. 10 second timeout\n"
@@ -261,8 +262,7 @@ int main(int argc, char* argv[])
     bool        write_edid  = false;
     bool        no_audio      = false;
 
-    int         video_buffers = 16;
-
+    int         video_buffers = 12;
     VideoStream::Args  video_args;
 
 
@@ -383,6 +383,12 @@ int main(int argc, char* argv[])
             if (!string_to_int(*(++iter), ms, "Settle time"))
                 exit(1);
             settle_time = chrono::milliseconds(ms);
+        }
+        else if (*iter == "--gpu-buffers")
+        {
+            if (!string_to_int(*(++iter), video_args.buffers,
+                               "GPU buffers"))
+                exit(1);
         }
         else if (*iter == "--video-buffers")
         {

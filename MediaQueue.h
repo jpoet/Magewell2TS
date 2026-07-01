@@ -55,7 +55,7 @@ class MediaQueue
 
     void Push(Packet&& value)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::scoped_lock lock(m_mutex);
         m_queue.push(std::move(value));
     }
 
@@ -75,7 +75,7 @@ class MediaQueue
 
     bool IsEmpty()
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::scoped_lock lock(m_mutex);
 
         // A bit of a hack, but it works.
         if (m_queue.empty())
@@ -103,13 +103,13 @@ class MediaQueue
 
     size_t GetSize() const
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::scoped_lock lock(m_mutex);
         return m_queue.size();
     }
 
     int64_t PeekDts() const
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::scoped_lock lock(m_mutex);
         if (m_queue.empty())
         {
             return 0;
@@ -120,7 +120,7 @@ class MediaQueue
 
     AVRational PeekTimebase() const
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::scoped_lock lock(m_mutex);
         if (m_queue.empty())
         {
             return AVRational{0, 1};
@@ -131,7 +131,7 @@ class MediaQueue
 
     bool PeekMarker() const
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::scoped_lock lock(m_mutex);
         if (m_queue.empty())
         {
             return false;
@@ -212,13 +212,13 @@ class MediaQueue
 
     void Shutdown()
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::scoped_lock lock(m_mutex);
         m_isShutdown = true;
     }
 
     void Reset()
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::scoped_lock lock(m_mutex);
 
         // This clean pattern works for swapping out BOTH types of containers
         decltype(m_queue) emptyQueue;

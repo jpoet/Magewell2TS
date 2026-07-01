@@ -112,7 +112,7 @@ class PacketSequence
      */
     bool Push(const Packet& pkt, const AVPacket* av_pkt)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::scoped_lock lock(m_mutex);
 
         bool is_chronological = true;
         bool is_disordered = false;
@@ -170,7 +170,7 @@ class PacketSequence
      */
     std::string DebugStr() const
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::scoped_lock lock(m_mutex);
 
         if (m_history.empty())
         {
@@ -239,7 +239,7 @@ class PacketSequence
 
     void Clear()
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::scoped_lock lock(m_mutex);
         m_history.clear();
     }
 
