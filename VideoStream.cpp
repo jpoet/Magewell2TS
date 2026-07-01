@@ -682,7 +682,6 @@ bool VideoStream::EncodeFrame(void)
     return true;
 }
 
-
 int VideoStream::AddImage(Image&& image)
 {
     // Nvidia mode bypass: Don't require m_hw_frames_ctx for Nvidia/NVENC
@@ -707,34 +706,58 @@ int VideoStream::AddImage(Image&& image)
         return -1;
     }
 
-    AVFrame* write_target = nullptr;
     AVFrame* mapped = nullptr;
 
     if (m_params.encoder_type == NV)
     {
-        // Nvidia pathway: Allocate a standard host memory surface structure
         hw_frame->width  = m_params.width;
         hw_frame->height = m_params.height;
         hw_frame->format = m_sw_pix_fmt;
 
-        int ret = av_frame_get_buffer(hw_frame, 0);
-        if (ret < 0)
+        // Directly fill the AVFrame plane data arrays with Magewell pointers
+        int size_bytes = av_image_fill_arrays(hw_frame->data,
+                                              hw_frame->linesize, image.pImage,
+                                              m_sw_pix_fmt, m_params.width,
+                                              m_params.height, 1);
+        if (size_bytes < 0)
         {
-            m_log->error("Nvidia frame buffer allocation failed: {}",
-                         AVerr2str(ret));
+            m_log->error("av_image_fill_arrays failed for Nvidia mapping: {}",
+                         AVerr2str(size_bytes));
             av_frame_free(&hw_frame);
             f_image_avail(image.pImage, image.pEco);
             return -1;
         }
-        write_target = hw_frame;
+
+        // Set up the cleanup context
+        struct NvidiaCleanupContext {
+            uint8_t* pImage;
+            void* pEco;
+            MagCallback f_avail;
+            NvidiaCleanupContext(uint8_t* img, void* eco, const MagCallback& cb)
+                : pImage(img), pEco(eco), f_avail(cb) {}
+        };
+        auto* ctx = new NvidiaCleanupContext(image.pImage, image.pEco,
+                                             f_image_avail);
+
+        // Bind the callback directly to the frame reference tracking array
+        hw_frame->buf[0] = av_buffer_create(
+            image.pImage, size_bytes,
+            [](void* opaque, uint8_t*) {
+                auto* c = reinterpret_cast<NvidiaCleanupContext*>(opaque);
+                c->f_avail(c->pImage, c->pEco); // Triggers automatically downstream when freed.
+                delete c;
+            },
+            ctx, 0
+        );
     }
     else
     {
-        // Intel QSV / VAAPI pathways: Allocate surface from the
-        // pre-defined hardware pool
         int ret = av_hwframe_get_buffer(m_hw_frames_ctx.get(), hw_frame, 0);
         if (ret == AVERROR(ENOMEM))
+        {
+            av_frame_free(&hw_frame);
             return 0;
+        }
         if (ret < 0)
         {
             av_frame_free(&hw_frame);
@@ -761,46 +784,37 @@ int VideoStream::AddImage(Image&& image)
             f_image_avail(image.pImage, image.pEco);
             return -1;
         }
-        write_target = mapped;
-    }
 
-#if 0
-    av_frame_make_writable(write_target);
-#endif
+        // Build the plane slice mapping matrices for QSV
+        uint8_t* src_data[4] = { nullptr };
+        int src_linesize[4] = { 0 };
 
-    // Build the plane slice mapping matrices
-    uint8_t* src_data[4] = { nullptr };
-    int src_linesize[4] = { 0 };
-
-    int ret = av_image_fill_arrays(src_data, src_linesize, image.pImage,
+        ret = av_image_fill_arrays(src_data, src_linesize, image.pImage,
                                    m_sw_pix_fmt, m_params.width,
                                    m_params.height, 1);
-    if (ret < 0)
-    {
-        m_log->error("av_image_fill_arrays failed: {}", AVerr2str(ret));
+        if (ret < 0)
+        {
+            m_log->error("av_image_fill_arrays failed: {}", AVerr2str(ret));
+            av_frame_free(&mapped);
+            av_frame_free(&hw_frame);
+            f_image_avail(image.pImage, image.pEco);
+            return -1;
+        }
+
+        // Direct software memory block transfer
+        av_image_copy(mapped->data, mapped->linesize,
+                      const_cast<const uint8_t**>(src_data), src_linesize,
+                      m_sw_pix_fmt, m_params.width, m_params.height);
+
+        // Release Magewell buffer
+        f_image_avail(image.pImage, image.pEco);
         if (mapped)
         {
-            av_frame_unref(mapped);
             av_frame_free(&mapped);
         }
-        av_frame_free(&hw_frame);
-        f_image_avail(image.pImage, image.pEco);
-        return -1;
     }
 
-    // Direct accelerated data block transfer
-    av_image_copy(write_target->data, write_target->linesize,
-                  const_cast<const uint8_t**>(src_data), src_linesize,
-                  m_sw_pix_fmt, m_params.width, m_params.height);
-
-    // Release Magewell hardware locked memory block back to the
-    // driver ASAP
-    f_image_avail(image.pImage, image.pEco);
-    if (mapped)
-    {
-        av_frame_free(&mapped);
-    }
-
+    // Metadata injection
     hw_frame->colorspace      = m_params.color.space;
     hw_frame->color_primaries = m_params.color.primaries;
     hw_frame->color_trc       = m_params.color.trc;
@@ -808,15 +822,15 @@ int VideoStream::AddImage(Image&& image)
 
     // Set Presentation Timestamps
     hw_frame->pts = av_rescale_q(image.timestamp, TimeBase::Magewell,
-                                     m_encoder->time_base);
+                                 m_encoder->time_base);
 
     // Inject HDR metadata properties safely if present
     if (m_params.color.is_HDR)
     {
         if (m_display_primaries)
         {
-            AVMasteringDisplayMetadata* primaries
-                = av_mastering_display_metadata_create_side_data(hw_frame);
+            AVMasteringDisplayMetadata* primaries =
+                av_mastering_display_metadata_create_side_data(hw_frame);
             if (primaries)
             {
                 *primaries = *m_display_primaries;
@@ -825,8 +839,8 @@ int VideoStream::AddImage(Image&& image)
 
         if (m_content_light)
         {
-            AVContentLightMetadata* light
-                = av_content_light_metadata_create_side_data(hw_frame);
+            AVContentLightMetadata* light =
+                av_content_light_metadata_create_side_data(hw_frame);
             if (light)
             {
                 *light = *m_content_light;
