@@ -1535,51 +1535,7 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
      *    Blue  = (7500,3000)
      *    Red   = (34000,16000)
      */
-
-#if 0
     if (m_verbose > 4)
-    {
-        m_log->info("G=({}/{}, {}/{}) "
-                    "B=({}/{}, {}/{}) "
-                    "R=({}/{}, {}/{})",
-
-                    // Green
-                    color.display_primaries[0][0].num,
-                    color.display_primaries[0][0].den,
-                    color.display_primaries[0][1].num,
-                    color.display_primaries[0][1].den,
-
-                    // Blue
-                    color.display_primaries[1][0].num,
-                    color.display_primaries[1][0].den,
-                    color.display_primaries[1][1].num,
-                    color.display_primaries[1][1].den,
-
-                    // Red
-                    color.display_primaries[2][0].num,
-                    color.display_primaries[2][0].den,
-                    color.display_primaries[2][1].num,
-                    color.display_primaries[2][1].den
-                    );
-
-        m_log->info("WP=({}/{}, {}/{})",
-                    color.white_point[0].num,
-                    color.white_point[0].den,
-                    color.white_point[1].num,
-                    color.white_point[1].den);
-
-        m_log->info("HDR colordata : primaries={} luminance={}; "
-                    "max={}/{} min={}/{}; MaxCLL={} MaxFALL={}",
-                    color.has_primaries,
-                    color.has_luminance,
-                    color.max_luminance.num,
-                    color.max_luminance.den,
-                    color.min_luminance.num,
-                    color.min_luminance.den,
-                    color.MaxCLL, color.MaxFALL);
-    }
-#else
-    if (m_verbose > 3)
     {
         // Calculate readable floats using standard av_q2d conversions
         double g_x  = av_q2d(color.display_primaries[0][0]);
@@ -1632,8 +1588,6 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
         m_log->info("  Light Levels: MaxCLL={} nits, MaxFALL={} nits",
                     color.MaxCLL, color.MaxFALL);
     }
-#endif
-
 
     return true;
 }
