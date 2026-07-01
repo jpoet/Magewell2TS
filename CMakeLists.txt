@@ -9,7 +9,6 @@ endmacro()
 
 cmake_minimum_required(VERSION 3.10)
 
-
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/helpers")
 
 SET(CMAKE_COLOR_MAKEFILE ON)
@@ -21,10 +20,17 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_compile_options(-Wall -Wreturn-type)
-
 # set the project name
 project(magewell2ts VERSION 3.0)
+
+# If no configuration type is explicitly defined, force the cache
+# state to Release
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING
+        "Choose the type of build, options are: None Debug Release RelWithDebInfo MinSizeRel."
+        FORCE)
+    message(STATUS "No CMAKE_BUILD_TYPE specified. Defaulting to optimized 'Release' mode.")
+endif()
 
 include(GNUInstallDirs) # Results in /usr/local being the default.
 set(INSTALL_BIN_DIR ${CMAKE_INSTALL_BINDIR})
@@ -41,11 +47,6 @@ add_executable(magewell2ts
                VideoStream.cpp OutputTS.cpp
 	       EAC3Parser.cpp IEC61937Parser.cpp
                Magewell.cpp magewell2ts.cpp)
-
-# set_target_properties(magewell2ts PROPERTIES
-#   LINK_SEARCH_START_STATIC ON
-#   LINK_SEARCH_END_STATIC ON
-# )
 
 set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
 set(THREADS_PREFER_PTHREAD_FLAG TRUE)
@@ -82,13 +83,11 @@ endif()
 find_package(spdlog QUIET)
 if(NOT spdlog_FOUND)
   message(WARNING "spdlog library not found. spdlog is required for logging functionality.")
-  message(STATUS "To install spdlog, purhaps try:")
+  message(STATUS "To install spdlog, perhaps try:")
   message(STATUS "  sudo dnf install spdlog-devel")
   message(STATUS "  sudo apt install libspdlog-dev")
   message(FATAL_ERROR "spdlog library not found. Please install it before continuing.")
 endif()
-
-#find_package(FFmpeg COMPONENTS AVCODEC AVFORMAT AVUTIL AVDEVICE REQUIRED)
 
 set(ENV{PKG_CONFIG_PATH} "$ENV{PKG_CONFIG_PATH}:/opt/ffmpeg/lib/pkgconfig")
 
@@ -111,23 +110,16 @@ if(NOT LIBAV_FOUND)
   message(FATAL_ERROR "ffmpeg development headers not found.\nMaybe try `sudo dnf install ffmpeg-devel` or `sudo apt-get install ffmpeg-dev`")
 endif()
 
-string(COMPARE LESS ${LIBAV_libavdevice_VERSION} "60" result)
-if(result)
-  message(WARNING "libavdevice version >= 60 required for EAC3/SPDIF support. Found " ${LIBAV_libavdevice_VERSION})
-endif()
-
 pkg_check_modules(VPL IMPORTED_TARGET vpl)
 
 if(NOT VPL_FOUND)
   message("libvpl not found, Intel oneVPL will not be enabled.\nMaybe try `sudo dnf install -y oneVPL-devel`. See: https://github.com/oneapi-src/oneVPL")
 else()
   message(NOTICE "Note: To use oneVPL, ffmpeg needs to be compiled with '--enable-libvpl'")
-  target_link_libraries(${TARGET} PkgConfig::VPL)
+  target_link_libraries(magewell2ts PRIVATE PkgConfig::VPL)
   target_include_directories(magewell2ts PRIVATE /usr/include/vpl)
   add_compile_definitions(VPL_VERSION=${VPL_VERSION})
 endif()
-
-# print_all_variables()
 
 set(CMAKE_VERBOSE_MAKEFILE on)
 
@@ -142,21 +134,33 @@ target_link_libraries(magewell2ts PRIVATE
 )
 
 install(TARGETS magewell2ts DESTINATION ${INSTALL_BIN_DIR})
-
-# Install the m2tsweb script to the same directory as the executable
 install(PROGRAMS m2tsweb DESTINATION ${INSTALL_BIN_DIR})
+
+target_compile_options(magewell2ts PRIVATE
+    -Wall
+    -Wreturn-type
+    $<$<CONFIG:Release>:-O3>
+    $<$<CONFIG:Release>:-march=native>
+    $<$<CONFIG:Release>:-flto=auto>
+)
+
+target_link_options(magewell2ts PRIVATE
+    $<$<CONFIG:Release>:-flto=auto>
+)
 
 ADD_CUSTOM_TARGET(debug
   COMMAND ${CMAKE_COMMAND} -DCMAKE_BUILD_TYPE=Debug ${CMAKE_SOURCE_DIR}
   COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target all
   COMMENT "Switch CMAKE_BUILD_TYPE to Debug"
-  )
+  VERBATIM
+)
 
 ADD_CUSTOM_TARGET(release
   COMMAND ${CMAKE_COMMAND} -DCMAKE_BUILD_TYPE=Release ${CMAKE_SOURCE_DIR}
   COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target all
   COMMENT "Switch CMAKE_BUILD_TYPE to Release"
-  )
+  VERBATIM
+)
 
 install(CODE "
   execute_process(
