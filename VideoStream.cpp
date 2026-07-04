@@ -687,10 +687,7 @@ int VideoStream::AddImage(Image&& image)
     if (!m_encoder || (m_params.encoder_type != NV && !m_hw_frames_ctx))
     {
         m_log->warn("Video encoder is not initialized or open");
-        if (image.pImage)
-        {
-            f_image_avail(image.pImage, image.pEco);
-        }
+        f_image_avail(image.pImage, image.pEco);
         return -1;
     }
 
@@ -698,10 +695,7 @@ int VideoStream::AddImage(Image&& image)
     if (!hw_frame)
     {
         m_log->critical("Failed to allocate hw_frame.");
-        if (image.pImage)
-        {
-            f_image_avail(image.pImage, image.pEco);
-        }
+        f_image_avail(image.pImage, image.pEco);
         return -1;
     }
 

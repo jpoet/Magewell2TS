@@ -78,7 +78,6 @@ EAC3Parser::processFrame(std::span<const uint8_t> iec_buffer,
     if ((cache >> 48) != 0x0B77) [[unlikely]]
         return std::nullopt;
 
-    m_log->info("Found header");
     EAC3MetaData out{};
     uint32_t num_audio_blocks = 6;
 

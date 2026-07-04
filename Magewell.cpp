@@ -1668,7 +1668,7 @@ void Magewell::eco_image_buffer_available(uint8_t* pbImage, void* buf)
 
 void Magewell::free_image_buffers(void)
 {
-    m_log->debug("free_image_buffers");
+    m_log->info("free_image_buffers");
 
     std::unique_lock<std::mutex> lock(m_image_buffer_mutex);
 
@@ -2000,21 +2000,6 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     // Main capture loop
     while (m_running.load() == true)
     {
-        // Check if we have enough buffers
-        {
-            unique_lock<mutex> lock(m_image_buffer_mutex);
-            while (m_image_buffers_avail < 2)
-            {
-                m_image_returned.wait_for(lock,
-                                          chrono::milliseconds(1));
-
-                if (m_running.load() == false)
-                    return true;
-            }
-
-            used = m_image_buffers_total - m_image_buffers_avail;
-        }
-
         // Wait for notification
         if (EcoEventWait(eco_event, m_frame_ms2) <= 0)
         {
@@ -2061,6 +2046,8 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
 
         if (m_expected_ts == -1 && timestamp < 0)
         {
+            eco_image_buffer_available(pbImage,
+                               reinterpret_cast<void*>(eco_status.pvContext));
             continue;
         }
         else if (m_expected_ts > 0 &&
