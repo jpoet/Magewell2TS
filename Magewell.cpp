@@ -1118,6 +1118,8 @@ void Magewell::capture_audio_loop(void)
             active_params = params;
             oParams = active_params;
         }
+        else
+            m_log->info(" KEEPING:\n   {}", params);
 
         err_cnt = 0;
         buffered_frame_idx = 512;
@@ -1738,6 +1740,7 @@ void Magewell::free_image_buffers(void)
 
     // Reset buffer counters
     m_image_buffers_total = m_image_buffers_avail = 0;
+    m_log->info("Image buffers freed.");
 }
 
 /**
@@ -2025,7 +2028,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         if (ullStatusBits & MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE)
         {
             if (m_frame_cnt > 2000)
-                m_log->warn("DAMAGED: Magewell lost video sync.");
+                m_log->warn("DAMAGED: Eco lost video sync.");
             return false;
         }
 
@@ -2297,7 +2300,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         {
             if (m_frame_cnt > 2000)
             {
-                m_log->warn("DAMAGED: Magewell lost video sync.");
+                m_log->warn("DAMAGED: Pro lost video sync.");
             }
             return false;
         }
@@ -2807,6 +2810,8 @@ bool Magewell::capture_video(void)
                 }
             }
         }
+        else
+            m_log->info(" KEEPING:\n   {}", params);
 
         if (video_notify)
             MWUnregisterNotify(m_channel, video_notify);
