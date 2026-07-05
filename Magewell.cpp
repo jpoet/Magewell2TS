@@ -1752,7 +1752,6 @@ void Magewell::free_image_buffers(void)
  */
 bool Magewell::add_eco_image_buffers(void)
 {
-    MW_RESULT xr;
     uint      idx;
 
     if (m_eco_image_buffers.empty())
@@ -1807,6 +1806,12 @@ bool Magewell::add_eco_image_buffers(void)
         }
     }
 
+    return true;
+}
+
+bool Magewell::register_eco_image_buffers(void)
+{
+    uint      idx;
     ecoque_t::iterator Ibuf;
     for (Ibuf = m_eco_image_buffers.begin(), idx = 0;
          Ibuf != m_eco_image_buffers.end(); ++Ibuf, ++idx)
@@ -1816,8 +1821,8 @@ bool Magewell::add_eco_image_buffers(void)
                              (std::to_address(*Ibuf));
 
         // Register buffer with capture system
-        if ((xr = MWCaptureSetVideoEcoFrame(m_channel,
-                                            std::to_address(*Ibuf))) != MW_SUCCEEDED)
+        if (MWCaptureSetVideoEcoFrame(m_channel,
+                                      std::to_address(*Ibuf)) != MW_SUCCEEDED)
         {
             m_log->critical("MWCaptureSetVideoEcoFrame failed!");
             return false;
@@ -1977,6 +1982,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     float    skipped = 0;
     int      quarter_dur = eco_params.llFrameDuration / 4;
 
+    MWCAP_VIDEO_SIGNAL_STATUS videoSignalStatus;
     MWCAP_VIDEO_ECO_CAPTURE_STATUS eco_status;
     MW_RESULT ret;
 
@@ -2001,6 +2007,19 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     // Main capture loop
     while (m_running.load() == true)
     {
+        // Check signal lock status
+        MWGetVideoSignalStatus(m_channel, &videoSignalStatus);
+        if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
+        {
+            if (m_frame_cnt > 2000)
+            {
+                m_log->warn("DAMAGED: Video signal lost lock. (frame {})",
+                            m_frame_cnt);
+            }
+            this_thread::sleep_for(chrono::milliseconds(5));
+            return false;
+        }
+
         // Wait for notification
         if (EcoEventWait(eco_event, m_frame_ms2) <= 0)
         {
@@ -2783,7 +2802,6 @@ bool Magewell::capture_video(void)
                 {
                     if (prev_image_size != m_image_size)
                     {
-                        // Free buffers
                         free_image_buffers();
 
                         if (!add_eco_image_buffers())
@@ -2792,6 +2810,7 @@ bool Magewell::capture_video(void)
                             break;
                         }
                     }
+                    register_eco_image_buffers();
                 }
             }
             else

@@ -152,6 +152,7 @@ class Magewell
 
     bool add_pro_image_buffers(void);
     bool add_eco_image_buffers(void);
+    bool register_eco_image_buffers(void);
     void free_image_buffers(void);
 
     /**
