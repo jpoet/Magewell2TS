@@ -1927,8 +1927,6 @@ void Magewell::close_eco_video(void)
 {
     // Stop capture
     MWStopVideoEcoCapture(m_channel);
-    // Free buffers
-    free_image_buffers();
 }
 
 /**
@@ -2122,10 +2120,6 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             }
         }
         m_expected_ts = timestamp + eco_params.llFrameDuration;
-
-        if (oParams)
-            m_log->warn("Capture pParm dimensions {}x{}",
-                        oParams->width, oParams->height);
 
         VideoStream::Image image = {
             .pImage = pbImage,
@@ -2789,6 +2783,9 @@ bool Magewell::capture_video(void)
                 {
                     if (prev_image_size != m_image_size)
                     {
+                        // Free buffers
+                        free_image_buffers();
+
                         if (!add_eco_image_buffers())
                         {
                             Shutdown();
@@ -2850,6 +2847,8 @@ bool Magewell::capture_video(void)
         }
     }
 
+    free_image_buffers();
+
     if (m_isEco)
     {
         close_eco_video();
@@ -2861,7 +2860,6 @@ bool Magewell::capture_video(void)
     }
     else
     {
-        free_image_buffers();
         MWStopVideoCapture(m_channel);
         if (video_notify)
             MWUnregisterNotify(m_channel, video_notify);
