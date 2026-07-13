@@ -2974,7 +2974,7 @@ bool Magewell::Capture(VideoStream::Args&& video_args,
     if (realtime)
     {
         struct sched_param audio_param;
-        audio_param.sched_priority = 80;
+        audio_param.sched_priority = 20;
         int a_result = pthread_setschedparam(m_audio_thread.native_handle(),
                                              SCHED_RR, &audio_param);
         if (a_result != 0)
@@ -2991,7 +2991,7 @@ bool Magewell::Capture(VideoStream::Args&& video_args,
         }
 
         struct sched_param video_param;
-        video_param.sched_priority = 50;
+        video_param.sched_priority = 10;
         int v_result = pthread_setschedparam(pthread_self(),
                                              SCHED_RR, &video_param);
         if (v_result != 0)
