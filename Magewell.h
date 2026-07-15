@@ -150,8 +150,8 @@ class Magewell
      */
     void eco_image_buffer_available(uint8_t* pbImage, void* buf);
 
-    bool add_pro_image_buffers(void);
-    bool add_eco_image_buffers(void);
+    bool create_pro_image_buffers(void);
+    bool create_eco_image_buffers(void);
     bool register_eco_image_buffers(void);
     void free_image_buffers(void);
 

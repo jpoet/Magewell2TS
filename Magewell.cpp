@@ -1698,6 +1698,7 @@ void Magewell::free_image_buffers(void)
             munlock(m_image_buffer.get(), total_qwords * sizeof(uint64_t));
             m_pinned = false;
         }
+        m_eco_image_buffers.clear();
     }
     else
     {
@@ -1738,6 +1739,8 @@ void Magewell::free_image_buffers(void)
         m_pinned = false;
     }
 
+    m_image_buffer.reset();
+
     // Reset buffer counters
     m_image_buffers_total = m_image_buffers_avail = 0;
     m_log->info("Image buffers freed.");
@@ -1750,21 +1753,26 @@ void Magewell::free_image_buffers(void)
  *
  * @return true if successful, false otherwise
  */
-bool Magewell::add_eco_image_buffers(void)
+bool Magewell::create_eco_image_buffers(void)
 {
     uint      idx;
 
-    if (m_eco_image_buffers.empty())
+    if (!m_eco_image_buffers.empty())
     {
-        for (idx = 0; idx < m_image_buffers; ++idx)
-        {
-            auto& buf = m_eco_image_buffers.emplace_back
-                        (std::make_unique<MWCAP_VIDEO_ECO_CAPTURE_FRAME>());
-//            buf->deinterlaceMode = MWCAP_VIDEO_DEINTERLACE_BLEND;
-            buf->cbFrame  = m_image_size;
-            buf->cbStride = m_min_stride;
-            buf->bBottomUp = false;
-        }
+        m_log->error("Eco image buffers already allocated!");
+        return false;
+    }
+
+    if (m_verbose > 3)
+        m_log->info("Creating image buffers for Eco capture. Size:{} Stride:{}",
+                    m_image_size, m_min_stride);
+    for (idx = 0; idx < m_image_buffers; ++idx)
+    {
+        auto& buf = m_eco_image_buffers.emplace_back
+                    (std::make_unique<MWCAP_VIDEO_ECO_CAPTURE_FRAME>());
+        buf->cbFrame  = m_image_size;
+        buf->cbStride = m_min_stride;
+        buf->bBottomUp = false;
     }
 
     size_t total_qwords = AllocateImageBuffers();
@@ -1774,13 +1782,12 @@ bool Magewell::add_eco_image_buffers(void)
     if (mlock(m_image_buffer.get(), total_qwords * sizeof(uint64_t)) != 0)
     {
         m_log->warn("Failed to PIN Magewell image buffer memory.");
+        m_log->warn("Performance may by slightly lower.");
         m_log->warn("Perhaps update systemd service file with: "
                     "LimitMEMLOCK=infinity");
         m_log->warn("And/or see /etc/security/limits.conf and set "
                     "to at least {}KB for this user.",
                     total_qwords * sizeof(uint64_t) / 1024);
-
-        m_log->warn("Performance may suffer.");
     }
     else
         m_pinned = true;
@@ -1841,7 +1848,7 @@ bool Magewell::register_eco_image_buffers(void)
  *
  * @return true if successful, false otherwise
  */
-bool Magewell::add_pro_image_buffers(void)
+bool Magewell::create_pro_image_buffers(void)
 {
     if (AllocateImageBuffers() == 0)
         return false;
@@ -1890,6 +1897,9 @@ bool Magewell::open_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN & eco_params)
     int idx = 0;
     int ret;
 
+    if (m_verbose > 4)
+        m_log->info("Opening Eco Video");
+
     // Retry up to 5 times if needed
     for (idx = 0; idx < 5; ++idx)
     {
@@ -1930,6 +1940,9 @@ bool Magewell::open_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN & eco_params)
  */
 void Magewell::close_eco_video(void)
 {
+    if (m_verbose > 4)
+        m_log->info("Closing Eco Video");
+
     // Stop capture
     MWStopVideoEcoCapture(m_channel);
 }
@@ -2804,7 +2817,7 @@ bool Magewell::capture_video(void)
                     {
                         free_image_buffers();
 
-                        if (!add_eco_image_buffers())
+                        if (!create_eco_image_buffers())
                         {
                             Shutdown();
                             break;
@@ -2818,7 +2831,7 @@ bool Magewell::capture_video(void)
                 if (prev_image_size != m_image_size)
                 {
                     free_image_buffers();
-                    if (!add_pro_image_buffers())
+                    if (!create_pro_image_buffers())
                     {
                         Shutdown();
                         break;
