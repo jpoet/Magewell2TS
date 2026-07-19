@@ -858,7 +858,7 @@ void OutputTS::mux(void)
             }
             else
             {
-                m_log->error("av_interleaved_write_frame stream {} failed: {}",
+                m_log->error("DAMAGED: write frame stream {} failed: {}",
                              stream_id, AVerr2str(ret));
             }
         }

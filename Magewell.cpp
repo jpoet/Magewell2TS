@@ -568,7 +568,10 @@ void Magewell::ListInputs(void)
         prev_channelInfo = channelInfo;
 
         // Display channel information
-        m_log->info("[{}] {}", idx + 1,
+        m_log->info("{}: [{}:{}] {}",
+                    idx + 1,
+                    channelInfo.byBoardIndex,
+                    channelInfo.byChannelIndex + 1,
                     describe_input(hChannel));
 
         // Close channel after use
