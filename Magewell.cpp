@@ -2020,7 +2020,6 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     chrono::steady_clock::time_point current_tm;
     chrono::steady_clock::time_point vidpool_tm = chrono::steady_clock::now();
     int duration;
-    bool tok {false};
 
     // Main capture loop
     while (m_running.load() == true)
@@ -2187,23 +2186,10 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 vidpool_5m_max  = ranges::max_element(vidpool_used_5m);
                 vidpool_10m_max = ranges::max_element(vidpool_used_10m);
 
-                string extra;
-                if (tok)
-                {
-                    chrono::seconds total_duration =
-                        chrono::duration_cast<chrono::seconds>
-                        (chrono::steady_clock::now() - m_start_tm);
-                    extra = format("{:%T} elapsed", total_duration);
-                    tok = false;
-                }
-                else
-                {
-                    uint temperature;
-                    MWGetTemperature(m_channel, &temperature);
-                    extra = format("Temp {:.1f}ºC",
-                                   static_cast<float>(temperature) / 10);
-                    tok = true;
-                }
+                uint temperature;
+                MWGetTemperature(m_channel, &temperature);
+                string extra = format("Temp {:.1f}ºC",
+                                      static_cast<float>(temperature) / 10);
 
                 m_log->info("Mag frame pool used 1m:{:<3d} "
                             "5m:{:<3d} 10m:{:<3d} of {:<3d} "
@@ -2284,7 +2270,6 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
 
     chrono::steady_clock::time_point current_tm;
     chrono::steady_clock::time_point vidpool_tm = chrono::steady_clock::now();
-
     int duration;
 
     // Main capture loop
