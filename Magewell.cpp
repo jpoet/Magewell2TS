@@ -376,19 +376,19 @@ string Magewell::describe_input(HCHANNEL hChannel)
     if (xr != MW_SUCCEEDED ||
         MWGetVideoSignalStatus(hChannel, &vStatus) != MW_SUCCEEDED)
     {
-        return format("{:.1f}ºC Failed to get video signal status.",
+        return format("{:.1f}ºC\n     Failed to get video signal status.",
                       static_cast<float>(temperature) / 10);
     }
 
     // Check if there's a valid signal
     if (!status.bValid)
     {
-        return format("{:.1f}ºC No signal detected on input.",
+        return format("{:.1f}ºC\n     No signal detected on input.",
                       static_cast<float>(temperature) / 10);
     }
 
     // Output basic video signal information
-    string msg = format("{:.1f}ºC Video Signal {}: {}",
+    string msg = format("{:.1f}ºC\n     Video {}: {}",
                         static_cast<float>(temperature) / 10,
                         GetVideoSignal(vStatus.state),
                         GetVideoInputType(status.dwVideoInputType));
@@ -473,7 +473,7 @@ string Magewell::describe_input(HCHANNEL hChannel)
     xr = MWGetAudioSignalStatus(hChannel, &aStatus);
     if (xr == MW_SUCCEEDED)
     {
-        msg += format("\tAudio Signal {}",
+        msg += format("     Audio {}",
                       aStatus.bChannelStatusValid ? "Valid" : "Invalid");
         if (!aStatus.bChannelStatusValid)
             return msg;
@@ -512,10 +512,11 @@ void Magewell::ListInputs(void)
     MWRefreshDevice();
 
     int num_channels = MWGetChannelCount();
+    string desc;
     int idx;
 
     // Display number of channels found
-    m_log->info("{} channels.", num_channels);
+    desc = std::format("{} channels.", num_channels);
 
     // Iterate through all channels
     for (idx = 0; idx < num_channels; ++idx)
@@ -554,29 +555,30 @@ void Magewell::ListInputs(void)
             strcmp(channelInfo.szBoardSerialNo,
                    prev_channelInfo.szBoardSerialNo) != 0)
         {
-            m_log->info("Board: {}"
-                        ", Product: {}"
-                        ", SerialNo: {}\n"
-                        "\tFirmware: {}"
-                        ", Driver: {}",
-                        static_cast<int>(channelInfo.byBoardIndex),
-                        channelInfo.szProductName,
-                        channelInfo.szBoardSerialNo,
-                        channelInfo.dwFirmwareVersion,
-                        channelInfo.dwDriverVersion);
+            desc += std::format("\nBoard: {}"
+                                ", Product: {}"
+                                ", SerialNo: {}\n"
+                                "\tFirmware: {}"
+                                ", Driver: {}\n",
+                                static_cast<int>(channelInfo.byBoardIndex),
+                                channelInfo.szProductName,
+                                channelInfo.szBoardSerialNo,
+                                channelInfo.dwFirmwareVersion,
+                                channelInfo.dwDriverVersion);
         }
         prev_channelInfo = channelInfo;
 
         // Display channel information
-        m_log->info("{}: [{}:{}] {}",
-                    idx + 1,
-                    channelInfo.byBoardIndex,
-                    channelInfo.byChannelIndex + 1,
-                    describe_input(hChannel));
+        desc += std::format("{:3d}: [{}:{}] {}\n",
+                            idx + 1,
+                            channelInfo.byBoardIndex,
+                            channelInfo.byChannelIndex + 1,
+                            describe_input(hChannel));
 
         // Close channel after use
         MWCloseChannel(hChannel);
     }
+    m_log->info(desc);
 }
 
 /**
