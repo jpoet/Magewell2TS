@@ -23,8 +23,4 @@ class PCMStream : public AudioStream
 
     CodecContextPtr m_encoder;
     AudioFifoPtr    m_fifo;
-
-#ifdef DEBUG_TS
-    int64_t         m_mw_ts {AV_NOPTS_VALUE};
-#endif
 };

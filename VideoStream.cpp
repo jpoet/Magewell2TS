@@ -41,7 +41,7 @@ VideoStream::VideoStream(OutputTS& parent, int verbose_level, Args& args,
     {
         m_encoderType = EncoderType::UNKNOWN;
         m_log->critical("Failed to open video encoder.");
-        throw std::runtime_error("Failed to open video encoder.");
+        Shutdown();
     }
 
     CodecParamsPtr codecpar = make_codec_params();
@@ -56,7 +56,15 @@ VideoStream::VideoStream(OutputTS& parent, int verbose_level, Args& args,
 
 VideoStream::~VideoStream(void)
 {
+    stop_frame_preparation();
     close_video();
+}
+
+void VideoStream::Shutdown(void)
+{
+    m_running.store(false);
+    m_empty_avail.notify_all();
+    m_hwframe_used.notify_all();
 }
 
 void VideoStream::close_video(void)
@@ -91,6 +99,62 @@ void VideoStream::close_video(void)
     m_hw_frames_ctx.reset();
 
     m_log->info("VideoStream:Close {}", m_params);
+}
+
+void VideoStream::start_frame_preparation(void)
+{
+    if (m_running.load())
+    {
+        m_log->warn("Frame preparation thread is already arunning.");
+        return;
+    }
+
+    m_running.store(true);
+
+    for (int idx = 0; idx < m_args.buffers; ++idx)
+    {
+        PreparedFrame shell = {
+            .hw_frame = av_frame_alloc(),
+            .mapped   = av_frame_alloc()
+        };
+        m_empty_shells.push_back(shell);
+    }
+
+    // Spawn the worker thread using a member function pointer
+    m_prep_thread = std::thread(&VideoStream::prepare_frames, this);
+    pthread_setname_np(m_prep_thread.native_handle(), "gpubuf");
+    m_log->info("Started frame preparation thread.");
+}
+
+void VideoStream::stop_frame_preparation(void)
+{
+    if (!m_running.load() && !m_prep_thread.joinable())
+        return;
+
+    m_log->info("Stopping frame preparation thread...");
+    m_running.store(false);
+    m_hwframe_used.notify_all();
+    m_empty_avail.notify_all();
+
+    if (m_prep_thread.joinable())
+        m_prep_thread.join();
+
+    // Purge and free any leftover frames remaining in the queue
+    {
+        std::unique_lock<std::mutex> lock(m_hwframe_mutex);
+        while (!m_preped_frames.empty())
+        {
+            PreparedFrame item = m_preped_frames.front();
+            m_preped_frames.pop_front();
+
+            if (item.mapped)
+                av_frame_free(&item.mapped);
+            if (item.hw_frame)
+                av_frame_free(&item.hw_frame);
+        }
+    }
+
+    m_log->info("Frame preparation thread fully stopped and queue flushed.");
 }
 
 /*
@@ -453,6 +517,8 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
         return false;
     }
 
+    start_frame_preparation();
+
     // Explicitly unref the encoder's old context if it exists to avoid leakage
     if (m_encoder->hw_frames_ctx)
     {
@@ -471,6 +537,7 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
     {
         m_log->critical("Fatal Error: VAAPI codec activation rejected "
                         "by system kernel: {}", AVerr2str(ret));
+        Shutdown();
         return false;
     }
 
@@ -630,6 +697,8 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
         return false;
     }
 
+    start_frame_preparation();
+
     if (m_encoder->hw_frames_ctx)
     {
         av_buffer_unref(&m_encoder->hw_frames_ctx);
@@ -643,6 +712,7 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     {
         m_log->critical("Fatal Error: Intel QSV codec activation rejected "
                         "by system kernel: {}", AVerr2str(ret));
+        Shutdown();
         return false;
     }
 
@@ -655,23 +725,43 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
 
 bool VideoStream::EncodeFrame(void)
 {
-    AVFrame* frame;
+    PreparedFrame job;
     {
-        std::scoped_lock lock(m_queue_mutex);
-        if (m_frames.empty())
+        std::unique_lock<std::mutex> lock(m_queue_mutex);
+        if (m_active_frames.empty())
             return false;
-        frame = m_frames.front();
-        m_frames.pop_front();
+
+        job = m_active_frames.front();
+        m_active_frames.pop_front();
     }
 
     bool result = m_parent.EncodeFrame(OutputTS::VIDEO_STREAM_ID,
                                        m_version,
-#ifdef DEBUG_TS
-                                       frame->pts,
-#endif
-                                       m_encoder.get(), frame);
+                                       m_encoder.get(), job.hw_frame);
 
-    av_frame_free(&frame);
+    if (job.mapped == nullptr)
+    {
+        // NVIDIA / HOST-MAPPED PATH:
+        // Freeing the frame shell decrements buf[0]'s reference counter.
+        // When the Nvidia driver finishes encoding, the refcount hits zero and
+        // Magewell callback fires automatically downstream.
+        av_frame_free(&job.hw_frame);
+    }
+    else
+    {
+        // Clear out the frame data references without destroying the
+        // memory shells This detaches the underlying Intel QSV surface
+        // buffers from the frame struct shells.
+        av_frame_unref(job.mapped);
+        av_frame_unref(job.hw_frame);
+
+        // Recycle the clean shells back to the preparation pool
+        {
+            std::unique_lock<std::mutex> lock(m_pool_mutex);
+            m_empty_shells.push_back(job); // Return to the start of the factory
+        }
+        m_empty_avail.notify_one();    // Wake up PrepareFrames to map it again
+    }
 
     if (!result)
     {
@@ -682,44 +772,137 @@ bool VideoStream::EncodeFrame(void)
     return true;
 }
 
-int VideoStream::AddImage(Image&& image)
+bool VideoStream::HasActiveFrames(void) const
+{
+    std::scoped_lock lock(m_queue_mutex);
+    return !m_active_frames.empty();
+}
+
+void VideoStream::prepare_frames(void)
+{
+    while (m_running.load())
+    {
+        PreparedFrame job;
+        {
+            std::unique_lock<std::mutex> lock(m_pool_mutex);
+            m_empty_avail.wait(lock, [this]() {
+                return !m_running.load() || !m_empty_shells.empty();
+            });
+
+            if (!m_running.load())
+                return;
+
+            job = m_empty_shells.front();
+            m_empty_shells.pop_front();
+        }
+
+        for (;;)
+        {
+            // Initialize the empty shell container with hardware assets
+            av_frame_unref(job.mapped);
+            av_frame_unref(job.hw_frame);
+
+            int ret = av_hwframe_get_buffer(m_hw_frames_ctx.get(),
+                                            job.hw_frame, 0);
+            if (ret == 0)
+                break;
+
+            if (ret != AVERROR(ENOMEM))
+            {
+                m_log->error("av_hwframe_get_buffer failed: {}",
+                             AVerr2str(ret));
+            }
+
+            {
+                std::unique_lock<std::mutex> lock(m_hwframe_mutex);
+
+                m_hwframe_used.wait_for(lock, std::chrono::milliseconds(3),
+                                        [this]() { return !m_running.load(); });
+            }
+
+            if (!m_running.load())
+            {
+                m_log->info("Frame preparation loop aborted via "
+                            "shutdown signal.");
+                av_frame_free(&job.hw_frame);
+                return;
+            }
+        }
+
+        int ret = av_hwframe_map(job.mapped, job.hw_frame,
+                                 AV_HWFRAME_MAP_WRITE |
+                                 AV_HWFRAME_MAP_OVERWRITE |
+                                 AV_HWFRAME_MAP_DIRECT);
+        if (ret < 0)
+        {
+            m_log->error("av_hwframe_map failed: {}", AVerr2str(ret));
+
+            av_frame_free(&job.mapped);
+            av_frame_free(&job.hw_frame);
+            return;
+        }
+
+        {
+            std::unique_lock<std::mutex> lock(m_pool_mutex);
+            m_preped_frames.push_back(job);
+        }
+        // Tell AddImage that a valid mapped frame is ready!
+        m_preped_avail.notify_one();
+#if 0
+        m_log->info("prepped {} used {}",
+                    m_preped_frames.size(),
+                    m_active_frames.size());
+#endif
+    }
+    return;
+}
+
+VideoStream::StatsResult VideoStream::AddImage(Image&& image)
 {
     if (!m_encoder || (m_params.encoder_type != NV && !m_hw_frames_ctx))
     {
         m_log->warn("Video encoder is not initialized or open");
         f_image_avail(image.pImage, image.pEco);
+        Shutdown();
         return -1;
     }
 
-    AVFrame* hw_frame = av_frame_alloc();
-    if (!hw_frame)
+    // Map incoming Magewell buffer arrays
+    uint8_t* src_data[4] = { nullptr };
+    int src_linesize[4] = { 0 };
+
+    int size_bytes = av_image_fill_arrays(src_data, src_linesize, image.pImage,
+                                          m_sw_pix_fmt, m_params.width,
+                                          m_params.height, 1);
+    if (size_bytes < 0)
     {
-        m_log->critical("Failed to allocate hw_frame.");
+        m_log->error("av_image_fill_arrays failed: {}", AVerr2str(size_bytes));
+        // Release Magewell buffer first to prevent device-side deadlocks
         f_image_avail(image.pImage, image.pEco);
+        Shutdown();
         return -1;
     }
 
-    AVFrame* mapped = nullptr;
+    PreparedFrame hw;
 
     if (m_params.encoder_type == NV)
     {
-        hw_frame->width  = m_params.width;
-        hw_frame->height = m_params.height;
-        hw_frame->format = m_sw_pix_fmt;
-
-        // Directly fill the AVFrame plane data arrays with Magewell pointers
-        int size_bytes = av_image_fill_arrays(hw_frame->data,
-                                              hw_frame->linesize, image.pImage,
-                                              m_sw_pix_fmt, m_params.width,
-                                              m_params.height, 1);
-        if (size_bytes < 0)
+        hw.hw_frame = av_frame_alloc();
+        if (!hw.hw_frame)
         {
-            m_log->error("av_image_fill_arrays failed for Nvidia mapping: {}",
-                         AVerr2str(size_bytes));
-            av_frame_free(&hw_frame);
+            m_log->critical("Failed to allocate Nvidia hw_frame shell.");
             f_image_avail(image.pImage, image.pEco);
+            Shutdown();
             return -1;
         }
+        hw.mapped = nullptr;
+
+        hw.hw_frame->width  = m_params.width;
+        hw.hw_frame->height = m_params.height;
+        hw.hw_frame->format = m_sw_pix_fmt;
+
+        std::memcpy(hw.hw_frame->data, src_data, sizeof(src_data));
+        std::memcpy(hw.hw_frame->linesize, src_linesize, sizeof(src_linesize));
 
         // Set up the cleanup context
         struct NvidiaCleanupContext {
@@ -733,7 +916,7 @@ int VideoStream::AddImage(Image&& image)
                                              f_image_avail);
 
         // Bind the callback directly to the frame reference tracking array
-        hw_frame->buf[0] = av_buffer_create(
+        hw.hw_frame->buf[0] = av_buffer_create(
             image.pImage, size_bytes,
             [](void* opaque, uint8_t*) {
                 auto* c = reinterpret_cast<NvidiaCleanupContext*>(opaque);
@@ -745,77 +928,37 @@ int VideoStream::AddImage(Image&& image)
     }
     else
     {
-        int ret = av_hwframe_get_buffer(m_hw_frames_ctx.get(), hw_frame, 0);
-        if (ret == AVERROR(ENOMEM))
         {
-            av_frame_free(&hw_frame);
-            return 0;
-        }
-        if (ret < 0)
-        {
-            av_frame_free(&hw_frame);
-            f_image_avail(image.pImage, image.pEco);
-            return -1;
-        }
+            std::unique_lock<std::mutex> lock(m_pool_mutex);
+            m_preped_avail.wait(lock, [this]() {
+                return !m_running.load() || !m_preped_frames.empty();
+            });
 
-        mapped = av_frame_alloc();
-        if (!mapped)
-        {
-            m_log->error("Failed to allocate mapped frame reference structure");
-            av_frame_free(&hw_frame);
-            f_image_avail(image.pImage, image.pEco);
-            return -1;
+            if (!m_running.load())
+                return -1;
+
+            hw = m_preped_frames.front();
+            m_preped_frames.pop_front();
         }
 
-        ret = av_hwframe_map(mapped, hw_frame,
-                             AV_HWFRAME_MAP_WRITE | AV_HWFRAME_MAP_OVERWRITE);
-        if (ret < 0)
-        {
-            m_log->error("av_hwframe_map failed: {}", AVerr2str(ret));
-            av_frame_free(&mapped);
-            av_frame_free(&hw_frame);
-            f_image_avail(image.pImage, image.pEco);
-            return -1;
-        }
-
-        // Build the plane slice mapping matrices for QSV
-        uint8_t* src_data[4] = { nullptr };
-        int src_linesize[4] = { 0 };
-
-        ret = av_image_fill_arrays(src_data, src_linesize, image.pImage,
-                                   m_sw_pix_fmt, m_params.width,
-                                   m_params.height, 1);
-        if (ret < 0)
-        {
-            m_log->error("av_image_fill_arrays failed: {}", AVerr2str(ret));
-            av_frame_free(&mapped);
-            av_frame_free(&hw_frame);
-            f_image_avail(image.pImage, image.pEco);
-            return -1;
-        }
-
-        // Direct software memory block transfer
-        av_image_copy(mapped->data, mapped->linesize,
+        // Direct memory block transfer into the mapped staging area
+        av_image_copy(hw.mapped->data, hw.mapped->linesize,
                       const_cast<const uint8_t**>(src_data), src_linesize,
                       m_sw_pix_fmt, m_params.width, m_params.height);
 
-        // Release Magewell buffer
+        // Release Magewell frame buffer after copying is complete
         f_image_avail(image.pImage, image.pEco);
-        if (mapped)
-        {
-            av_frame_free(&mapped);
-        }
     }
 
     // Metadata injection
-    hw_frame->colorspace      = m_params.color.space;
-    hw_frame->color_primaries = m_params.color.primaries;
-    hw_frame->color_trc       = m_params.color.trc;
-    hw_frame->color_range     = m_params.color.range;
+    hw.hw_frame->colorspace      = m_params.color.space;
+    hw.hw_frame->color_primaries = m_params.color.primaries;
+    hw.hw_frame->color_trc       = m_params.color.trc;
+    hw.hw_frame->color_range     = m_params.color.range;
 
     // Set Presentation Timestamps
-    hw_frame->pts = av_rescale_q(image.timestamp, TimeBase::Magewell,
-                                 m_encoder->time_base);
+    hw.hw_frame->pts = av_rescale_q(image.timestamp, TimeBase::Magewell,
+                                    m_encoder->time_base);
 
     // Inject HDR metadata properties safely if present
     if (m_params.color.is_HDR)
@@ -823,7 +966,7 @@ int VideoStream::AddImage(Image&& image)
         if (m_display_primaries)
         {
             AVMasteringDisplayMetadata* primaries =
-                av_mastering_display_metadata_create_side_data(hw_frame);
+                av_mastering_display_metadata_create_side_data(hw.hw_frame);
             if (primaries)
             {
                 *primaries = *m_display_primaries;
@@ -833,7 +976,7 @@ int VideoStream::AddImage(Image&& image)
         if (m_content_light)
         {
             AVContentLightMetadata* light =
-                av_content_light_metadata_create_side_data(hw_frame);
+                av_content_light_metadata_create_side_data(hw.hw_frame);
             if (light)
             {
                 *light = *m_content_light;
@@ -841,9 +984,10 @@ int VideoStream::AddImage(Image&& image)
         }
     }
 
-    std::scoped_lock lock(m_queue_mutex);
-    m_frames.push_back(hw_frame);
-    hw_frame = nullptr;
-
-    return m_frames.size();
+    // Push hwframe/mapped into the queue for the encoder thread
+    {
+        std::scoped_lock lock(m_queue_mutex);
+        m_active_frames.push_back(hw);
+        return Stats{m_active_frames.size(), m_preped_frames.size()};
+    }
 }

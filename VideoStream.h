@@ -1,10 +1,18 @@
 #pragma once
 
+#include <thread>
+#include <atomic>
+#include <mutex>
+#include <condition_variable>
+
 #include <string>
 #include <utility>
 #include <optional>
 #include <functional>
 #include <deque>
+
+#include <variant>
+#include <utility>
 
 #include <spdlog/spdlog.h>
 #ifdef SPDLOG_FMT_EXTERNAL
@@ -63,7 +71,7 @@ class VideoStream
         std::string preset { };
         int quality       { 25 };
         int lookahead     { 35 };
-        int buffers       {  4 };
+        int buffers       { 10 };
         int extraHWframes { 32 };
         float gopSecs     { 1.5 };
         int idrInterval   {  0  };
@@ -94,7 +102,20 @@ class VideoStream
         std::optional<Params> oParams;
     };
     using imageque_t = std::deque<Image>;
-    using frameque_t = std::deque<AVFrame*>;
+
+    struct PreparedFrame
+    {
+        AVFrame* hw_frame;
+        AVFrame* mapped;
+    };
+    using hw_frame_t = std::deque<PreparedFrame>;
+
+    struct Stats
+    {
+        size_t used;
+        size_t ready;
+    };
+    using StatsResult = std::variant<VideoStream::Stats, int>;
 
     VideoStream(OutputTS& parent, int verbose_level, Args& args,
                 Params&& params, MagCallback image_buffer_avail,
@@ -107,7 +128,10 @@ class VideoStream
     VideoStream(VideoStream&&) = default;
     VideoStream& operator=(VideoStream&&) = default;
 
-    int  AddImage(Image&& image);
+    void Shutdown(void);
+
+    bool HasActiveFrames(void) const;
+    StatsResult AddImage(Image&& image);
     bool EncodeFrame(void);
 
     std::string ColorSpaceDesc(void) const
@@ -119,6 +143,10 @@ class VideoStream
     bool open_nvidia(const AVCodec* codec, AVDictionary** opt_arg);
     bool open_vaapi(const AVCodec* codec, AVDictionary** opt_arg);
     bool open_qsv(const AVCodec* codec, AVDictionary** opt_arg);
+
+    void start_frame_preparation(void);
+    void stop_frame_preparation(void);
+    void prepare_frames(void);
 
     void set_light(const ColorSpace& color);
 
@@ -142,13 +170,28 @@ class VideoStream
 
     enum AVPixelFormat m_sw_pix_fmt {AV_PIX_FMT_NV12};
 
+    hw_frame_t m_empty_shells;   // Wiped containers waiting for GPU mapping
+    hw_frame_t m_preped_frames;
+    hw_frame_t m_active_frames;
+
     // HDR
     MasteringDisplayMetadataPtr m_display_primaries;
     ContentLightMetadataPtr m_content_light;
 
-    frameque_t  m_frames;
-    std::mutex  m_queue_mutex;
     MagCallback f_image_avail;
+
+    std::mutex          m_pool_mutex;      // Protects m_empty_shells & m_preped_frames
+    std::condition_variable m_empty_avail; // Signaled when an empty shell is returned
+    std::condition_variable m_preped_avail; // Signaled when a fresh GPU frame is ready
+
+    mutable std::mutex      m_queue_mutex;  // Protects m_active_frames
+
+    // Thread management
+    std::mutex m_hwframe_mutex;    // Controls access to m_preped_frames
+    std::condition_variable m_hwframe_used; // Signaled when m_preped_frames has space/items
+
+    std::thread       m_prep_thread;
+    std::atomic<bool> m_running      {false};
 };
 
 // Custom format specification for spdlog / libfmt

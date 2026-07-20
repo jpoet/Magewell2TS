@@ -15,8 +15,6 @@
 
 #include "ffmpeg_types.h"
 
-// #define DEBUG_TS
-
 namespace TimeBase
 {
 inline constexpr AVRational MPEG_TS  {1, 90000};
@@ -34,11 +32,6 @@ struct Packet
 
     AVRational time_base {0, 1};
     AVRational frame_duration {0, 1};
-
-#ifdef DEBUG_TS
-    int64_t  mw_ts {AV_NOPTS_VALUE};
-    int64_t  enc_ts {AV_NOPTS_VALUE};
-#endif
 
     PacketPtr pkt;
     CodecParamsPtr codec_par;

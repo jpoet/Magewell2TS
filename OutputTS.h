@@ -50,9 +50,6 @@ class OutputTS
     void setHaveAudio(void) { m_no_audio = false; }
 
     bool EncodeFrame(int stream_id, int version,
-#ifdef DEBUG_TS
-                     int64_t mw_ts,
-#endif
                      AVCodecContext* enc, AVFrame* frame);
     bool FlushPackets(int stream_id, int version, AVCodecContext* enc);
 
@@ -69,10 +66,6 @@ class OutputTS
     void sync_markers(void);
     void mux(void);
     bool queue_packets(int stream_id, int version,
-#ifdef DEBUG_TS
-                       int64_t mw_ts,
-                       int64_t enc_ts,
-#endif
                        AVCodecContext* enc,
                        MediaQueue& pktQ, bool flushing);
     void process_video(void);
@@ -86,11 +79,16 @@ class OutputTS
     std::shared_ptr<spdlog::logger> m_log;
     int                     m_verbose;
 
+    struct PoolSnapshot {
+        size_t total = 0;
+        size_t used  = 0;
+        size_t ready = 0;
+    };
+
     uint m_generation {0};
 
     std::shared_ptr<VideoStream> m_videoStream {nullptr};
     std::mutex            m_videoStream_mutex;
-    std::atomic<int>      m_videoQsize  {0};
 
     std::optional<Packet> m_video_marker;
     std::optional<Packet> m_audio_marker;

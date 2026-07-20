@@ -1998,7 +1998,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
 
     float    skipped_frame_cnt = 0;
     float    skipped = 0;
-    int      quarter_dur = eco_params.llFrameDuration / 4;
+    int      eighth_dur = eco_params.llFrameDuration / 8;
 
     MWCAP_VIDEO_SIGNAL_STATUS videoSignalStatus;
     MWCAP_VIDEO_ECO_CAPTURE_STATUS eco_status;
@@ -2024,25 +2024,9 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     // Main capture loop
     while (m_running.load() == true)
     {
-        // Check signal lock status
-        MWGetVideoSignalStatus(m_channel, &videoSignalStatus);
-        if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
-        {
-            if (m_frame_cnt > 2000)
-            {
-                m_log->warn("DAMAGED: Video signal lost lock. (frame {})",
-                            m_frame_cnt);
-            }
-            this_thread::sleep_for(chrono::milliseconds(5));
-            return false;
-        }
-
         // Wait for notification
-        if (EcoEventWait(eco_event, m_frame_ms2) <= 0)
+        if (EcoEventWait(eco_event, -1) <= 0)
         {
-            if (m_verbose > 1)
-                m_log->info("Waiting for video data (frame {})",
-                            m_frame_cnt);
             continue;
         }
 
@@ -2066,12 +2050,30 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             return false;
         }
 
+        if (!(ullStatusBits & MWCAP_NOTIFY_VIDEO_FRAME_BUFFERED))
+        {
+            continue;
+        }
+
         // Get capture status
         ret = MWGetVideoEcoCaptureStatus(m_channel, &eco_status);
         if (MW_SUCCEEDED != ret
             || eco_status.pvFrame == reinterpret_cast<MWCAP_PTR>(nullptr))
         {
-            this_thread::sleep_for(chrono::milliseconds(1));
+
+        // Check signal lock status
+        MWGetVideoSignalStatus(m_channel, &videoSignalStatus);
+        if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
+        {
+            if (m_frame_cnt > 2000)
+            {
+                m_log->warn("DAMAGED: Video signal lost lock. (frame {})",
+                            m_frame_cnt);
+            }
+            this_thread::sleep_for(chrono::milliseconds(5));
+            return false;
+        }
+
             continue;
         }
 
@@ -2080,6 +2082,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         timestamp = eco_status.llTimestamp;
         ++m_frame_cnt;
         --m_image_buffers_avail;
+        used = m_image_buffers_total - m_image_buffers_avail;
 
         if (m_expected_ts == -1 && timestamp < 0)
         {
@@ -2088,8 +2091,8 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             continue;
         }
         else if (m_expected_ts > 0 &&
-                 (timestamp < m_expected_ts - quarter_dur ||
-                  m_expected_ts + quarter_dur < timestamp))
+                 (timestamp < m_expected_ts - eighth_dur ||
+                  m_expected_ts + eighth_dur < timestamp))
         {
             if (timestamp < 0)
             {
@@ -2133,16 +2136,20 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                         {
                             skipped_frame_cnt += skipped;
                             if (skipped_frame_cnt > 1 && m_frame_cnt > 2000)
+                            {
                                 m_log->warn("DAMAGED: Magewell lost {:.0f} "
                                             "video frames, "
                                             "have skipped {:.0f} : {}",
                                             skipped, skipped_frame_cnt,
                                             m_frame_cnt);
+                            }
                             else
+                            {
                                 m_log->warn("Magewell lost {:.0f} video "
                                             "frames, have skipped {:.0f} : {}",
                                             skipped, skipped_frame_cnt,
                                             m_frame_cnt);
+                            }
                         }
                     }
                     else
@@ -2191,8 +2198,8 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 string extra = format("Temp {:.1f}ºC",
                                       static_cast<float>(temperature) / 10);
 
-                m_log->info("Mag frame pool used 1m:{:<3d} "
-                            "5m:{:<3d} 10m:{:<3d} of {:<3d} "
+                m_log->info("Mag pool used 1m:{:<5d} "
+                            "5m:{:<5d} 10m:{:<5d} of {:<3d} "
                             "({})",
                             vidpool_used_1m, *vidpool_5m_max,
                             *vidpool_10m_max, m_image_buffers_total,
@@ -2291,11 +2298,6 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         // Wait for notification
         if (MWWaitEvent(notify_event, m_frame_ms) <= 0)
         {
-#if 0
-            if (m_verbose > 1)
-                m_log->info("Waiting for video data (frame {})",
-                            m_frame_cnt);
-#endif
             continue;
         }
 
@@ -2315,9 +2317,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         if (ullStatusBits & MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE)
         {
             if (m_frame_cnt > 2000)
-            {
                 m_log->warn("DAMAGED: Pro lost video sync.");
-            }
             return false;
         }
 
@@ -2994,7 +2994,7 @@ bool Magewell::Capture(VideoStream::Args&& video_args,
         }
 
         struct sched_param video_param;
-        video_param.sched_priority = 10;
+        video_param.sched_priority = 20;
         int v_result = pthread_setschedparam(pthread_self(),
                                              SCHED_RR, &video_param);
         if (v_result != 0)

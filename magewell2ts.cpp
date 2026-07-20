@@ -100,8 +100,8 @@ void show_help(string_view app)
          << "--p010             : Force p010 (10bit) video format.\n"
          << "--gop_secs (-g)    : GOP size in seconds [1.5] (0 to disable)\n"
          << "--idr-interval     : Frequency that keyframe will be IDR [0]\n"
-         << "--gpu-buffers      : GPU video buffers count [4]\n"
-         << "--video-buffers    : Video buffers count (RAM) [12]\n"
+         << "--gpu-buffers      : GPU video buffers count [10]\n"
+         << "--video-buffers    : Video buffers count (RAM) [16]\n"
          << "--extra-hw-frames  : Extra HW frames used for encoding [32]\n"
          << "--write-edid (-w)  : Write EDID info from file to input\n"
          << "--wait-for         : Wait for given number of inputs to be initialized. 10 second timeout\n"
@@ -262,7 +262,7 @@ int main(int argc, char* argv[])
     bool        write_edid  = false;
     bool        no_audio      = false;
 
-    int         video_buffers = 12;
+    int         video_buffers = 16;
     VideoStream::Args  video_args;
 
 

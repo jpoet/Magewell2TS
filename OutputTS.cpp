@@ -425,10 +425,6 @@ void OutputTS::close_container(void)
 }
 
 bool OutputTS::queue_packets(int stream_id, int version,
-#ifdef DEBUG_TS
-                             int64_t mw_ts,
-                             int64_t enc_ts,
-#endif
                              AVCodecContext* enc,
                              MediaQueue& pktQ, bool flushing)
 {
@@ -498,10 +494,6 @@ bool OutputTS::queue_packets(int stream_id, int version,
                 .stream_id    = stream_id,
                 .version      = version,
                 .time_base    = enc->time_base,
-#ifdef DEBUG_TS
-                .mw_ts        = mw_ts,
-                .enc_ts       = enc_ts,
-#endif
                 .pkt          = std::move(pkt),
                 .codec_par    = nullptr
             };
@@ -514,9 +506,6 @@ bool OutputTS::queue_packets(int stream_id, int version,
 }
 
 bool OutputTS::EncodeFrame(int stream_id, int version,
-#ifdef DEBUG_TS
-                           int64_t mw_ts,
-#endif
                            AVCodecContext* enc, AVFrame* frame)
 {
     if (!enc)
@@ -525,10 +514,6 @@ bool OutputTS::EncodeFrame(int stream_id, int version,
     MediaQueue& pktQ = (stream_id == AUDIO_STREAM_ID)
                        ? m_audioPktQ
                        : m_videoPktQ;
-
-#ifdef DEBUG_TS
-    int64_t enc_ts = frame->pts;
-#endif
 
     for (;;)
     {
@@ -540,10 +525,6 @@ bool OutputTS::EncodeFrame(int stream_id, int version,
         {
             // The encoder accepted ownership of the frame buffers.
             return queue_packets(stream_id, version,
-#ifdef DEBUG_TS
-                                 mw_ts,
-                                 enc_ts,
-#endif
                                  enc, pktQ, false);
         }
 
@@ -555,10 +536,6 @@ bool OutputTS::EncodeFrame(int stream_id, int version,
                         "Flushing packets to clear space.");
 
             if (!queue_packets(stream_id, version,
-#ifdef DEBUG_TS
-                               mw_ts,
-                               enc_ts,
-#endif
                                enc, pktQ, false))
             {
                 m_log->error("Failed draining packets during EAGAIN "
@@ -574,10 +551,6 @@ bool OutputTS::EncodeFrame(int stream_id, int version,
         if (ret == AVERROR_EOF)
         {
             return queue_packets(stream_id, version,
-#ifdef DEBUG_TS
-                                 mw_ts,
-                                 enc_ts,
-#endif
                                  enc, pktQ, false);
         }
 
@@ -618,10 +591,6 @@ bool OutputTS::FlushPackets(int stream_id, int version, AVCodecContext* enc)
     }
 
     queue_packets(stream_id, version,
-#ifdef DEBUG_TS
-                  AV_NOPTS_VALUE,
-                  AV_NOPTS_VALUE,
-#endif
                   enc, pktQ, true);
     m_log->debug("flush_packets id={} version={} Finished, PktQ size {}",
                 stream_id, version, pktQ.GetSize());
@@ -666,27 +635,11 @@ void OutputTS::sync_markers(void)
 
 void OutputTS::mux(void)
 {
-#ifdef DEBUG_TS
-    struct StreamState {
-        int     stream_id{-1};
-        int64_t pts{AV_NOPTS_VALUE};
-        int64_t dts{AV_NOPTS_VALUE};
-        int64_t dur{0};
-        AVRational enc_tb;
-        int64_t  mw_ts {AV_NOPTS_VALUE};
-        int64_t  enc_ts {AV_NOPTS_VALUE};
-    };
-    using StreamStateQ = deque<StreamState>;
-    std::unordered_map<int, StreamStateQ> tracks;
-
-    StreamStateQ globalQ;
-#else
     struct StreamState {
         int     stream_id{-1};
         int64_t pts{AV_NOPTS_VALUE};
         int64_t dts{AV_NOPTS_VALUE};
     } prev_state;
-#endif
 
     for (;;)
     {
@@ -694,25 +647,31 @@ void OutputTS::mux(void)
 
         {
             std::unique_lock<std::mutex> cv_lock(m_pktQ_mutex);
-            m_pktQ_ready.wait(cv_lock, [this] {
-                return (!m_running || !m_videoPktQ.IsEmpty() ||
-                        m_videoQsize.load(std::memory_order_acquire) > 0);
-            });
-        }
+            m_pktQ_ready.wait(cv_lock, [this, &vidStream] {
+                if (!m_running)
+                    return true;
+                if (!m_videoPktQ.IsEmpty())
+                    return true;
 
-        if (m_videoQsize.load(std::memory_order_relaxed) > 0)
-        {
-            std::scoped_lock lock(m_videoStream_mutex);
-            if (m_videoStream)
-                vidStream = m_videoStream;
+                std::scoped_lock lock(m_videoStream_mutex);
+                if (m_videoStream)
+                {
+                    if (m_videoStream->HasActiveFrames())
+                    {
+                        // Cache the pointer for work outside the lock
+                        vidStream = m_videoStream;
+                        return true;
+                    }
+                }
+                return false;
+            });
         }
 
         if (vidStream)
         {
-            if (vidStream->EncodeFrame())
-                m_videoQsize.fetch_sub(1, std::memory_order_release);
-            else
-                m_videoQsize.store(0, std::memory_order_release);
+            while (vidStream->EncodeFrame())
+                ;
+            vidStream.reset();
         }
 
         if (m_videoPktQ.IsEmpty())
@@ -761,15 +720,6 @@ void OutputTS::mux(void)
             continue;
         }
 
-#ifdef DEBUG_TS
-        auto& stateQ = tracks[stream_id];
-        StreamState prev_state;
-        if (stateQ.empty())
-            prev_state = StreamState {};
-        else
-            prev_state = stateQ.back();
-#endif
-
         // Non-monotonic Timestamp Protection
         if (prev_state.dts != AV_NOPTS_VALUE && pkt->dts <= prev_state.dts)
         {
@@ -792,23 +742,11 @@ void OutputTS::mux(void)
                      stream_id, outPkt->version, pkt->pts, pkt->dts,
                      pkt->duration, pkt->size);
 
-#ifdef DEBUG_TS
-        StreamState state = StreamState {
-            .stream_id = stream_id,
-            .pts = pkt->pts,
-            .dts = pkt->dts,
-            .dur = pkt->duration,
-            .enc_tb = outPkt->time_base,
-            .mw_ts = outPkt->mw_ts,
-            .enc_ts = outPkt->enc_ts
-        };
-#else
         StreamState state = StreamState {
             .stream_id = stream_id,
             .pts = pkt->pts,
             .dts = pkt->dts
         };
-#endif
 
 #if 0
         int ret = av_interleaved_write_frame(m_formatContext, pkt.get());
@@ -824,37 +762,6 @@ void OutputTS::mux(void)
                             stream_id, prev_state.pts, state.pts,
                             prev_state.dts, state.dts,
                             AVerr2str(ret));
-#ifdef DEBUG_TS
-                int64_t prev_dts = state.dts;
-                m_log->info("Previous 10:");
-                for (auto &st : stateQ)
-                {
-                    m_log->info("dts:{} diff:{} pts:{} dur:{} "
-                                "Magewell TS:{} TB:{}/{} "
-                                "Encoder TS:{} TB:{}/{} "
-                                "Stream TB:{}/{}",
-                                st.dts, prev_dts - st.dts, st.pts, st.dur,
-                                st.mw_ts, 1, 10000000,
-                                st.enc_ts, st.enc_tb.num, st.enc_tb.den,
-                                1, 90000);
-
-                    prev_dts = st.dts;
-                }
-
-                m_log->info("Previous a/v mix:");
-                for (auto &st : globalQ)
-                {
-                    m_log->info("[{}] dts:{} pts:{} dur:{} "
-                                "Magewell TS:{} TB:{}/{} "
-                                "Encoder TS:{} TB:{}/{} "
-                                "Stream TB:{}/{}",
-                                st.stream_id,
-                                st.dts, st.pts, st.dur,
-                                st.mw_ts, 1, 10000000,
-                                st.enc_ts, st.enc_tb.num, st.enc_tb.den,
-                                1, 90000);
-                }
-#endif
             }
             else
             {
@@ -864,17 +771,7 @@ void OutputTS::mux(void)
         }
         else
         {
-#ifdef DEBUG_TS
-            // Cache state parameters for the next frame iteration on this track
-            stateQ.push_back(state);
-            if (stateQ.size() > 20)
-                stateQ.pop_front();
-            globalQ.push_back(state);
-            if (globalQ.size() > 40)
-                globalQ.pop_front();
-#else
             prev_state = state;
-#endif
         }
     }
 }
@@ -992,20 +889,21 @@ void OutputTS::AddAudioSamples(AudioStream::Samples&& samples)
 // Thread entry
 void OutputTS::process_video(void)
 {
-    int            vidpool_used_1m  {0};
-    array<int, 5>  vidpool_used_5m  {0};
-    array<int, 10> vidpool_used_10m {0};
-    int            vidpool_5m_idx   {0};
-    int            vidpool_10m_idx  {0};
-    array<int, 5>::iterator  vidpool_5m_max;
-    array<int, 10>::iterator vidpool_10m_max;
-    chrono::seconds total_duration;
+    OutputTS::PoolSnapshot      vidpool_used_1m  {0, 0, 0};
+    std::array<OutputTS::PoolSnapshot, 5>  vidpool_used_5m  {};
+    std::array<OutputTS::PoolSnapshot, 10> vidpool_used_10m {};
+    int               vidpool_5m_idx   {0};
+    int               vidpool_10m_idx  {0};
 
-    int used = 0;
+    std::ranges::iterator_t<std::array<OutputTS::PoolSnapshot, 5>>
+        vidpool_5m_max;
+    std::ranges::iterator_t<std::array<OutputTS::PoolSnapshot, 10>>
+        vidpool_10m_max;
 
-    chrono::steady_clock::time_point start_tm   = chrono::steady_clock::now();
-    chrono::steady_clock::time_point vidpool_tm = start_tm;
-    chrono::steady_clock::time_point current_tm;
+    std::chrono::seconds total_duration;
+    std::chrono::steady_clock::time_point start_tm   = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point vidpool_tm = start_tm;
+    std::chrono::steady_clock::time_point current_tm;
     int duration;
 
     for (;;)
@@ -1041,81 +939,83 @@ void OutputTS::process_video(void)
                              std::move(*image.oParams),
                              f_image_avail,
                              image.timestamp);
-
-            m_videoQsize.exchange(0, std::memory_order_acq_rel);
         }
 
-        while (m_running.load())
+#if 0
+        auto encode_start = chrono::steady_clock::now();
+#endif
+
+        VideoStream::StatsResult result =
+            m_videoStream->AddImage(std::move(image));
+        if (std::holds_alternative<int>(result))
         {
-            if (m_videoQsize.load(std::memory_order_acquire) <
-                m_video_args.buffers)
-            {
-                int res;
-
-                if ((res = m_videoStream->AddImage(std::move(image))) < 0)
-                {
-                    Shutdown();
-                }
-                if (res > 0)
-                {
-                    used = m_videoQsize.fetch_add(1, std::memory_order_release)
-                           + 1; // Returns the previous value
-                    break;
-                }
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            Shutdown();
+            break;
         }
-        m_pktQ_ready.notify_one();
+        auto [used, ready] = std::get<VideoStream::Stats>(result);
 
+#if 0
+        auto encode_end = chrono::steady_clock::now();
+        auto encode_dur = chrono::duration_cast<chrono::microseconds>
+                          (encode_end - encode_start).count();
+        m_log->info("Encode {}us q {}", encode_dur, m_imageQ.size());
+#endif
+        m_pktQ_ready.notify_one();
 
         if (m_verbose > 1)
         {
-            if (vidpool_used_1m < used)
-                vidpool_used_1m = used;
-            if (vidpool_used_5m[vidpool_5m_idx] < used)
-                vidpool_used_5m[vidpool_5m_idx] = used;
-            if (vidpool_used_10m[vidpool_10m_idx] < used)
-                vidpool_used_10m[vidpool_10m_idx] = used;
+            size_t total = used + ready;
 
-            current_tm = chrono::steady_clock::now();
-            duration = chrono::duration_cast<chrono::seconds>
-                       (current_tm - vidpool_tm).count();
+            const OutputTS::PoolSnapshot current{total, used, ready};
 
-            total_duration = chrono::duration_cast<chrono::seconds>
-                             (chrono::steady_clock::now() - start_tm);
+            // Capture snapshots based on total high-water marks
+            if (vidpool_used_1m.total < total)
+                vidpool_used_1m = current;
+            if (vidpool_used_5m[vidpool_5m_idx].total < total)
+                vidpool_used_5m[vidpool_5m_idx] = current;
+            if (vidpool_used_10m[vidpool_10m_idx].total < total)
+                vidpool_used_10m[vidpool_10m_idx] = current;
+
+            current_tm = std::chrono::steady_clock::now();
+            duration = std::chrono::duration_cast<std::chrono::seconds>(current_tm - vidpool_tm).count();
+            total_duration = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start_tm);
 
             if (duration >= 60)
             {
-                vidpool_5m_max  = ranges::max_element(vidpool_used_5m);
-                vidpool_10m_max = ranges::max_element(vidpool_used_10m);
 
-                m_log->info(format("GPU frame pool used 1m:{:<3d} "
-                                   "5m:{:<3d} 10m:{:<3d} "
-                                   "of {:<3d} ({:%T} elapsed)",
-                                   vidpool_used_1m, *vidpool_5m_max,
-                                   *vidpool_10m_max, m_video_args.buffers,
-                                   total_duration));
+                vidpool_5m_max  = std::ranges::max_element(vidpool_used_5m,
+                                           {}, &OutputTS::PoolSnapshot::total);
+                vidpool_10m_max = std::ranges::max_element(vidpool_used_10m,
+                                           {}, &OutputTS::PoolSnapshot::total);
 
-                vidpool_used_1m = 0;
+                string m1 = format("{}+{}", vidpool_used_1m.used, vidpool_used_1m.ready);
+                string m5 = format("{}+{}", vidpool_5m_max->used, vidpool_5m_max->ready);
+                string m10 = format("{}+{}", vidpool_10m_max->used, vidpool_10m_max->ready);
+                m_log->info(std::format
+                            ("GPU pool used 1m:{:<5} 5m:{:<5} 10m:{:<5} "
+                             "of {:<3d} ({:%T} elapsed)",
+                             m1, m5, m10,
+                             m_video_args.buffers, total_duration));
+
+                // Reset windows to clean baseline structures
+                vidpool_used_1m = OutputTS::PoolSnapshot{};
 
                 ++vidpool_5m_idx;
                 vidpool_5m_idx %= 5;
-                vidpool_used_5m[vidpool_5m_idx] = 0;
+                vidpool_used_5m[vidpool_5m_idx] = OutputTS::PoolSnapshot{};
 
                 ++vidpool_10m_idx;
                 vidpool_10m_idx %= 10;
-                vidpool_used_10m[vidpool_10m_idx] = 0;
+                vidpool_used_10m[vidpool_10m_idx] = OutputTS::PoolSnapshot{};
 
                 vidpool_tm = current_tm;
             }
         }
     }
-
     std::scoped_lock lock(m_videoStream_mutex);
     m_videoStream.reset();
     m_log->info("process_video thread exited.");
 }
-
 
 void OutputTS::AddVideoImage(VideoStream::Image&& image)
 {
