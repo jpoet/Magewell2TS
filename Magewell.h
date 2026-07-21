@@ -179,6 +179,8 @@ class Magewell
      */
     void close_eco_video(void);
 
+    void log_stats(size_t used);
+
     /**
      * @brief Capture video using ECO capture method
      * @param eco_params ECO capture parameters

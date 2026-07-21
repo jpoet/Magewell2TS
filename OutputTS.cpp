@@ -906,6 +906,9 @@ void OutputTS::process_video(void)
     std::chrono::steady_clock::time_point current_tm;
     int duration;
 
+    if (m_verbose > 1)
+        m_log->info(std::format("Stats:GPU pool used: used+mapped"));
+
     for (;;)
     {
         VideoStream::Image image;
@@ -992,7 +995,7 @@ void OutputTS::process_video(void)
                 string m5 = format("{}+{}", vidpool_5m_max->used, vidpool_5m_max->ready);
                 string m10 = format("{}+{}", vidpool_10m_max->used, vidpool_10m_max->ready);
                 m_log->info(std::format
-                            ("GPU pool used 1m:{:<5} 5m:{:<5} 10m:{:<5} "
+                            ("Stats:GPU pool used 1m:{:<5} 5m:{:<5} 10m:{:<5} "
                              "of {:<3d} ({:%T} elapsed)",
                              m1, m5, m10,
                              m_video_args.buffers, total_duration));

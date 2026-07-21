@@ -1974,6 +1974,63 @@ void Magewell::set_notify(HNOTIFY&  notify,
     notify = MWRegisterNotify(hChannel, hNotifyEvent, flags);
 }
 
+void Magewell::log_stats(size_t used)
+{
+    static size_t            vidpool_used_1m  {0};
+    static array<size_t, 5>  vidpool_used_5m  {0};
+    static array<size_t, 10> vidpool_used_10m {0};
+    static size_t            vidpool_5m_idx   {0};
+    static size_t            vidpool_10m_idx  {0};
+    static array<size_t, 5>::iterator  vidpool_5m_max  {};
+    static array<size_t, 10>::iterator vidpool_10m_max {};
+
+    static chrono::steady_clock::time_point vidpool_tm = chrono::steady_clock::now();
+
+    chrono::steady_clock::time_point current_tm;
+    int duration;
+
+    if (vidpool_used_1m < used)
+        vidpool_used_1m = used;
+    if (vidpool_used_5m[vidpool_5m_idx] < used)
+        vidpool_used_5m[vidpool_5m_idx] = used;
+    if (vidpool_used_10m[vidpool_10m_idx] < used)
+        vidpool_used_10m[vidpool_10m_idx] = used;
+
+    current_tm = chrono::steady_clock::now();
+    duration = chrono::duration_cast<chrono::seconds>
+               (current_tm - vidpool_tm).count();
+
+    if (duration >= 60)
+    {
+        vidpool_5m_max  = ranges::max_element(vidpool_used_5m);
+        vidpool_10m_max = ranges::max_element(vidpool_used_10m);
+
+        uint temperature;
+        MWGetTemperature(m_channel, &temperature);
+        string extra = format("Temp {:.1f}ºC",
+                              static_cast<float>(temperature) / 10);
+
+        m_log->info("Stats:Mag pool used 1m:{:<5d} "
+                    "5m:{:<5d} 10m:{:<5d} of {:<3d} "
+                    "({})",
+                    vidpool_used_1m, *vidpool_5m_max,
+                    *vidpool_10m_max, m_image_buffers_total,
+                    extra);
+
+        vidpool_used_1m = 0;
+
+        ++vidpool_5m_idx;
+        vidpool_5m_idx %= 5;
+        vidpool_used_5m[vidpool_5m_idx] = 0;
+
+        ++vidpool_10m_idx;
+        vidpool_10m_idx %= 10;
+        vidpool_used_10m[vidpool_10m_idx] = 0;
+
+        vidpool_tm = current_tm;
+    }
+}
+
 /**
  * @brief Capture video using ECO capture method
  *
@@ -2004,22 +2061,10 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     MWCAP_VIDEO_ECO_CAPTURE_STATUS eco_status;
     MW_RESULT ret;
 
-    int            vidpool_used_1m  {0};
-    array<int, 5>  vidpool_used_5m  {0};
-    array<int, 10> vidpool_used_10m {0};
-    int            vidpool_5m_idx   {0};
-    int            vidpool_10m_idx  {0};
-    array<int, 5>::iterator  vidpool_5m_max;
-    array<int, 10>::iterator vidpool_10m_max;
-
     int64_t timestamp_adj {0};
     int     short_frame   {-1};
 
     int used        {0};
-
-    chrono::steady_clock::time_point current_tm;
-    chrono::steady_clock::time_point vidpool_tm = chrono::steady_clock::now();
-    int duration;
 
     // Main capture loop
     while (m_running.load() == true)
@@ -2176,48 +2221,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         m_out2ts->AddVideoImage(std::move(image));
 
         if (m_verbose > 1)
-        {
-            if (vidpool_used_1m < used)
-                vidpool_used_1m = used;
-            if (vidpool_used_5m[vidpool_5m_idx] < used)
-                vidpool_used_5m[vidpool_5m_idx] = used;
-            if (vidpool_used_10m[vidpool_10m_idx] < used)
-                vidpool_used_10m[vidpool_10m_idx] = used;
-
-            current_tm = chrono::steady_clock::now();
-            duration = chrono::duration_cast<chrono::seconds>
-                       (current_tm - vidpool_tm).count();
-
-            if (duration >= 60)
-            {
-                vidpool_5m_max  = ranges::max_element(vidpool_used_5m);
-                vidpool_10m_max = ranges::max_element(vidpool_used_10m);
-
-                uint temperature;
-                MWGetTemperature(m_channel, &temperature);
-                string extra = format("Temp {:.1f}ºC",
-                                      static_cast<float>(temperature) / 10);
-
-                m_log->info("Mag pool used 1m:{:<5d} "
-                            "5m:{:<5d} 10m:{:<5d} of {:<3d} "
-                            "({})",
-                            vidpool_used_1m, *vidpool_5m_max,
-                            *vidpool_10m_max, m_image_buffers_total,
-                            extra);
-
-                vidpool_used_1m = 0;
-
-                ++vidpool_5m_idx;
-                vidpool_5m_idx %= 5;
-                vidpool_used_5m[vidpool_5m_idx] = 0;
-
-                ++vidpool_10m_idx;
-                vidpool_10m_idx %= 10;
-                vidpool_used_10m[vidpool_10m_idx] = 0;
-
-                vidpool_tm = current_tm;
-            }
-        }
+            log_stats(used);
     }
 
     return true;
@@ -2265,19 +2269,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     MWCAP_VIDEO_SIGNAL_STATUS videoSignalStatus;
     MW_RESULT result;
 
-    int            vidpool_used_1m  {0};
-    array<int, 5>  vidpool_used_5m  {0};
-    array<int, 10> vidpool_used_10m {0};
-    int            vidpool_5m_idx   {0};
-    int            vidpool_10m_idx  {0};
-    array<int, 5>::iterator  vidpool_5m_max;
-    array<int, 10>::iterator vidpool_10m_max;
-
     int used = 0;
-
-    chrono::steady_clock::time_point current_tm;
-    chrono::steady_clock::time_point vidpool_tm = chrono::steady_clock::now();
-    int duration;
 
     // Main capture loop
     while (m_running.load() == true)
@@ -2499,48 +2491,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         m_out2ts->AddVideoImage(std::move(image));
 
         if (m_verbose > 1)
-        {
-            if (vidpool_used_1m < used)
-                vidpool_used_1m = used;
-            if (vidpool_used_5m[vidpool_5m_idx] < used)
-                vidpool_used_5m[vidpool_5m_idx] = used;
-            if (vidpool_used_10m[vidpool_10m_idx] < used)
-                vidpool_used_10m[vidpool_10m_idx] = used;
-
-            current_tm = chrono::steady_clock::now();
-            duration = chrono::duration_cast<chrono::seconds>
-                       (current_tm - vidpool_tm).count();
-
-            if (duration >= 60)
-            {
-                vidpool_5m_max  = ranges::max_element(vidpool_used_5m);
-                vidpool_10m_max = ranges::max_element(vidpool_used_10m);
-
-                uint temperature;
-                MWGetTemperature(m_channel, &temperature);
-                string extra = format("Temp {:.1f}ºC",
-                                      static_cast<float>(temperature) / 10);
-
-                m_log->info("Mag frame pool used 1m:{:<3d} "
-                            "5m:{:<3d} 10m:{:<3d} of {:<3d} "
-                            "({})",
-                            vidpool_used_1m, *vidpool_5m_max,
-                            *vidpool_10m_max, m_image_buffers_total,
-                            extra);
-
-                vidpool_used_1m = 0;
-
-                ++vidpool_5m_idx;
-                vidpool_5m_idx %= 5;
-                vidpool_used_5m[vidpool_5m_idx] = 0;
-
-                ++vidpool_10m_idx;
-                vidpool_10m_idx %= 10;
-                vidpool_used_10m[vidpool_10m_idx] = 0;
-
-                vidpool_tm = current_tm;
-            }
-        }
+            log_stats(used);
     }
 
     return true;
