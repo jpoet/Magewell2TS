@@ -375,7 +375,7 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
         // Transfer ownership safely into our smart pointer wrapper
         m_hw_device_ctx.reset(raw_hw_ctx);
 
-        m_log->debug("nVidia CUDA hardware runtime engine successfully bound.");
+        m_log->trace("nVidia CUDA hardware runtime engine successfully bound.");
     }
 
     m_encoder->pix_fmt = AV_PIX_FMT_NV12;
@@ -476,7 +476,7 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
         // Safely transfer ownership to the smart pointer
         m_hw_device_ctx.reset(raw_hw_ctx);
 
-        m_log->debug("VAAPI hardware runtime engine successfully bound.");
+        m_log->trace("VAAPI hardware runtime engine successfully bound.");
     }
 
     if (opt)
@@ -541,7 +541,7 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
         return false;
     }
 
-    m_log->debug("VAAPI pipeline fully active at "
+    m_log->trace("VAAPI pipeline fully active at "
                  "hardware resolution {}x{}",
                  frames_ctx->width, frames_ctx->height);
     return true;
@@ -641,10 +641,10 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
         // Anchor safely into our smart pointer
         m_hw_device_ctx.reset(raw_hw_ctx);
 
-        m_log->debug("Intel QSV hardware runtime engine successfully bound");
+        m_log->trace("Intel QSV hardware runtime engine successfully bound");
     }
 
-    m_log->debug("VideoStream::open_qsv: device refs={}",
+    m_log->trace("VideoStream::open_qsv: device refs={}",
                  av_buffer_get_ref_count(m_hw_device_ctx.get()));
 
     if (opt)
@@ -716,7 +716,7 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
         return false;
     }
 
-    m_log->debug("Intel QSV pipeline fully active at "
+    m_log->trace("Intel QSV pipeline fully active at "
                  "hardware resolution {}x{}",
                  frames_ctx->width, frames_ctx->height);
 

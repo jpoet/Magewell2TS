@@ -1604,7 +1604,7 @@ size_t Magewell::AllocateImageBuffers(void)
     m_image_size_qwords = (m_image_size + 7) / 8;
     size_t total_qwords = m_image_size_qwords * m_image_buffers;
 
-    m_log->debug(">>>>>>>>>>>>>>>>>>>>>> Allocating Magewell frames: "
+    m_log->trace(">>>>>>>>>>>>>>>>>>>>>> Allocating Magewell frames: "
                  "{} /8= {} total8 {} for {}KB",
                  m_image_size, m_image_size_qwords,
                  total_qwords, total_qwords * 8 / 1024);
@@ -2010,7 +2010,7 @@ void Magewell::log_stats(size_t used)
         string extra = format("Temp {:.1f}ºC",
                               static_cast<float>(temperature) / 10);
 
-        m_log->info("Stats:Mag pool used 1m:{:<5d} "
+        m_log->debug("Mag pool used 1m:{:<5d} "
                     "5m:{:<5d} 10m:{:<5d} of {:<3d} "
                     "({})",
                     vidpool_used_1m, *vidpool_5m_max,
@@ -2220,8 +2220,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         // Add frame to output handler
         m_out2ts->AddVideoImage(std::move(image));
 
-        if (m_verbose > 1)
-            log_stats(used);
+        log_stats(used);
     }
 
     return true;
@@ -2490,8 +2489,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         // Add frame to output handler
         m_out2ts->AddVideoImage(std::move(image));
 
-        if (m_verbose > 1)
-            log_stats(used);
+        log_stats(used);
     }
 
     return true;

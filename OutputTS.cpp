@@ -576,7 +576,7 @@ bool OutputTS::FlushPackets(int stream_id, int version, AVCodecContext* enc)
                        ? m_audioPktQ
                        : m_videoPktQ;
 
-    m_log->debug("flush_packets id={} version={} Started, PktQ size {}",
+    m_log->trace("flush_packets id={} version={} Started, PktQ size {}",
                 stream_id, version, pktQ.GetSize());
 
     // Enter draining mode by passing nullptr
@@ -592,7 +592,7 @@ bool OutputTS::FlushPackets(int stream_id, int version, AVCodecContext* enc)
 
     queue_packets(stream_id, version,
                   enc, pktQ, true);
-    m_log->debug("flush_packets id={} version={} Finished, PktQ size {}",
+    m_log->trace("flush_packets id={} version={} Finished, PktQ size {}",
                 stream_id, version, pktQ.GetSize());
 
     return true;
@@ -605,7 +605,7 @@ void OutputTS::sync_markers(void)
     std::this_thread::sleep_for(std::chrono::milliseconds(150));
     std::scoped_lock lock(m_audio_pktQ_mutex, m_video_pktQ_mutex);
 
-    m_log->debug("MARKER received. Video current {} latest {}; "
+    m_log->trace("MARKER received. Video current {} latest {}; "
                 "Audio current {} latest {}",
                 m_video_current_version, m_video_latest_version.load(),
                 m_audio_current_version, m_audio_latest_version.load());
@@ -626,7 +626,7 @@ void OutputTS::sync_markers(void)
         m_audio_marker = std::move(outPkt);
     }
 
-    m_log->debug("Pending DTS; audio {} video {}",
+    m_log->trace("Pending DTS; audio {} video {}",
                  m_audioPktQ.PeekDts(), m_videoPktQ.PeekDts());
 
     ++m_generation;
@@ -723,7 +723,7 @@ void OutputTS::mux(void)
         // Non-monotonic Timestamp Protection
         if (prev_state.dts != AV_NOPTS_VALUE && pkt->dts <= prev_state.dts)
         {
-            m_log->debug("MUX [{}] DTS delta {} non-monotonic: "
+            m_log->trace("MUX [{}] DTS delta {} non-monotonic: "
                          "Fix: {:12d} -> {:12d}",
                          stream_id, pkt->dts - prev_state.dts,
                          pkt->dts, prev_state.dts + 1);
@@ -737,7 +737,7 @@ void OutputTS::mux(void)
             pkt->pts = pkt->dts;
         }
 
-        m_log->debug("MUX [id{:<2d} version:{}] pts:{:#018x} dts:{:#018x} "
+        m_log->trace("MUX [id{:<2d} version:{}] pts:{:#018x} dts:{:#018x} "
                      "duration:{} size:{}",
                      stream_id, outPkt->version, pkt->pts, pkt->dts,
                      pkt->duration, pkt->size);
@@ -801,14 +801,14 @@ int OutputTS::AddMarker(int id, CodecParamsPtr&& codecpar,
     // Note: fetch_add returns the previous value, so incr it.
     if (id == AUDIO_STREAM_ID)
     {
-        m_log->debug("AddMarker: Audio");
+        m_log->trace("AddMarker: Audio");
         version = marker.version =
             m_audio_latest_version.fetch_add(1, std::memory_order_relaxed) + 1;
         m_audioPktQ.Push(std::move(marker));
     }
     else if (id == VIDEO_STREAM_ID)
     {
-        m_log->debug("AddMarker: Video");
+        m_log->trace("AddMarker: Video");
         version = marker.version =
             m_video_latest_version.fetch_add(1, std::memory_order_relaxed) + 1;
         m_videoPktQ.Push(std::move(marker));
@@ -906,8 +906,7 @@ void OutputTS::process_video(void)
     std::chrono::steady_clock::time_point current_tm;
     int duration;
 
-    if (m_verbose > 1)
-        m_log->info(std::format("Stats:GPU pool used: used+mapped"));
+    m_log->debug(std::format("GPU pool used: used+mapped"));
 
     for (;;)
     {
@@ -965,7 +964,6 @@ void OutputTS::process_video(void)
 #endif
         m_pktQ_ready.notify_one();
 
-        if (m_verbose > 1)
         {
             size_t total = used + ready;
 
@@ -994,11 +992,11 @@ void OutputTS::process_video(void)
                 string m1 = format("{}+{}", vidpool_used_1m.used, vidpool_used_1m.ready);
                 string m5 = format("{}+{}", vidpool_5m_max->used, vidpool_5m_max->ready);
                 string m10 = format("{}+{}", vidpool_10m_max->used, vidpool_10m_max->ready);
-                m_log->info(std::format
-                            ("Stats:GPU pool used 1m:{:<5} 5m:{:<5} 10m:{:<5} "
-                             "of {:<3d} ({:%T} elapsed)",
-                             m1, m5, m10,
-                             m_video_args.buffers, total_duration));
+                m_log->debug(std::format
+                             ("GPU pool used 1m:{:<5} 5m:{:<5} 10m:{:<5} "
+                              "of {:<3d} ({:%T} elapsed)",
+                              m1, m5, m10,
+                              m_video_args.buffers, total_duration));
 
                 // Reset windows to clean baseline structures
                 vidpool_used_1m = OutputTS::PoolSnapshot{};

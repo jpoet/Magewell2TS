@@ -226,9 +226,9 @@ void setup_logging(int verbose_level, bool color, const string& logpath)
     // Set logger level based on verbose level
     if (verbose_level < 1)
         logger->set_level(spdlog::level::off);
-    else if (verbose_level < 5)
+    else if (verbose_level < 4)
         logger->set_level(spdlog::level::info);
-    else if (verbose_level == 5)
+    else if (verbose_level == 4)
         logger->set_level(spdlog::level::debug);
     else
         logger->set_level(spdlog::level::trace);

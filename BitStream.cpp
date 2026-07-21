@@ -81,7 +81,7 @@ void BitStream::AddSamples(AudioStream::Samples&& samples)
 
         pkt->stream_index = OutputTS::AUDIO_STREAM_ID;
 
-        m_log->debug("Queuing bitstream [{}] "
+        m_log->trace("Queuing bitstream [{}] "
                      "pts={} dts={} dur={} : "
                      "encoder TB:{}/{}; ",
                      pkt->stream_index,

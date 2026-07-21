@@ -77,7 +77,7 @@ bool PCMStream::open_encoder(void)
         return false;
     }
 
-    m_log->debug("fmt={} channels={} frame_size={}",
+    m_log->trace("fmt={} channels={} frame_size={}",
                  av_get_sample_fmt_name(m_encoder->sample_fmt),
                  m_encoder->ch_layout.nb_channels,
                  m_encoder->frame_size);
