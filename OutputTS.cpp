@@ -748,7 +748,7 @@ void OutputTS::mux(void)
             .dts = pkt->dts
         };
 
-#if 0
+#if 1
         int ret = av_interleaved_write_frame(m_formatContext, pkt.get());
 #else
         int ret = av_write_frame(m_formatContext, pkt.get());
