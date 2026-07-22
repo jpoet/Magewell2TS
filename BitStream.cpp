@@ -36,7 +36,7 @@ void BitStream::AddSamples(AudioStream::Samples&& samples)
                                        std::move(codecpar),
                                        TimeBase::MPEG_TS,
                                        m_params.frame_duration,
-                                       m_pts);
+                                       m_pts, m_iec61937.isAtmos());
     }
 
     while(auto frame = m_iec61937.PopFrame())

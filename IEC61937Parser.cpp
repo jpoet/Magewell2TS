@@ -394,9 +394,11 @@ void IEC61937Parser::finalize_frame(void)
                                      EAC3Parser::formatOutput(*result));
                     }
                 }
+                m_isAtmos = result->is_atmos;
             }
         }
     }
 
+    ++m_frameCnt;
     m_frameQ.push_back(std::move(frame));
 }

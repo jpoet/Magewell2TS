@@ -111,7 +111,7 @@ bool PCMStream::open_encoder(void)
                                    std::move(codecpar),
                                    TimeBase::AUDIO48,
                                    m_params.frame_duration,
-                                   m_pts);
+                                   m_pts, false);
 
     m_pts = av_rescale_q(m_pts,
                          TimeBase::Magewell,

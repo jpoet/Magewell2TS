@@ -57,7 +57,7 @@ extern "C" {
 using namespace std;
 
 inline std::string DumpAVFormat(const AVFormatContext* fmtctx,
-                                string color_desc)
+                                string color_desc, bool atmos)
 {
     fmt::memory_buffer out;
 
@@ -132,8 +132,9 @@ inline std::string DumpAVFormat(const AVFormatContext* fmtctx,
                                                sizeof(layout));
 
                     fmt::format_to(std::back_inserter(out),
-                                   " Channels: {} ({})",
-                                   cp->ch_layout.nb_channels, layout);
+                                   " Channels: {} ({}) {}",
+                                   cp->ch_layout.nb_channels,
+                                   layout, (atmos ? "Atmos" : ""));
                 }
 
 #if 0
@@ -359,7 +360,7 @@ bool OutputTS::open_container(void)
                 color_desc = m_videoStream->ColorSpaceDesc();
         }
 
-        m_log->info(DumpAVFormat(m_formatContext, color_desc));
+        m_log->info(DumpAVFormat(m_formatContext, color_desc, m_atmos_audio));
     }
 
     AVDictionary* muxer_opts = nullptr;
@@ -779,7 +780,7 @@ void OutputTS::mux(void)
 
 int OutputTS::AddMarker(int id, CodecParamsPtr&& codecpar,
                         AVRational timebase, AVRational frameduration,
-                        int64_t timestamp)
+                        int64_t timestamp, bool atmos)
 {
     Packet marker;
 
@@ -805,6 +806,7 @@ int OutputTS::AddMarker(int id, CodecParamsPtr&& codecpar,
         version = marker.version =
             m_audio_latest_version.fetch_add(1, std::memory_order_relaxed) + 1;
         m_audioPktQ.Push(std::move(marker));
+        m_atmos_audio = atmos;
     }
     else if (id == VIDEO_STREAM_ID)
     {

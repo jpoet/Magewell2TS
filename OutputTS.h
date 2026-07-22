@@ -57,7 +57,7 @@ class OutputTS
     uint GetAudioVersion(void) const { return m_audio_current_version; }
 
     int AddMarker(int id, CodecParamsPtr&& codecpar, AVRational timebase,
-                  AVRational framerate, int64_t timestamp);
+                  AVRational framerate, int64_t timestamp, bool atmos);
     void AddAudioPkt(Packet&& pkt);
     void AddAudioSamples(AudioStream::Samples&& audio);
     void AddVideoImage(VideoStream::Image&& image);
@@ -104,6 +104,7 @@ class OutputTS
     AudioStream::audioque_t m_audioQ;
 
     bool                    m_no_audio     {true};
+    bool                    m_atmos_audio  {false};
     VideoStream::Args       m_video_args;
 
     ShutdownCallback        f_shutdown;

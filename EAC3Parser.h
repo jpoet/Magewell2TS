@@ -22,6 +22,7 @@ struct EAC3MetaData
     int64_t     duration;
     size_t      payload_size_bytes;
     std::string channel_layout;
+    bool        is_atmos;
 };
 
 class EAC3Parser
@@ -41,7 +42,6 @@ class EAC3Parser
     std::optional<EAC3MetaData>
       processFrame(std::span<const uint8_t>iec_buffer, CodecType codec_type);
 
-
     static std::string formatOutput(const EAC3MetaData& out);
 
   private:
@@ -51,8 +51,7 @@ class EAC3Parser
     void append_acmod(uint8_t acmod, std::vector<std::string>& target);
     std::string generate_layout() const;
 
-    std::vector<std::string> base_channels{};
-    std::vector<std::string> extension_channels{};
-    uint32_t active_sample_rate = 0;
-    bool has_lfe = false;
+    std::vector<std::string> m_base_channels{};
+    std::vector<std::string> m_extension_channels{};
+    bool m_has_lfe = false;
 };

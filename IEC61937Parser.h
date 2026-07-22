@@ -40,6 +40,8 @@ class IEC61937Parser
 
     std::optional<Frame> PopFrame(void);
 
+    bool isAtmos(void) const { return m_isAtmos; }
+
   private:
 
     enum class State
@@ -94,4 +96,5 @@ class IEC61937Parser
     int m_sampleRate {0};
     int64_t m_currentTimestamp { 0 };
     CodecParamsPtr m_codecpar;
+    bool   m_isAtmos {false};
 };

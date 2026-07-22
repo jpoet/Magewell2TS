@@ -51,7 +51,7 @@ VideoStream::VideoStream(OutputTS& parent, int verbose_level, Args& args,
                                    std::move(codecpar),
                                    m_encoder->time_base,
                                    m_params.frame_duration,
-                                   timestamp);
+                                   timestamp, false);
 }
 
 VideoStream::~VideoStream(void)
