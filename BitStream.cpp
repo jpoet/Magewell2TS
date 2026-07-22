@@ -2,7 +2,7 @@
 #include "OutputTS.h"
 #include "IEC61937Parser.h"
 
-// #define DUMP_RAW
+//#define DUMP_RAW
 
 #ifdef DUMP_RAW
 #include <fstream>

@@ -88,19 +88,23 @@ EAC3Parser::processFrame(std::span<const uint8_t> iec_buffer,
         out.strmtyp = 0;
         out.substreamid = 0;
 
-        // Strip bits from the upper register space using direct constants
-        uint8_t fscod       = (cache >> 46) & 0x03;
-        uint8_t acmod       = (cache >> 32) & 0x07;
+        // Shift down from the correct byte positions in the 64-bit
+        // big-endian register
+        uint8_t fscod       = (cache >> 30) & 0x03; // Byte 4, top 2 bits
+        uint8_t acmod       = (cache >> 13) & 0x07; // Byte 6, top 3 bits
 
-        // Emulate conditional skips based on standard ATSC A/52 bit patterns
-        size_t bit_offset = 32; // Marker location where acmod concludes
+        // Tracks bit location in 'cache'. Starts right after acmod
+        // field (bit 13).
+        size_t bit_offset = 13;
+
         if ((acmod & 0x01) && (acmod != 0x01))
-            bit_offset -= 2; // skip center mix levels
+            bit_offset -= 2; // skip center mix levels (cmixlev)
         if (acmod & 0x04)
-            bit_offset -= 2; // skip surround mix levels
+            bit_offset -= 2; // skip surround mix levels (surmixlev)
         if (acmod == 0x02)
-            bit_offset -= 2; // skip dolby surround mode flags
+            bit_offset -= 2; // skip dolby surround mode flags (dsurmod)
 
+        // Extract the 1-bit LFE flag right after the skipped fields
         uint8_t lfeon = (cache >> (bit_offset - 1)) & 0x01;
 
         static constexpr uint32_t ac3_rates[] = { 48000, 44100, 32000, 0 };
@@ -207,21 +211,21 @@ EAC3Parser::processFrame(std::span<const uint8_t> iec_buffer,
             extension_channels.clear();
             if (lfeon) has_lfe = true;
 
-            // Dependent streams channel mask parsing
-            size_t next_bit = (fscod == 3)
-                              ? 42
-                              : 40; // Track precise bit pointer position
-            bool chanmap_exists = ((cache >> (63 - next_bit)) & 0x01) == 1;
-            next_bit += 1;
+            // Determine the exact bit position inside the 'cache' register
+            // where 'chanmap_exists' resides (immediately below lfeon)
+            size_t chanmap_bit_pos = (fscod == 3) ? 21 : 23;
+
+            bool chanmap_exists = ((cache >> chanmap_bit_pos) & 0x01) == 1;
 
             if (chanmap_exists)
             {
-                uint16_t mask = (cache >> (63 - (next_bit + 15))) & 0xFFFF;
+                // The 16-bit channel map sits directly below the chanmap_exists bit
+                uint16_t mask = (cache >> (chanmap_bit_pos - 16)) & 0xFFFF;
 
-                // Bit Check Array
+                // Fixed bit mask alignment to properly map sequential flags per ATSC A/52
                 static constexpr uint16_t mask_bits[] = {
                     0x8000, 0x4000, 0x2000, 0x1000, 0x0800, 0x0400,
-                    0x0200, 0x0100, 0x0080, 0x0040, 0x0020, 0x0001
+                    0x0200, 0x0100, 0x0080, 0x0040, 0x0020, 0x0010
                 };
                 static const char* const mask_labels[] = {
                     "Lp", "Cp", "Rp", "Ls", "Rs", "Lc",
@@ -232,10 +236,11 @@ EAC3Parser::processFrame(std::span<const uint8_t> iec_buffer,
                 {
                     if (mask & mask_bits[i])
                     {
-                        if (mask_bits[i] == 0x0001)
+                        if (mask_bits[i] == 0x0010) // 12th bit is LFE
                         {
                             has_lfe = true;
-                        } else
+                        }
+                        else
                         {
                             extension_channels.push_back(mask_labels[i]);
                         }
