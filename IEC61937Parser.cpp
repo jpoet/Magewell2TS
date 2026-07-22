@@ -326,7 +326,6 @@ void IEC61937Parser::finalize_frame(void)
           return;
     }
 
-
     if (m_metaNeeded)
     {
         if (frame.codec_id == AV_CODEC_ID_AC3)
@@ -335,34 +334,13 @@ void IEC61937Parser::finalize_frame(void)
                                                         CodecType::AC3))
             {
                 spdlog::info(EAC3Parser::formatOutput(*result));
-
-                m_metaNeeded = false;
-                m_codecpar = make_codec_params();
-                m_codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
-                m_codecpar->format = AV_SAMPLE_FMT_NONE;
-                m_codecpar->codec_id = frame.codec_id;
-                m_codecpar->sample_rate = result->sample_rate_hz;
-                av_channel_layout_default(&m_codecpar->ch_layout,
-                                          result->total_channels);
-
-                std::array<char, 64> buffer{};
-                av_channel_layout_describe(&(m_codecpar->ch_layout),
-                                           buffer.data(),
-                                           buffer.size());
-            }
-        }
-        else if (frame.codec_id == AV_CODEC_ID_EAC3)
-        {
-            if (auto result = m_eac3Parser.processFrame(frame.payload,
-                                                        CodecType::EAC3))
-            {
-                m_metaNeeded = false;
-
-                if (result->strmtyp == 0)
+                if (result->total_channels < 2)
                 {
-                    ++m_independentCnt;
-                    spdlog::debug("[{}] {}", m_frameCnt,
-                                  EAC3Parser::formatOutput(*result));
+                    m_log->warn("Failed to parse valid AC3");
+                }
+                else
+                {
+                    m_metaNeeded = false;
                     m_codecpar = make_codec_params();
                     m_codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
                     m_codecpar->format = AV_SAMPLE_FMT_NONE;
@@ -376,11 +354,45 @@ void IEC61937Parser::finalize_frame(void)
                                                buffer.data(),
                                                buffer.size());
                 }
+            }
+        }
+        else if (frame.codec_id == AV_CODEC_ID_EAC3)
+        {
+            if (auto result = m_eac3Parser.processFrame(frame.payload,
+                                                        CodecType::EAC3))
+            {
+                if (result->total_channels < 2)
+                {
+                    m_log->warn("Failed to parse valid EAC3");
+                }
                 else
                 {
-                    ++m_dependentCnt;
-                    spdlog::info("[{}] {}", m_frameCnt,
-                                 EAC3Parser::formatOutput(*result));
+                    m_metaNeeded = false;
+
+                    if (result->strmtyp == 0)
+                    {
+                        ++m_independentCnt;
+                        spdlog::debug("[{}] {}", m_frameCnt,
+                                      EAC3Parser::formatOutput(*result));
+                        m_codecpar = make_codec_params();
+                        m_codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
+                        m_codecpar->format = AV_SAMPLE_FMT_NONE;
+                        m_codecpar->codec_id = frame.codec_id;
+                        m_codecpar->sample_rate = result->sample_rate_hz;
+                        av_channel_layout_default(&m_codecpar->ch_layout,
+                                                  result->total_channels);
+
+                        std::array<char, 64> buffer{};
+                        av_channel_layout_describe(&(m_codecpar->ch_layout),
+                                                   buffer.data(),
+                                                   buffer.size());
+                    }
+                    else
+                    {
+                        ++m_dependentCnt;
+                        spdlog::info("[{}] {}", m_frameCnt,
+                                     EAC3Parser::formatOutput(*result));
+                    }
                 }
             }
         }
