@@ -226,61 +226,6 @@ EAC3Parser::processFrame(std::span<const uint8_t> iec_buffer,
             }
         }
 
-        // Standard BSI Fields (Always follow the channel block)
-
-        // Bitstream Identification
-        [[maybe_unused]] uint8_t bsid = br.getBits(5);
-        // Dialogue Normalization
-        [[maybe_unused]] uint8_t dialnorm = br.getBits(5);
-
-        bool compre = br.getBit();
-        if (compre)
-            br.getBits(8);
-
-        bool progfde = br.getBit();
-        if (progfde)
-            br.getBits(7);
-
-        bool audprodie = br.getBit();
-        if (audprodie)
-        {
-            // mixlevel
-            br.getBits(5);
-            // roomtyp
-            br.getBits(2);
-        }
-
-        // Standard Complexity Information Profile (JOC/Atmos check)
-
-        // Complexity Info Present Flag
-        bool cplinu = br.getBit();
-        if (cplinu)
-        {
-            uint8_t cnumblks = br.getBits(4);
-
-            // Loop through the complexity block allocations
-            // Typically tracks 1 to 6 block settings sequentially
-            for (int idx = 0; idx <= cnumblks; ++idx)
-            {
-                uint8_t cplidx = br.getBits(5); // The Complexity Index
-
-                // Index 12 is explicitly reserved by Dolby for Joint
-                // Object Coding (JOC) which allows a 5.1 base bed to
-                // scale into spatial Atmos audio
-                if (cplidx == 12)
-                    out.is_atmos = true;
-            }
-        }
-
-        // Extension Blocks
-        bool addbsie = br.getBit();
-        if (addbsie)
-        {
-            uint8_t addbsil = br.getBits(6);
-            // Pass the extension block without deep indexing
-            br.skipBits(addbsil * 8);
-        }
-
         // Finalize Metadata Generation
         out.total_channels = static_cast<uint8_t>(m_base_channels.size()
                                                   + m_extension_channels.size()
