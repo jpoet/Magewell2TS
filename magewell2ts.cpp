@@ -100,7 +100,7 @@ void show_help(string_view app)
          << "--p010             : Force p010 (10bit) video format.\n"
          << "--gop_secs (-g)    : GOP size in seconds [1.5] (0 to disable)\n"
          << "--idr-interval     : Frequency that keyframe will be IDR [0]\n"
-         << "--gpu-buffers      : GPU video buffers count [10]\n"
+         << "--gpu-buffers      : GPU video buffers count [4]\n"
          << "--video-buffers    : Video buffers count (RAM) [16]\n"
          << "--extra-hw-frames  : Extra HW frames used for encoding [32]\n"
          << "--write-edid (-w)  : Write EDID info from file to input\n"
