@@ -57,7 +57,7 @@ class OutputTS
     uint GetAudioVersion(void) const { return m_audio_current_version; }
 
     int AddMarker(int id, CodecParamsPtr&& codecpar, AVRational timebase,
-                  AVRational framerate, int64_t timestamp, bool atmos);
+                  AVRational framerate, int64_t timestamp);
     void AddAudioPkt(Packet&& pkt);
     void AddAudioSamples(AudioStream::Samples&& audio);
     void AddVideoImage(VideoStream::Image&& image);
@@ -79,12 +79,6 @@ class OutputTS
     std::shared_ptr<spdlog::logger> m_log;
     int                     m_verbose;
 
-    struct PoolSnapshot {
-        size_t total = 0;
-        size_t used  = 0;
-        size_t ready = 0;
-    };
-
     uint m_generation {0};
 
     std::shared_ptr<VideoStream> m_videoStream {nullptr};
@@ -104,7 +98,6 @@ class OutputTS
     AudioStream::audioque_t m_audioQ;
 
     bool                    m_no_audio     {true};
-    bool                    m_atmos_audio  {false};
     VideoStream::Args       m_video_args;
 
     ShutdownCallback        f_shutdown;

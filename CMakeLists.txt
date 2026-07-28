@@ -144,6 +144,12 @@ target_compile_options(magewell2ts PRIVATE
     $<$<CONFIG:Release>:-flto=auto>
 )
 
+target_compile_definitions(magewell2ts PRIVATE
+    $<$<CONFIG:Debug>:DEBUG_MODE>
+    $<$<CONFIG:Debug>:ENABLE_VERBOSE_ERRORS>
+    $<$<CONFIG:Debug>:LOG_ELAPSED=1>
+)
+
 target_link_options(magewell2ts PRIVATE
     $<$<CONFIG:Release>:-flto=auto>
 )

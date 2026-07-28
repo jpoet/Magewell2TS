@@ -35,10 +35,10 @@
 
 #include <vector>
 #include <filesystem>
-#include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_sinks.h>
 #include "spdlog/sinks/rotating_file_sink.h"
 #include <spdlog/sinks/stdout_color_sinks.h>
+#include "spdlog_format.h"
 
 #include "Magewell.h"
 #include "version.h"
@@ -92,6 +92,7 @@ void show_help(string_view app)
          << "--read-edid (-r)   : Read EDID info for input to file\n"
          << "--logfile          : Also log messages to the given file\n"
          << "--color (-o)       : Use color when logging to the console\n"
+         << "--thread (-t)      : Show thread name\n"
          << "--verbose (-v)     : message verbose level. 0=completely quiet [1]\n"
          << "--video-codec (-c) : Video codec name (e.g. hevc_qsv, h264_nvenc) [hevc_qsv]\n"
          << "--lookahead (-a)   : How many frames to 'look ahead' [35]\n"
@@ -100,7 +101,7 @@ void show_help(string_view app)
          << "--p010             : Force p010 (10bit) video format.\n"
          << "--gop_secs (-g)    : GOP size in seconds [1.5] (0 to disable)\n"
          << "--idr-interval     : Frequency that keyframe will be IDR [0]\n"
-         << "--gpu-buffers      : GPU video buffers count [4]\n"
+         << "--gpu-buffers      : GPU video buffers count [8]\n"
          << "--video-buffers    : Video buffers count (RAM) [16]\n"
          << "--extra-hw-frames  : Extra HW frames used for encoding [32]\n"
          << "--write-edid (-w)  : Write EDID info from file to input\n"
@@ -158,7 +159,17 @@ bool string_to_float(string_view st, float &value, string_view var)
     return true;
 }
 
-void setup_logging(int verbose_level, bool color, const string& logpath)
+void set_custom_pattern(std::shared_ptr<spdlog::sinks::sink> sink,
+                        const std::string& pattern)
+{
+    auto formatter = std::make_unique<spdlog::pattern_formatter>();
+    formatter->add_flag<linux_thread_name_flag>('q');
+    formatter->set_pattern(pattern);
+    sink->set_formatter(std::move(formatter));
+}
+
+void setup_logging(int verbose_level, bool color,
+                   bool thread_name, const string& logpath)
 {
     // Create console sink
     std::shared_ptr<spdlog::sinks::sink> console_sink;
@@ -168,14 +179,20 @@ void setup_logging(int verbose_level, bool color, const string& logpath)
         console_sink =
             std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
 
-        console_sink->set_pattern("%H:%M:%S.%e %^[%l]%$ : %v");
+        if (thread_name)
+            set_custom_pattern(console_sink, "%H:%M:%S.%e {%q} %^[%l]%$ : %v");
+        else
+            console_sink->set_pattern("%H:%M:%S.%e %^[%l]%$ : %v");
     }
     else
     {
         console_sink =
             std::make_shared<spdlog::sinks::stderr_sink_mt>();
 
-        console_sink->set_pattern("%l: %v");
+        if (thread_name)
+            set_custom_pattern(console_sink, "{%q} %l: %v");
+        else
+            console_sink->set_pattern("%l: %v");
     }
 
     // Set console level based on verbose level
@@ -200,12 +217,17 @@ void setup_logging(int verbose_level, bool color, const string& logpath)
 
             file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>
                         (logpath, // filename
-                         1024 * 1024 * 3,  // max size (4 MB)
+                         1024 * 1024 * 3,  // max size (3 MB)
                          3,                // max files
                          false     // rotate on open (optional, default false)
                          );
             file_sink->set_level(spdlog::level::trace);
-            file_sink->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] %v");
+
+            // Updated file sink to respect the thread_name configuration flag as well
+            if (thread_name)
+                set_custom_pattern(file_sink, "%Y-%m-%d %H:%M:%S.%e {%q} [%l] %v");
+            else
+                file_sink->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] %v");
 
             // Combine sinks into a vector
             std::vector<spdlog::sink_ptr> sinks {console_sink, file_sink};
@@ -235,7 +257,7 @@ void setup_logging(int verbose_level, bool color, const string& logpath)
 
     spdlog::register_logger(logger);
     spdlog::flush_on(spdlog::level::warn);
-    spdlog::flush_every(std::chrono::seconds(11)); // Flush every 5 seconds.
+    spdlog::flush_every(std::chrono::seconds(11));
 
     // Set default logger
     spdlog::set_default_logger(logger);
@@ -251,6 +273,7 @@ int main(int argc, char* argv[])
     string      logpath;
     int         verbose_level = 1;
     bool        color = false;
+    bool        thread_name = false;
     bool        realtime = false;
 
     string_view app_name = argv[0];
@@ -413,6 +436,10 @@ int main(int argc, char* argv[])
         {
             color = true;
         }
+        else if (*iter == "-t" || *iter == "--thread")
+        {
+            thread_name = true;
+        }
         else if (*iter == "-v" || *iter == "--verbose")
         {
             int v;
@@ -442,7 +469,7 @@ int main(int argc, char* argv[])
     }
 
     // Initialize logging
-    setup_logging(verbose_level, color, logpath);
+    setup_logging(verbose_level, color, thread_name, logpath);
 
     string argstr;
     for (int idx = 0; idx < argc; ++idx)

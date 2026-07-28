@@ -14,7 +14,8 @@ constexpr uint8_t TYPE_AC3 = 0x01;
 constexpr uint8_t TYPE_EAC3 = 0x15;
 }
 
-IEC61937Parser::IEC61937Parser(void)
+IEC61937Parser::IEC61937Parser(int verbose_level)
+    : m_verbose(verbose_level)
 {
     m_log = spdlog::get("app_logger");
     if (!m_log)
@@ -372,8 +373,11 @@ void IEC61937Parser::finalize_frame(void)
                     if (result->strmtyp == 0)
                     {
                         ++m_independentCnt;
-                        spdlog::debug("[{}] {}", m_frameCnt,
-                                      EAC3Parser::formatOutput(*result));
+                        if (m_verbose > 3)
+                        {
+                            spdlog::debug("[{}] {}", m_frameCnt,
+                                          EAC3Parser::formatOutput(*result));
+                        }
                         m_codecpar = make_codec_params();
                         m_codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
                         m_codecpar->format = AV_SAMPLE_FMT_NONE;
@@ -394,7 +398,6 @@ void IEC61937Parser::finalize_frame(void)
                                      EAC3Parser::formatOutput(*result));
                     }
                 }
-                m_isAtmos = result->is_atmos;
             }
         }
     }

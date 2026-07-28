@@ -24,12 +24,11 @@ class IEC61937Parser
         int64_t timestamp { 0 };
 
         bool is_pause { false };
-        bool is_atmos { false };
     };
 
   public:
 
-    IEC61937Parser(void);
+    IEC61937Parser(int verbose);
 
     void Init(void);
 
@@ -39,8 +38,6 @@ class IEC61937Parser
                                uint32_t sampleRate);
 
     std::optional<Frame> PopFrame(void);
-
-    bool isAtmos(void) const { return m_isAtmos; }
 
   private:
 
@@ -96,5 +93,6 @@ class IEC61937Parser
     int m_sampleRate {0};
     int64_t m_currentTimestamp { 0 };
     CodecParamsPtr m_codecpar;
-    bool   m_isAtmos {false};
+
+    int m_verbose {0};
 };

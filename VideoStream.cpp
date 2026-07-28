@@ -12,6 +12,7 @@ extern "C" {
 #include "OutputTS.h"
 
 using namespace std;
+// using namespace std::chrono_literals;
 
 VideoStream::VideoStream(OutputTS& parent, int verbose_level, Args& args,
                          Params&& params, MagCallback image_buffer_avail,
@@ -51,7 +52,7 @@ VideoStream::VideoStream(OutputTS& parent, int verbose_level, Args& args,
                                    std::move(codecpar),
                                    m_encoder->time_base,
                                    m_params.frame_duration,
-                                   timestamp, false);
+                                   timestamp);
 }
 
 VideoStream::~VideoStream(void)
@@ -144,7 +145,7 @@ void VideoStream::stop_frame_preparation(void)
         std::unique_lock<std::mutex> lock(m_hwframe_mutex);
         while (!m_preped_frames.empty())
         {
-            PreparedFrame item = m_preped_frames.front();
+            PreparedFrame item = std::move(m_preped_frames.front());
             m_preped_frames.pop_front();
 
             if (item.mapped)
@@ -725,19 +726,46 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
 
 bool VideoStream::EncodeFrame(void)
 {
+#ifdef LOG_ELAPSED
+        chrono::steady_clock::time_point active_start
+            = chrono::steady_clock::now();
+#endif
     PreparedFrame job;
     {
         std::unique_lock<std::mutex> lock(m_queue_mutex);
         if (m_active_frames.empty())
             return false;
 
-        job = m_active_frames.front();
+        job = std::move(m_active_frames.front());
         m_active_frames.pop_front();
     }
+#ifdef LOG_ELAPSED
+        chrono::steady_clock::time_point active_end
+            = chrono::steady_clock::now();
+
+        chrono::steady_clock::time_point encode_start
+            = chrono::steady_clock::now();
+#endif
 
     bool result = m_parent.EncodeFrame(OutputTS::VIDEO_STREAM_ID,
                                        m_version,
                                        m_encoder.get(), job.hw_frame);
+
+#ifdef LOG_ELAPSED
+        chrono::steady_clock::time_point encode_end
+            = chrono::steady_clock::now();
+
+        auto active_dur = chrono::duration_cast<chrono::microseconds>
+                          (active_end - active_start);
+        auto encode_dur = chrono::duration_cast<chrono::microseconds>
+                   (encode_end - encode_start);
+
+        if (active_dur > 1ms || encode_dur > 7ms)
+        {
+            m_log->debug("Wait for active buf {}μs. Encode {}μs",
+                         active_dur.count(), encode_dur.count());
+        }
+#endif
 
     if (job.mapped == nullptr)
     {
@@ -788,13 +816,19 @@ void VideoStream::prepare_frames(void)
             m_empty_avail.wait(lock, [this]() {
                 return !m_running.load() || !m_empty_shells.empty();
             });
-
             if (!m_running.load())
                 return;
 
-            job = m_empty_shells.front();
+            job = std::move(m_empty_shells.front());
             m_empty_shells.pop_front();
         }
+
+        size_t retries = 0;
+
+#ifdef LOG_ELAPSED
+        chrono::steady_clock::time_point get_start;
+        chrono::steady_clock::time_point get_end;
+#endif
 
         for (;;)
         {
@@ -802,8 +836,15 @@ void VideoStream::prepare_frames(void)
             av_frame_unref(job.mapped);
             av_frame_unref(job.hw_frame);
 
+#ifdef LOG_ELAPSED
+            get_start = chrono::steady_clock::now();
+#endif
             int ret = av_hwframe_get_buffer(m_hw_frames_ctx.get(),
                                             job.hw_frame, 0);
+#ifdef LOG_ELAPSED
+            get_end = chrono::steady_clock::now();
+#endif
+
             if (ret == 0)
                 break;
 
@@ -812,6 +853,9 @@ void VideoStream::prepare_frames(void)
                 m_log->error("av_hwframe_get_buffer failed: {}",
                              AVerr2str(ret));
             }
+
+            ++retries;
+            m_log->warn("av_hwframe_get_buffer ENOMEM retry {}", retries);
 
             {
                 std::unique_lock<std::mutex> lock(m_hwframe_mutex);
@@ -828,11 +872,32 @@ void VideoStream::prepare_frames(void)
                 return;
             }
         }
+        if (retries)
+            m_log->warn("Prepared frame took {} retries", retries);
 
+#ifdef LOG_ELAPSED
+            chrono::steady_clock::time_point map_start
+                = chrono::steady_clock::now();
+#endif
         int ret = av_hwframe_map(job.mapped, job.hw_frame,
-                                 AV_HWFRAME_MAP_WRITE |
-                                 AV_HWFRAME_MAP_OVERWRITE |
-                                 AV_HWFRAME_MAP_DIRECT);
+                                 AV_HWFRAME_MAP_WRITE
+                                 | AV_HWFRAME_MAP_OVERWRITE
+//                               | AV_HWFRAME_MAP_DIRECT
+                                 );
+#ifdef LOG_ELAPSED
+            chrono::steady_clock::time_point map_end
+                = chrono::steady_clock::now();
+
+            auto get_dur = chrono::duration_cast<chrono::microseconds>
+                              (get_end - get_start);
+            auto map_dur = chrono::duration_cast<chrono::microseconds>
+                   (map_end - map_start);
+            if (map_dur > 7ms)
+            {
+                m_log->debug("Prepare: get: {}μs map:{}μs",
+                             get_dur.count(), map_dur.count());
+            }
+#endif
         if (ret < 0)
         {
             m_log->error("av_hwframe_map failed: {}", AVerr2str(ret));
@@ -848,11 +913,6 @@ void VideoStream::prepare_frames(void)
         }
         // Tell AddImage that a valid mapped frame is ready!
         m_preped_avail.notify_one();
-#if 0
-        m_log->info("prepped {} used {}",
-                    m_preped_frames.size(),
-                    m_active_frames.size());
-#endif
     }
     return;
 }
@@ -928,6 +988,10 @@ VideoStream::StatsResult VideoStream::AddImage(Image&& image)
     }
     else
     {
+#ifdef LOG_ELAPSED
+        chrono::steady_clock::time_point map_start
+            = chrono::steady_clock::now();
+#endif
         {
             std::unique_lock<std::mutex> lock(m_pool_mutex);
             m_preped_avail.wait(lock, [this]() {
@@ -937,14 +1001,36 @@ VideoStream::StatsResult VideoStream::AddImage(Image&& image)
             if (!m_running.load())
                 return -1;
 
-            hw = m_preped_frames.front();
+            hw = std::move(m_preped_frames.front());
             m_preped_frames.pop_front();
         }
+#ifdef LOG_ELAPSED
+        chrono::steady_clock::time_point map_end
+            = chrono::steady_clock::now();
 
+        chrono::steady_clock::time_point copy_start
+            = chrono::steady_clock::now();
+#endif
         // Direct memory block transfer into the mapped staging area
         av_image_copy(hw.mapped->data, hw.mapped->linesize,
                       const_cast<const uint8_t**>(src_data), src_linesize,
                       m_sw_pix_fmt, m_params.width, m_params.height);
+#ifdef LOG_ELAPSED
+        chrono::steady_clock::time_point copy_end
+            = chrono::steady_clock::now();
+
+        auto buf_dur = chrono::duration_cast<chrono::microseconds>
+                  (map_end - map_start);
+        auto copy_dur = chrono::duration_cast<chrono::microseconds>
+                   (copy_end - copy_start);
+
+        if (buf_dur > 1ms || copy_dur > 15ms)
+        {
+            m_log->debug("Wait for prepared buf {}μs. Image copy {}μs",
+                         buf_dur.count(),
+                         copy_dur.count());
+        }
+#endif
 
         // Release Magewell frame buffer after copying is complete
         f_image_avail(image.pImage, image.pEco);
@@ -988,6 +1074,11 @@ VideoStream::StatsResult VideoStream::AddImage(Image&& image)
     {
         std::scoped_lock lock(m_queue_mutex);
         m_active_frames.push_back(hw);
-        return Stats{m_active_frames.size(), m_preped_frames.size()};
+        return Stats{
+            m_args.buffers - m_preped_frames.size(),
+            m_active_frames.size(),
+            m_preped_frames.size(),
+            m_empty_shells.size()
+        };
     }
 }

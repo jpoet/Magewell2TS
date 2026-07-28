@@ -57,7 +57,7 @@ extern "C" {
 using namespace std;
 
 inline std::string DumpAVFormat(const AVFormatContext* fmtctx,
-                                string color_desc, bool atmos)
+                                string color_desc)
 {
     fmt::memory_buffer out;
 
@@ -132,9 +132,9 @@ inline std::string DumpAVFormat(const AVFormatContext* fmtctx,
                                                sizeof(layout));
 
                     fmt::format_to(std::back_inserter(out),
-                                   " Channels: {} ({}) {}",
+                                   " Channels: {} ({})",
                                    cp->ch_layout.nb_channels,
-                                   layout, (atmos ? "Atmos" : ""));
+                                   layout);
                 }
 
 #if 0
@@ -360,7 +360,7 @@ bool OutputTS::open_container(void)
                 color_desc = m_videoStream->ColorSpaceDesc();
         }
 
-        m_log->info(DumpAVFormat(m_formatContext, color_desc, m_atmos_audio));
+        m_log->info(DumpAVFormat(m_formatContext, color_desc));
     }
 
     AVDictionary* muxer_opts = nullptr;
@@ -519,14 +519,42 @@ bool OutputTS::EncodeFrame(int stream_id, int version,
     for (;;)
     {
 
+#ifdef LOG_ELAPSED
+        chrono::steady_clock::time_point encode_start
+            = chrono::steady_clock::now();
+#endif
         // Try to submit the frame
         int ret = avcodec_send_frame(enc, frame);
 
+#ifdef LOG_ELAPSED
+        chrono::steady_clock::time_point encode_end
+            = chrono::steady_clock::now();
+
+        chrono::steady_clock::time_point queue_start
+            = chrono::steady_clock::now();
+#endif
         if (ret == 0)
         {
             // The encoder accepted ownership of the frame buffers.
-            return queue_packets(stream_id, version,
-                                 enc, pktQ, false);
+            int ret = queue_packets(stream_id, version,
+                          enc, pktQ, false);
+#ifdef LOG_ELAPSED
+            chrono::steady_clock::time_point queue_end
+            = chrono::steady_clock::now();
+
+        auto encode_dur = chrono::duration_cast<chrono::microseconds>
+                   (encode_end - encode_start);
+        auto queue_dur = chrono::duration_cast<chrono::microseconds>
+                          (queue_end - queue_start);
+
+        if (stream_id == VIDEO_STREAM_ID &&
+            (encode_dur > 6ms || queue_dur > 1ms))
+        {
+            m_log->debug("avcodec_send_frame {}μs queue_packets {}μs",
+                         encode_dur.count(), queue_dur.count());
+        }
+#endif
+        return ret;
         }
 
         if (ret == AVERROR(EAGAIN))
@@ -780,7 +808,7 @@ void OutputTS::mux(void)
 
 int OutputTS::AddMarker(int id, CodecParamsPtr&& codecpar,
                         AVRational timebase, AVRational frameduration,
-                        int64_t timestamp, bool atmos)
+                        int64_t timestamp)
 {
     Packet marker;
 
@@ -806,7 +834,6 @@ int OutputTS::AddMarker(int id, CodecParamsPtr&& codecpar,
         version = marker.version =
             m_audio_latest_version.fetch_add(1, std::memory_order_relaxed) + 1;
         m_audioPktQ.Push(std::move(marker));
-        m_atmos_audio = atmos;
     }
     else if (id == VIDEO_STREAM_ID)
     {
@@ -891,16 +918,17 @@ void OutputTS::AddAudioSamples(AudioStream::Samples&& samples)
 // Thread entry
 void OutputTS::process_video(void)
 {
-    OutputTS::PoolSnapshot      vidpool_used_1m  {0, 0, 0};
-    std::array<OutputTS::PoolSnapshot, 5>  vidpool_used_5m  {};
-    std::array<OutputTS::PoolSnapshot, 10> vidpool_used_10m {};
+    VideoStream::Stats vidpool_used_1m;
+    std::array<VideoStream::Stats, 5>  vidpool_used_5m  {};
+    std::array<VideoStream::Stats, 10> vidpool_used_10m {};
     int               vidpool_5m_idx   {0};
     int               vidpool_10m_idx  {0};
 
-    std::ranges::iterator_t<std::array<OutputTS::PoolSnapshot, 5>>
+    std::ranges::iterator_t<std::array<VideoStream::Stats, 5>>
         vidpool_5m_max;
-    std::ranges::iterator_t<std::array<OutputTS::PoolSnapshot, 10>>
+    std::ranges::iterator_t<std::array<VideoStream::Stats, 10>>
         vidpool_10m_max;
+
 
     std::chrono::seconds total_duration;
     std::chrono::steady_clock::time_point start_tm   = std::chrono::steady_clock::now();
@@ -914,6 +942,10 @@ void OutputTS::process_video(void)
     {
         VideoStream::Image image;
 
+#ifdef LOG_ELAPSED
+        chrono::steady_clock::time_point start
+            = chrono::steady_clock::now();
+#endif
         {
             // Wait for next image
             std::unique_lock<std::mutex> lock(m_imageQ_mutex);
@@ -932,7 +964,18 @@ void OutputTS::process_video(void)
             image = std::move(m_imageQ.front());
             m_imageQ.pop_front();
         }
+#ifdef LOG_ELAPSED
+        chrono::steady_clock::time_point end
+            = chrono::steady_clock::now();
 
+        auto dur = chrono::duration_cast<chrono::microseconds>
+                   (end - start);
+
+        if (dur > 16ms)
+            m_log->debug("Wait for image {}μs queue size {}",
+                         dur.count(),
+                         m_imageQ.size());
+#endif
         // Encoder reconfiguration request
         if (image.oParams.has_value())
         {
@@ -945,7 +988,7 @@ void OutputTS::process_video(void)
                              image.timestamp);
         }
 
-#if 0
+#ifdef LOG_ELAPSED
         auto encode_start = chrono::steady_clock::now();
 #endif
 
@@ -956,27 +999,29 @@ void OutputTS::process_video(void)
             Shutdown();
             break;
         }
-        auto [used, ready] = std::get<VideoStream::Stats>(result);
+        const VideoStream::Stats current = std::get<VideoStream::Stats>(result);
 
-#if 0
+#ifdef LOG_ELAPSED
         auto encode_end = chrono::steady_clock::now();
         auto encode_dur = chrono::duration_cast<chrono::microseconds>
-                          (encode_end - encode_start).count();
-        m_log->info("Encode {}us q {}", encode_dur, m_imageQ.size());
+                          (encode_end - encode_start);
+        if (m_imageQ.size())
+        {
+            m_log->debug("Total Encode {}us image q size {}",
+                         encode_dur.count(), m_imageQ.size());
+        }
 #endif
         m_pktQ_ready.notify_one();
 
         {
-            size_t total = used + ready;
-
-            const OutputTS::PoolSnapshot current{total, used, ready};
+            size_t used = current.used;
 
             // Capture snapshots based on total high-water marks
-            if (vidpool_used_1m.total < total)
+            if (vidpool_used_1m.used < used)
                 vidpool_used_1m = current;
-            if (vidpool_used_5m[vidpool_5m_idx].total < total)
+            if (vidpool_used_5m[vidpool_5m_idx].used < used)
                 vidpool_used_5m[vidpool_5m_idx] = current;
-            if (vidpool_used_10m[vidpool_10m_idx].total < total)
+            if (vidpool_used_10m[vidpool_10m_idx].used < used)
                 vidpool_used_10m[vidpool_10m_idx] = current;
 
             current_tm = std::chrono::steady_clock::now();
@@ -987,13 +1032,19 @@ void OutputTS::process_video(void)
             {
 
                 vidpool_5m_max  = std::ranges::max_element(vidpool_used_5m,
-                                           {}, &OutputTS::PoolSnapshot::total);
+                                           {}, &VideoStream::Stats::used);
                 vidpool_10m_max = std::ranges::max_element(vidpool_used_10m,
-                                           {}, &OutputTS::PoolSnapshot::total);
+                                           {}, &VideoStream::Stats::used);
 
-                string m1 = format("{}+{}", vidpool_used_1m.used, vidpool_used_1m.ready);
-                string m5 = format("{}+{}", vidpool_5m_max->used, vidpool_5m_max->ready);
-                string m10 = format("{}+{}", vidpool_10m_max->used, vidpool_10m_max->ready);
+                string m1 = format("{}+{}",
+                                   vidpool_used_1m.active,
+                                   vidpool_used_1m.preped);
+                string m5 = format("{}+{}",
+                                   vidpool_5m_max->active,
+                                   vidpool_5m_max->preped);
+                string m10 = format("{}+{}",
+                                   vidpool_10m_max->active,
+                                    vidpool_10m_max->preped);
                 m_log->debug(std::format
                              ("GPU pool used 1m:{:<5} 5m:{:<5} 10m:{:<5} "
                               "of {:<3d} ({:%T} elapsed)",
@@ -1001,15 +1052,15 @@ void OutputTS::process_video(void)
                               m_video_args.buffers, total_duration));
 
                 // Reset windows to clean baseline structures
-                vidpool_used_1m = OutputTS::PoolSnapshot{};
+                vidpool_used_1m = VideoStream::Stats{};
 
                 ++vidpool_5m_idx;
                 vidpool_5m_idx %= 5;
-                vidpool_used_5m[vidpool_5m_idx] = OutputTS::PoolSnapshot{};
+                vidpool_used_5m[vidpool_5m_idx] = VideoStream::Stats{};
 
                 ++vidpool_10m_idx;
                 vidpool_10m_idx %= 10;
-                vidpool_used_10m[vidpool_10m_idx] = OutputTS::PoolSnapshot{};
+                vidpool_used_10m[vidpool_10m_idx] = VideoStream::Stats{};
 
                 vidpool_tm = current_tm;
             }
@@ -1022,14 +1073,17 @@ void OutputTS::process_video(void)
 
 void OutputTS::AddVideoImage(VideoStream::Image&& image)
 {
-    std::scoped_lock lock(m_imageQ_mutex);
-
-    if (m_running.load() == false)
     {
-        f_image_avail(image.pImage, image.pEco);
-        return;
+        std::scoped_lock lock(m_imageQ_mutex);
+
+        if (!m_running.load())
+        {
+            f_image_avail(image.pImage, image.pEco);
+            return;
+        }
+
+        m_imageQ.push_back(std::move(image));
     }
 
-    m_imageQ.push_back(std::move(image));
     m_imageQ_ready.notify_one();
 }

@@ -14,6 +14,7 @@ using namespace std;
 BitStream::BitStream(OutputTS& parent, int verbose_level,
                      Params&& params, int64_t timestamp)
     : AudioStream(parent, verbose_level, std::move(params), timestamp)
+    , m_iec61937(verbose_level)
 {
     m_log->info("Opening bitstream audio");
 }
@@ -36,7 +37,7 @@ void BitStream::AddSamples(AudioStream::Samples&& samples)
                                        std::move(codecpar),
                                        TimeBase::MPEG_TS,
                                        m_params.frame_duration,
-                                       m_pts, m_iec61937.isAtmos());
+                                       m_pts);
     }
 
     while(auto frame = m_iec61937.PopFrame())
