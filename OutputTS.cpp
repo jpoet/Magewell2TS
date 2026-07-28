@@ -936,7 +936,7 @@ void OutputTS::process_video(void)
     std::chrono::steady_clock::time_point current_tm;
     int duration;
 
-    m_log->debug(std::format("GPU pool used: used+mapped"));
+    m_log->debug(format("GPU pool used: used+mapped"));
 
     for (;;)
     {
@@ -1045,7 +1045,7 @@ void OutputTS::process_video(void)
                 string m10 = format("{}+{}",
                                    vidpool_10m_max->active,
                                     vidpool_10m_max->preped);
-                m_log->debug(std::format
+                m_log->debug(format
                              ("GPU pool used 1m:{:<5} 5m:{:<5} 10m:{:<5} "
                               "of {:<3d} ({:%T} elapsed)",
                               m1, m5, m10,

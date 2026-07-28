@@ -27,7 +27,6 @@
 #include <charconv>
 #include <csignal>
 #include <memory>
-#include <format>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -35,6 +34,7 @@
 
 #include <vector>
 #include <filesystem>
+
 #include <spdlog/sinks/stdout_sinks.h>
 #include "spdlog/sinks/rotating_file_sink.h"
 #include <spdlog/sinks/stdout_color_sinks.h>

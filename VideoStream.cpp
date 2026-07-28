@@ -4,8 +4,15 @@ extern "C" {
 #include <libavutil/opt.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/hwcontext.h>
-#include <libavutil/hwcontext_qsv.h>  // AVQSVFramesContext
-#include <vpl/mfxstructures.h>        // "MFX_MEMTYPE_VIDEO_MEMORY_DECODER_TARGET"
+
+// Only include QSV headers if CMake detected Intel MediaSDK / VPL headers
+#if defined(HAS_MAGEWELL_QSV_SUPPORT)
+  #include <libavutil/hwcontext_qsv.h>  // Contains AVQSVFramesContext
+
+  #if (LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(58, 0, 0))
+    #include <vpl/mfxstructures.h>      // Contains MFX_MEMTYPE_VIDEO_MEMORY_DECODER_TARGET
+  #endif
+#endif
 }
 
 #include "VideoStream.h"
@@ -679,7 +686,8 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     frames_ctx->sw_format = m_sw_pix_fmt;
     frames_ctx->initial_pool_size = m_args.extraHWframes + m_args.lookahead + 16;
 
-#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(58, 0, 0)
+#if defined(HAS_MAGEWELL_QSV_SUPPORT) && (LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(58, 0, 0))
+    // This code only compiles if the hardware/library dependencies exist system-wide
     if (frames_ctx->hwctx)
     {
         AVQSVFramesContext* qsv_hwctx =

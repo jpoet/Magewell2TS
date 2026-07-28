@@ -51,18 +51,25 @@
 #include <memory>
 #include <sys/resource.h>
 #include <sys/mman.h> // for mlock
+#include <sys/eventfd.h>
+#include <sched.h>
+#include <sys/prctl.h>
 
 #include <MWFOURCC.h>
 #include <LibMWCapture/MWCapture.h>
 #include "LibMWCapture/MWEcoCapture.h"
 
-#include <sys/eventfd.h>
-
 #include "Magewell.h"
 #include "IEC61937Parser.h"
 
-#include <sched.h>
-#include <sys/prctl.h>
+#ifdef USE_LIBFMT_FALLBACK
+  #include <fmt/format.h>
+  #include <fmt/chrono.h>
+  using fmt::format;
+#else
+  #include <format>
+  using std::format;
+#endif
 
 // #define DUMP_RAW_AUDIO_ALLBITS
 // #define DUMP_RAW_AUDIO
@@ -516,7 +523,7 @@ void Magewell::ListInputs(void)
     int idx;
 
     // Display number of channels found
-    desc = std::format("{} channels.", num_channels);
+    desc = format("{} channels.", num_channels);
 
     // Iterate through all channels
     for (idx = 0; idx < num_channels; ++idx)
@@ -555,7 +562,7 @@ void Magewell::ListInputs(void)
             strcmp(channelInfo.szBoardSerialNo,
                    prev_channelInfo.szBoardSerialNo) != 0)
         {
-            desc += std::format("\nBoard: {}"
+            desc += format("\nBoard: {}"
                                 ", Product: {}"
                                 ", SerialNo: {}\n"
                                 "\tFirmware: {}"
@@ -569,7 +576,7 @@ void Magewell::ListInputs(void)
         prev_channelInfo = channelInfo;
 
         // Display channel information
-        desc += std::format("{:3d}: [{}:{}] {}\n",
+        desc += format("{:3d}: [{}:{}] {}\n",
                             idx + 1,
                             channelInfo.byBoardIndex,
                             channelInfo.byChannelIndex + 1,
@@ -1410,7 +1417,7 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
                         : "unk";
 
     // Example output: "SDR | Space:bt709 | TRC:bt709 | Rng:tv"
-    color.description = std::format("SDR | Space:{} | TRC:{} | Rng:{}",
+    color.description = format("SDR | Space:{} | TRC:{} | Rng:{}",
                                         s_str, t_str, r_str);
 
     if (0 == (uiValidFlag & MWCAP_HDMI_INFOFRAME_MASK_HDR))
@@ -1521,7 +1528,7 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
     double max_nits = av_q2d(color.max_luminance);
 
     // Example output: "HDR | Space:bt2020nc | TRC:smpte2084 | Rng:tv | Luma:1000 nits | CLL:1000/400"
-    color.description = std::format(
+    color.description = format(
             "HDR Space:{} TRC:{} Rng:{} Luma:{:.0f}nits CLL:{}/{}",
             s_str, t_str, r_str, max_nits, color.MaxCLL, color.MaxFALL
     );

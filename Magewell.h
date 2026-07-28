@@ -1,13 +1,13 @@
 #pragma once
 
-#include <string>
-#include <deque>
-#include <set>
-
 #include <chrono>
-#include <vector>
+#include <deque>
+#include <iostream>
+#include <set>
 #include <string>
-#include <format>
+#include <vector>
+
+#include <spdlog/spdlog.h>
 
 #include <mutex>
 #include <condition_variable>
@@ -15,8 +15,6 @@
 #include <MWFOURCC.h>
 #include <LibMWCapture/MWCapture.h>
 #include "LibMWCapture/MWEcoCapture.h"
-
-#include <spdlog/spdlog.h>
 
 #include "OutputTS.h"
 
@@ -31,19 +29,6 @@
  * @author John Patrick Poet
  * @date 2022-2026
  */
-
-
-#include <iostream>
-#include <chrono>
-#include <vector>
-#include <string>
-#include <format>
-
-#include <iostream>
-#include <chrono>
-#include <vector>
-#include <string>
-#include <format>
 
 class Magewell
 {

@@ -2,7 +2,15 @@
 
 #include <memory>
 #include <string>
-#include <format>
+
+#ifdef USE_LIBFMT_FALLBACK
+  #include <fmt/format.h>
+  #include <fmt/chrono.h>
+  using fmt::format;
+#else
+  #include <format>
+  using std::format;
+#endif
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -30,7 +38,7 @@ inline std::string AV_ts2timestr(int64_t ts, const AVRational* tb)
         return "0.00";
     }
 
-    return std::format("{:.2f}", av_q2d(*tb) * ts);
+    return format("{:.2f}", av_q2d(*tb) * ts);
 }
 
 inline std::string AVerr2str(int err)

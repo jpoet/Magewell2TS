@@ -1,5 +1,13 @@
 #include <array>
-#include <format>
+
+#ifdef USE_LIBFMT_FALLBACK
+  #include <fmt/format.h>
+  #include <fmt/chrono.h>
+  using fmt::format;
+#else
+  #include <format>
+  using std::format;
+#endif
 
 #include "EAC3Parser.h"
 #include "BitReader.h"
@@ -246,18 +254,18 @@ std::string EAC3Parser::formatOutput(const EAC3MetaData& out)
     std::string stream_type_str = (out.strmtyp == 0)
                                   ? "Independent" : "Dependent";
 
-    return std::format("--- {} ---\n"
-                       "  Stream Type:    {}\n"
-                       "  Substream ID:   {}\n"
-                       "  Sample Rate:    {} Hz\n"
-                       "  Payload Size:   {} Bytes\n"
-                       "  Total Channels: {}\n"
-                       "  Speaker Layout: [ {} ] {}\n",
-                       codec_str, stream_type_str, out.substreamid,
-                       out.sample_rate_hz, out.payload_size_bytes,
-                       out.total_channels, out.channel_layout,
-                       (out.is_atmos ? "Atmos" : "")
-                       );
+    return format("--- {} ---\n"
+                  "  Stream Type:    {}\n"
+                  "  Substream ID:   {}\n"
+                  "  Sample Rate:    {} Hz\n"
+                  "  Payload Size:   {} Bytes\n"
+                  "  Total Channels: {}\n"
+                  "  Speaker Layout: [ {} ] {}\n",
+                  codec_str, stream_type_str, out.substreamid,
+                  out.sample_rate_hz, out.payload_size_bytes,
+                  out.total_channels, out.channel_layout,
+                  (out.is_atmos ? "Atmos" : "")
+                  );
 }
 
 void EAC3Parser::append_acmod(uint8_t acmod, std::vector<std::string>& target)
