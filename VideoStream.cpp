@@ -321,7 +321,6 @@ bool VideoStream::open_video(void)
     }
 
     return success;
-    return false;
 }
 
 bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
@@ -925,7 +924,11 @@ void VideoStream::prepare_frames(void)
     return;
 }
 
+#ifdef USEVIDSTATS
 VideoStream::StatsResult VideoStream::AddImage(Image&& image)
+#else
+int VideoStream::AddImage(Image&& image)
+#endif
 {
     if (!m_encoder || (m_params.encoder_type != NV && !m_hw_frames_ctx))
     {
@@ -1082,11 +1085,15 @@ VideoStream::StatsResult VideoStream::AddImage(Image&& image)
     {
         std::scoped_lock lock(m_queue_mutex);
         m_active_frames.push_back(hw);
+#ifdef USEVIDSTATS
         return Stats{
             m_args.buffers - m_preped_frames.size(),
             m_active_frames.size(),
             m_preped_frames.size(),
             m_empty_shells.size()
         };
+#else
+        return m_args.buffers - m_preped_frames.size();
+#endif
     }
 }

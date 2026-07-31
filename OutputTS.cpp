@@ -132,11 +132,26 @@ inline std::string DumpAVFormat(const AVFormatContext* fmtctx,
                                                sizeof(layout));
 
                     fmt::format_to(std::back_inserter(out),
-                                   " Channels: {} ({})",
+                                   " Channels: {} ({}) [",
                                    cp->ch_layout.nb_channels,
                                    layout);
-                }
 
+                    // Iterate through every channel index and append its layout name
+                    for (int i = 0; i < cp->ch_layout.nb_channels; ++i)
+                    {
+                        enum AVChannel ch = av_channel_layout_channel_from_index(&cp->ch_layout, i);
+                        char ch_name[16] {};
+                        av_channel_name(ch_name, sizeof(ch_name), ch);
+
+                        // Add a space separator between channel names
+                        fmt::format_to(std::back_inserter(out),
+                                       "{}{}",
+                                       (i > 0) ? " " : "",
+                                       ch_name);
+                    }
+
+                    fmt::format_to(std::back_inserter(out), "]");
+                }
 #if 0
                 if (cp->format)
                 {
@@ -918,6 +933,7 @@ void OutputTS::AddAudioSamples(AudioStream::Samples&& samples)
 // Thread entry
 void OutputTS::process_video(void)
 {
+#ifdef USEVIDSTATS
     VideoStream::Stats vidpool_used_1m;
     std::array<VideoStream::Stats, 5>  vidpool_used_5m  {};
     std::array<VideoStream::Stats, 10> vidpool_used_10m {};
@@ -928,7 +944,16 @@ void OutputTS::process_video(void)
         vidpool_5m_max;
     std::ranges::iterator_t<std::array<VideoStream::Stats, 10>>
         vidpool_10m_max;
+#else
+    int vidpool_used_1m;
+    std::array<int, 5>  vidpool_used_5m  {};
+    std::array<int, 10> vidpool_used_10m {};
+    int                 vidpool_5m_idx   {0};
+    int                 vidpool_10m_idx  {0};
 
+    int vidpool_5m_max  {0};
+    int vidpool_10m_max {0};
+#endif
 
     std::chrono::seconds total_duration;
     std::chrono::steady_clock::time_point start_tm   = std::chrono::steady_clock::now();
@@ -992,6 +1017,7 @@ void OutputTS::process_video(void)
         auto encode_start = chrono::steady_clock::now();
 #endif
 
+#ifdef USEVIDSTATS
         VideoStream::StatsResult result =
             m_videoStream->AddImage(std::move(image));
         if (std::holds_alternative<int>(result))
@@ -1000,6 +1026,9 @@ void OutputTS::process_video(void)
             break;
         }
         const VideoStream::Stats current = std::get<VideoStream::Stats>(result);
+#else
+        int used = m_videoStream->AddImage(std::move(image));
+#endif
 
 #ifdef LOG_ELAPSED
         auto encode_end = chrono::steady_clock::now();
@@ -1014,8 +1043,8 @@ void OutputTS::process_video(void)
         m_pktQ_ready.notify_one();
 
         {
+#ifdef USEVIDSTATS
             size_t used = current.used;
-
             // Capture snapshots based on total high-water marks
             if (vidpool_used_1m.used < used)
                 vidpool_used_1m = current;
@@ -1023,14 +1052,22 @@ void OutputTS::process_video(void)
                 vidpool_used_5m[vidpool_5m_idx] = current;
             if (vidpool_used_10m[vidpool_10m_idx].used < used)
                 vidpool_used_10m[vidpool_10m_idx] = current;
-
+#else
+            // Capture snapshots based on total high-water marks
+            if (vidpool_used_1m < used)
+                vidpool_used_1m = used;
+            if (vidpool_used_5m[vidpool_5m_idx] < used)
+                vidpool_used_5m[vidpool_5m_idx] = used;
+            if (vidpool_used_10m[vidpool_10m_idx] < used)
+                vidpool_used_10m[vidpool_10m_idx] = used;
+#endif
             current_tm = std::chrono::steady_clock::now();
             duration = std::chrono::duration_cast<std::chrono::seconds>(current_tm - vidpool_tm).count();
             total_duration = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start_tm);
 
             if (duration >= 60)
             {
-
+#ifdef USEVIDSTATS
                 vidpool_5m_max  = std::ranges::max_element(vidpool_used_5m,
                                            {}, &VideoStream::Stats::used);
                 vidpool_10m_max = std::ranges::max_element(vidpool_used_10m,
@@ -1063,6 +1100,32 @@ void OutputTS::process_video(void)
                 vidpool_used_10m[vidpool_10m_idx] = VideoStream::Stats{};
 
                 vidpool_tm = current_tm;
+#else
+                vidpool_5m_max = std::ranges::max(vidpool_used_5m);
+                vidpool_10m_max = std::ranges::max(vidpool_used_10m);
+
+                m_log->debug(std::format
+                             ("GPU pool used 1m:{:<3} 5m:{:<3} 10m:{:<3} "
+                              "of {:<3d} ({:%T} elapsed)",
+                              vidpool_used_1m,
+                              vidpool_5m_max,
+                              vidpool_10m_max,
+                              m_video_args.buffers,
+                              total_duration));
+
+                // Reset windows to clean baseline structures
+                vidpool_used_1m = 0;
+
+                ++vidpool_5m_idx;
+                vidpool_5m_idx %= 5;
+                vidpool_used_5m[vidpool_5m_idx] = 0;
+
+                ++vidpool_10m_idx;
+                vidpool_10m_idx %= 10;
+                vidpool_used_10m[vidpool_10m_idx] = 0;
+
+                vidpool_tm = current_tm;
+#endif
             }
         }
     }
