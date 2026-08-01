@@ -110,17 +110,6 @@ class VideoStream
     };
     using hw_frame_t = std::deque<PreparedFrame>;
 
-#ifdef USEVIDSTATS
-    struct Stats
-    {
-        size_t used    {0};
-        size_t active  {0};
-        size_t preped  {0};
-        size_t empty   {0};
-    };
-    using StatsResult = std::variant<VideoStream::Stats, int>;
-#endif
-
     VideoStream(OutputTS& parent, int verbose_level, Args& args,
                 Params&& params, MagCallback image_buffer_avail,
                 int64_t timestamp);
@@ -135,11 +124,7 @@ class VideoStream
     void Shutdown(void);
 
     bool HasActiveFrames(void) const;
-#ifdef USEVIDSTATS
-    StatsResult AddImage(Image&& image);
-#else
     int AddImage(Image&& image);
-#endif
     bool EncodeFrame(void);
 
     std::string ColorSpaceDesc(void) const
