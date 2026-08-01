@@ -1036,7 +1036,7 @@ void OutputTS::process_video(void)
                 vidpool_5m_max = std::ranges::max(vidpool_used_5m);
                 vidpool_10m_max = std::ranges::max(vidpool_used_10m);
 
-                m_log->debug(std::format
+                m_log->debug(format
                              ("GPU pool used 1m:{:<3} 5m:{:<3} 10m:{:<3} "
                               "of {:<3d} ({:%T} elapsed)",
                               vidpool_used_1m,
