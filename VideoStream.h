@@ -106,7 +106,7 @@ class VideoStream
     struct PreparedFrame
     {
         AVFrame* hw_frame;
-        AVFrame* mapped;
+        AVFrame* cpu_frame;
     };
     using hw_frame_t = std::deque<PreparedFrame>;
 
@@ -140,6 +140,7 @@ class VideoStream
     void start_frame_preparation(void);
     void stop_frame_preparation(void);
     void prepare_frames(void);
+    int add_image_error_cleanup(Image&& image, PreparedFrame&& hw);
 
     void set_light(const ColorSpace& color);
 

@@ -10,7 +10,7 @@ extern "C" {
   #include <libavutil/hwcontext_qsv.h>  // Contains AVQSVFramesContext
 
   #if (LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(58, 0, 0))
-    #include <vpl/mfxstructures.h>      // Contains MFX_MEMTYPE_VIDEO_MEMORY_DECODER_TARGET
+    #include <vpl/mfxstructures.h> // Contains MFX_MEMTYPE_VIDEO_MEMORY_DECODER_TARGET
   #endif
 #endif
 }
@@ -122,8 +122,8 @@ void VideoStream::start_frame_preparation(void)
     for (int idx = 0; idx < m_args.buffers; ++idx)
     {
         PreparedFrame shell = {
-            .hw_frame = av_frame_alloc(),
-            .mapped   = av_frame_alloc()
+            .hw_frame  = av_frame_alloc(),
+            .cpu_frame = av_frame_alloc()
         };
         m_empty_shells.push_back(shell);
     }
@@ -155,8 +155,8 @@ void VideoStream::stop_frame_preparation(void)
             PreparedFrame item = std::move(m_preped_frames.front());
             m_preped_frames.pop_front();
 
-            if (item.mapped)
-                av_frame_free(&item.mapped);
+            if (item.cpu_frame)
+                av_frame_free(&item.cpu_frame);
             if (item.hw_frame)
                 av_frame_free(&item.hw_frame);
         }
@@ -315,6 +315,8 @@ bool VideoStream::open_video(void)
           break;
     }
 
+    start_frame_preparation();
+
     if (local_opt != nullptr)
     {
         av_dict_free(&local_opt);
@@ -333,17 +335,22 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
         av_dict_copy(&opt, *opt_arg, 0);
     }
 
-    // Configure nVidia nvenc private encoder compression options
+    // ---------------------------------------------------------------------
+    // Configure NVENC private encoder options
+    // ---------------------------------------------------------------------
+
     av_dict_set(&opt, "rc", "constqp", 0);
     m_encoder->global_quality = m_args.quality;
 
     if (!m_args.preset.empty())
     {
         av_dict_set(&opt, "preset", m_args.preset.c_str(), 0);
+
         if (m_verbose > 0)
         {
             m_log->info("Nvidia Engine: Applied preset '{}' for {}",
-                        m_args.preset, m_args.codecName);
+                        m_args.preset,
+                        m_args.codecName);
         }
     }
 
@@ -354,62 +361,163 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
     av_dict_set(&opt, "zerolatency", "1", 0);
 #endif
 
+    // This is critical! Otherwise there will be muxing issues.
+    av_dict_set(&opt, "bf", "0", 0);
+
     if (m_args.lookahead > 0)
     {
         av_dict_set_int(&opt, "rc-lookahead", m_args.lookahead, 0);
         av_dict_set_int(&opt, "no-scenecut", 1, 0);
     }
+    else
+    {
+        av_dict_set(&opt, "rc-lookahead", "0", 0);
+    }
+
+    // ---------------------------------------------------------------------
+    // Create the persistent CUDA device context
+    // ---------------------------------------------------------------------
 
     if (m_hw_device_ctx == nullptr)
     {
         AVBufferRef* raw_hw_ctx = nullptr;
-        // Pass the address of our local raw pointer variable (&raw_hw_ctx)
+
         ret = av_hwdevice_ctx_create(&raw_hw_ctx,
                                      AV_HWDEVICE_TYPE_CUDA,
-                                     m_args.device.c_str(), nullptr, 0);
+                                     m_args.device.c_str(),
+                                     nullptr,
+                                     0);
 
         if (ret < 0 || !raw_hw_ctx)
         {
             m_log->error("Failed to acquire persistent Nvidia CUDA Device "
-                         "Context on '{}': {}", m_args.device, AVerr2str(ret));
+                         "Context on '{}': {}",
+                         m_args.device,
+                         AVerr2str(ret));
+
             if (opt)
-            {
                 av_dict_free(&opt);
-            }
+
             return false;
         }
 
-        // Transfer ownership safely into our smart pointer wrapper
         m_hw_device_ctx.reset(raw_hw_ctx);
 
         m_log->trace("nVidia CUDA hardware runtime engine successfully bound.");
     }
 
-    m_encoder->pix_fmt = AV_PIX_FMT_NV12;
+    // ---------------------------------------------------------------------
+    // Create the CUDA hardware-frame context.
+    //
+    // The encoder receives AV_PIX_FMT_CUDA frames, while sw_format
+    // describes the actual video pixels stored in those frames.
+    //
+    // m_sw_pix_fmt will be:
+    //     AV_PIX_FMT_NV12   for normal 8-bit video
+    //     AV_PIX_FMT_P010LE for HDR / forced P010
+    // ---------------------------------------------------------------------
 
-    // Explicitly unref the encoder's pre-existing context if it
-    // exists to avoid leakages during hot re-initialization
+    AVBufferRef* raw_frames_ctx =
+        av_hwframe_ctx_alloc(m_hw_device_ctx.get());
+
+    if (!raw_frames_ctx)
+    {
+        m_log->error("Failed to allocate Nvidia CUDA frames context.");
+
+        if (opt)
+            av_dict_free(&opt);
+
+        return false;
+    }
+
+    AVHWFramesContext* frames_ctx =
+        reinterpret_cast<AVHWFramesContext*>(raw_frames_ctx->data);
+
+    frames_ctx->format = AV_PIX_FMT_CUDA;
+    frames_ctx->sw_format = m_sw_pix_fmt;
+    frames_ctx->width = m_params.width;
+    frames_ctx->height = m_params.height;
+
+    // Maintain a pool of reusable CUDA surfaces.  The extra surfaces give
+    // NVENC room for asynchronous operation and lookahead.
+    frames_ctx->initial_pool_size =
+        m_args.buffers + m_args.lookahead + 16;
+
+    ret = av_hwframe_ctx_init(raw_frames_ctx);
+
+    if (ret < 0)
+    {
+        m_log->error("Failed to initialize Nvidia CUDA frames context: {}",
+                     AVerr2str(ret));
+
+        av_buffer_unref(&raw_frames_ctx);
+
+        if (opt)
+            av_dict_free(&opt);
+
+        return false;
+    }
+
+    // Transfer ownership into our persistent hardware-frame context.
+    m_hw_frames_ctx.reset(raw_frames_ctx);
+
+    // ---------------------------------------------------------------------
+    // NVENC receives CUDA hardware frames.
+    // ---------------------------------------------------------------------
+
+    m_encoder->pix_fmt = AV_PIX_FMT_CUDA;
+
+    // The encoder needs access to the CUDA device.
     if (m_encoder->hw_device_ctx)
     {
         av_buffer_unref(&m_encoder->hw_device_ctx);
     }
 
-    m_encoder->hw_device_ctx = av_buffer_ref(m_hw_device_ctx.get());
-//    m_encoder->thread_count = 1;
+    m_encoder->hw_device_ctx =
+        av_buffer_ref(m_hw_device_ctx.get());
 
-    // Codec initialization & encoder activation
-    // Commit the local options dictionary parameters during encoder activation
+    if (!m_encoder->hw_device_ctx)
+    {
+        m_log->error("Failed to reference Nvidia CUDA device context.");
+
+        if (opt)
+            av_dict_free(&opt);
+
+        return false;
+    }
+
+    // Tell NVENC which CUDA frame pool it will receive frames from.
+    if (m_encoder->hw_frames_ctx)
+    {
+        av_buffer_unref(&m_encoder->hw_frames_ctx);
+    }
+
+    m_encoder->hw_frames_ctx =
+        av_buffer_ref(m_hw_frames_ctx.get());
+
+    if (!m_encoder->hw_frames_ctx)
+    {
+        m_log->error("Failed to reference Nvidia CUDA frames context.");
+
+        if (opt)
+            av_dict_free(&opt);
+
+        return false;
+    }
+
+    m_log->info("Nvidia CUDA frames: {}x{}, software format={}, "
+                "hardware format=CUDA, pool={}",
+                frames_ctx->width,
+                frames_ctx->height,
+                av_get_pix_fmt_name(frames_ctx->sw_format),
+                frames_ctx->initial_pool_size);
+
+    // ---------------------------------------------------------------------
+    // Open the encoder
+    // ---------------------------------------------------------------------
+
     ret = avcodec_open2(m_encoder.get(), codec, &opt);
 
-    m_log->info("After open: {}x{} fr={}/{} tb={}/{}",
-                m_encoder->width,
-                m_encoder->height,
-                m_encoder->framerate.num,
-                m_encoder->framerate.den,
-                m_encoder->time_base.num,
-                m_encoder->time_base.den);
-
-    // Clean local tracking structures safely to avoid leaking RAM
     if (opt)
     {
         av_dict_free(&opt);
@@ -418,13 +526,22 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
     if (ret < 0)
     {
         m_log->critical("Fatal Error: Nvidia NVENC codec activation "
-                        "rejected: {}", AVerr2str(ret));
+                        "rejected: {}",
+                        AVerr2str(ret));
+
         return false;
     }
 
-    m_log->info("Nvidia NVENC pipeline fully active "
-                "at resolution {}x{}",
-                m_encoder->width, m_encoder->height);
+    // ---------------------------------------------------------------------
+    // Report the final encoder configuration
+    // ---------------------------------------------------------------------
+
+    m_log->info("Nvidia NVENC pipeline fully active at resolution {}x{} "
+                "with CUDA frames, sw_format={}",
+                m_encoder->width,
+                m_encoder->height,
+                av_get_pix_fmt_name(m_sw_pix_fmt));
+
     return true;
 }
 
@@ -523,8 +640,6 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
         m_hw_frames_ctx.reset(); // Safely calls av_buffer_unref internally
         return false;
     }
-
-    start_frame_preparation();
 
     // Explicitly unref the encoder's old context if it exists to avoid leakage
     if (m_encoder->hw_frames_ctx)
@@ -705,8 +820,6 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
         return false;
     }
 
-    start_frame_preparation();
-
     if (m_encoder->hw_frames_ctx)
     {
         av_buffer_unref(&m_encoder->hw_frames_ctx);
@@ -734,9 +847,10 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
 bool VideoStream::EncodeFrame(void)
 {
 #ifdef LOG_ELAPSED
-        chrono::steady_clock::time_point active_start
-            = chrono::steady_clock::now();
+    chrono::steady_clock::time_point active_start
+        = chrono::steady_clock::now();
 #endif
+
     PreparedFrame job;
     {
         std::unique_lock<std::mutex> lock(m_queue_mutex);
@@ -746,12 +860,13 @@ bool VideoStream::EncodeFrame(void)
         job = std::move(m_active_frames.front());
         m_active_frames.pop_front();
     }
-#ifdef LOG_ELAPSED
-        chrono::steady_clock::time_point active_end
-            = chrono::steady_clock::now();
 
-        chrono::steady_clock::time_point encode_start
-            = chrono::steady_clock::now();
+#ifdef LOG_ELAPSED
+    chrono::steady_clock::time_point active_end
+        = chrono::steady_clock::now();
+
+    chrono::steady_clock::time_point encode_start
+        = chrono::steady_clock::now();
 #endif
 
     bool result = m_parent.EncodeFrame(OutputTS::VIDEO_STREAM_ID,
@@ -759,44 +874,30 @@ bool VideoStream::EncodeFrame(void)
                                        m_encoder.get(), job.hw_frame);
 
 #ifdef LOG_ELAPSED
-        chrono::steady_clock::time_point encode_end
-            = chrono::steady_clock::now();
+    chrono::steady_clock::time_point encode_end
+        = chrono::steady_clock::now();
 
-        auto active_dur = chrono::duration_cast<chrono::microseconds>
-                          (active_end - active_start);
-        auto encode_dur = chrono::duration_cast<chrono::microseconds>
-                   (encode_end - encode_start);
+    auto active_dur = chrono::duration_cast<chrono::microseconds>
+                      (active_end - active_start);
+    auto encode_dur = chrono::duration_cast<chrono::microseconds>
+                      (encode_end - encode_start);
 
-        if (active_dur > 1ms || encode_dur > 7ms)
-        {
-            m_log->debug("Wait for active buf {}μs. Encode {}μs",
-                         active_dur.count(), encode_dur.count());
-        }
+    if (active_dur > 1ms || encode_dur > 7ms)
+    {
+        m_log->debug("Wait for active buf {}μs. Encode {}μs",
+                     active_dur.count(), encode_dur.count());
+    }
 #endif
 
-    if (job.mapped == nullptr)
-    {
-        // NVIDIA / HOST-MAPPED PATH:
-        // Freeing the frame shell decrements buf[0]'s reference counter.
-        // When the Nvidia driver finishes encoding, the refcount hits zero and
-        // Magewell callback fires automatically downstream.
-        av_frame_free(&job.hw_frame);
-    }
-    else
-    {
-        // Clear out the frame data references without destroying the
-        // memory shells This detaches the underlying Intel QSV surface
-        // buffers from the frame struct shells.
-        av_frame_unref(job.mapped);
-        av_frame_unref(job.hw_frame);
+    av_frame_unref(job.cpu_frame);
+    av_frame_unref(job.hw_frame);
 
-        // Recycle the clean shells back to the preparation pool
-        {
-            std::unique_lock<std::mutex> lock(m_pool_mutex);
-            m_empty_shells.push_back(job); // Return to the start of the factory
-        }
-        m_empty_avail.notify_one();    // Wake up PrepareFrames to map it again
+    {
+        std::unique_lock<std::mutex> lock(m_pool_mutex);
+        m_empty_shells.push_back(std::move(job));
     }
+
+    m_empty_avail.notify_one();
 
     if (!result)
     {
@@ -820,9 +921,11 @@ void VideoStream::prepare_frames(void)
         PreparedFrame job;
         {
             std::unique_lock<std::mutex> lock(m_pool_mutex);
+
             m_empty_avail.wait(lock, [this]() {
                 return !m_running.load() || !m_empty_shells.empty();
             });
+
             if (!m_running.load())
                 return;
 
@@ -839,15 +942,17 @@ void VideoStream::prepare_frames(void)
 
         for (;;)
         {
-            // Initialize the empty shell container with hardware assets
-            av_frame_unref(job.mapped);
+            av_frame_unref(job.cpu_frame);
             av_frame_unref(job.hw_frame);
 
 #ifdef LOG_ELAPSED
             get_start = chrono::steady_clock::now();
 #endif
+
             int ret = av_hwframe_get_buffer(m_hw_frames_ctx.get(),
-                                            job.hw_frame, 0);
+                                            job.hw_frame,
+                                            0);
+
 #ifdef LOG_ELAPSED
             get_end = chrono::steady_clock::now();
 #endif
@@ -862,71 +967,119 @@ void VideoStream::prepare_frames(void)
             }
 
             ++retries;
-            m_log->warn("av_hwframe_get_buffer ENOMEM retry {}", retries);
+
+            m_log->warn("av_hwframe_get_buffer ENOMEM retry {}",
+                        retries);
 
             {
                 std::unique_lock<std::mutex> lock(m_hwframe_mutex);
 
-                m_hwframe_used.wait_for(lock, std::chrono::milliseconds(3),
-                                        [this]() { return !m_running.load(); });
+                m_hwframe_used.wait_for(lock,
+                                        std::chrono::milliseconds(3),
+                                        [this]() {
+                                            return !m_running.load();
+                                        });
             }
 
             if (!m_running.load())
             {
                 m_log->info("Frame preparation loop aborted via "
                             "shutdown signal.");
+
                 av_frame_free(&job.hw_frame);
                 return;
             }
         }
+
         if (retries)
-            m_log->warn("Prepared frame took {} retries", retries);
+        {
+            m_log->warn("Prepared frame took {} retries",
+                        retries);
+        }
 
+        // -------------------------------------------------------------
+        // QSV / VAAPI: create a CPU-visible frame.
+        //
+        // NVIDIA/CUDA: leave hw_frame as a CUDA frame. The CPU -> CUDA
+        // transfer is performed by AddImage().
+        // -------------------------------------------------------------
+
+        if (m_params.encoder_type != NV)
+        {
 #ifdef LOG_ELAPSED
-            chrono::steady_clock::time_point map_start
-                = chrono::steady_clock::now();
+            chrono::steady_clock::time_point map_start =
+                chrono::steady_clock::now();
 #endif
-        int ret = av_hwframe_map(job.mapped, job.hw_frame,
-                                 AV_HWFRAME_MAP_WRITE
-                                 | AV_HWFRAME_MAP_OVERWRITE
-//                               | AV_HWFRAME_MAP_DIRECT
-                                 );
-#ifdef LOG_ELAPSED
-            chrono::steady_clock::time_point map_end
-                = chrono::steady_clock::now();
 
-            auto get_dur = chrono::duration_cast<chrono::microseconds>
-                              (get_end - get_start);
-            auto map_dur = chrono::duration_cast<chrono::microseconds>
-                   (map_end - map_start);
+            int ret = av_hwframe_map(job.cpu_frame,
+                                     job.hw_frame,
+                                     AV_HWFRAME_MAP_WRITE |
+                                     AV_HWFRAME_MAP_OVERWRITE
+                                     );
+
+#ifdef LOG_ELAPSED
+            chrono::steady_clock::time_point map_end =
+                chrono::steady_clock::now();
+
+            auto get_dur =
+                chrono::duration_cast<chrono::microseconds>(get_end - get_start);
+
+            auto map_dur =
+                chrono::duration_cast<chrono::microseconds>(map_end - map_start);
+
             if (map_dur > 7ms)
             {
-                m_log->debug("Prepare: get: {}μs map:{}μs",
-                             get_dur.count(), map_dur.count());
+                m_log->debug("Prepare: get: {} s map:{} s",
+                             get_dur.count(),
+                             map_dur.count());
             }
 #endif
-        if (ret < 0)
-        {
-            m_log->error("av_hwframe_map failed: {}", AVerr2str(ret));
 
-            av_frame_free(&job.mapped);
-            av_frame_free(&job.hw_frame);
-            return;
+            if (ret < 0)
+            {
+                m_log->error("av_hwframe_map failed: {}",
+                             AVerr2str(ret));
+
+                av_frame_free(&job.cpu_frame);
+                av_frame_free(&job.hw_frame);
+                return;
+            }
         }
 
         {
             std::unique_lock<std::mutex> lock(m_pool_mutex);
-            m_preped_frames.push_back(job);
+            m_preped_frames.push_back(std::move(job));
         }
-        // Tell AddImage that a valid mapped frame is ready!
+
         m_preped_avail.notify_one();
     }
-    return;
+}
+
+int VideoStream::add_image_error_cleanup(Image&& image, PreparedFrame&& hw)
+{
+    av_frame_unref(hw.cpu_frame);
+    av_frame_unref(hw.hw_frame);
+
+    f_image_avail(image.pImage, image.pEco);
+
+    {
+        std::unique_lock<std::mutex> lock(m_pool_mutex);
+        m_empty_shells.push_back(std::move(hw));
+    }
+    m_empty_avail.notify_one();
+    Shutdown();
+    return -1;
 }
 
 int VideoStream::AddImage(Image&& image)
 {
-    if (!m_encoder || (m_params.encoder_type != NV && !m_hw_frames_ctx))
+    int size_bytes;
+    uint8_t* src_data[4] = { nullptr };
+    int src_linesize[4] = { 0 };
+    PreparedFrame hw;
+
+    /* Make sure encoder is open */
+    if (!m_encoder || !m_hw_frames_ctx)
     {
         m_log->warn("Video encoder is not initialized or open");
         f_image_avail(image.pImage, image.pEco);
@@ -934,114 +1087,111 @@ int VideoStream::AddImage(Image&& image)
         return -1;
     }
 
-    // Map incoming Magewell buffer arrays
-    uint8_t* src_data[4] = { nullptr };
-    int src_linesize[4] = { 0 };
-
-    int size_bytes = av_image_fill_arrays(src_data, src_linesize, image.pImage,
-                                          m_sw_pix_fmt, m_params.width,
-                                          m_params.height, 1);
-    if (size_bytes < 0)
+    /* Get a prepared VRAM frame */
+#ifdef LOG_ELAPSED
+    chrono::steady_clock::time_point map_start
+        = chrono::steady_clock::now();
+#endif
     {
-        m_log->error("av_image_fill_arrays failed: {}", AVerr2str(size_bytes));
-        // Release Magewell buffer first to prevent device-side deadlocks
-        f_image_avail(image.pImage, image.pEco);
-        Shutdown();
-        return -1;
-    }
+        std::unique_lock<std::mutex> lock(m_pool_mutex);
 
-    PreparedFrame hw;
+        m_preped_avail.wait(lock, [this]() {
+            return !m_running.load() || !m_preped_frames.empty();
+        });
+
+        if (!m_running.load())
+        {
+            f_image_avail(image.pImage, image.pEco);
+            return -1;
+        }
+
+        hw = std::move(m_preped_frames.front());
+        m_preped_frames.pop_front();
+    }
+#ifdef LOG_ELAPSED
+    chrono::steady_clock::time_point map_end
+        = chrono::steady_clock::now();
+
+    chrono::steady_clock::time_point copy_start
+        = chrono::steady_clock::now();
+#endif
 
     if (m_params.encoder_type == NV)
     {
-        hw.hw_frame = av_frame_alloc();
-        if (!hw.hw_frame)
+        hw.cpu_frame->format = m_sw_pix_fmt;
+        hw.cpu_frame->width = m_params.width;
+        hw.cpu_frame->height = m_params.height;
+
+        size_bytes = av_image_fill_arrays(hw.cpu_frame->data,
+                                          hw.cpu_frame->linesize,
+                                          image.pImage,
+                                          m_sw_pix_fmt,
+                                          m_params.width,
+                                          m_params.height,
+                                          1);
+
+        if (size_bytes < 0)
         {
-            m_log->critical("Failed to allocate Nvidia hw_frame shell.");
-            f_image_avail(image.pImage, image.pEco);
-            Shutdown();
-            return -1;
+            m_log->error("av_image_fill_arrays failed: {}",
+                         AVerr2str(size_bytes));
+            return add_image_error_cleanup(std::move(image),
+                                           std::move(hw));
         }
-        hw.mapped = nullptr;
 
-        hw.hw_frame->width  = m_params.width;
-        hw.hw_frame->height = m_params.height;
-        hw.hw_frame->format = m_sw_pix_fmt;
+        int ret = av_hwframe_transfer_data(hw.hw_frame,
+                                           hw.cpu_frame,
+                                           0);
 
-        std::memcpy(hw.hw_frame->data, src_data, sizeof(src_data));
-        std::memcpy(hw.hw_frame->linesize, src_linesize, sizeof(src_linesize));
+        if (ret < 0)
+        {
+            m_log->error("av_hwframe_transfer_data failed: {}",
+                         AVerr2str(ret));
+            return add_image_error_cleanup(std::move(image),
+                                           std::move(hw));
+        }
 
-        // Set up the cleanup context
-        struct NvidiaCleanupContext {
-            uint8_t* pImage;
-            void* pEco;
-            MagCallback f_avail;
-            NvidiaCleanupContext(uint8_t* img, void* eco, const MagCallback& cb)
-                : pImage(img), pEco(eco), f_avail(cb) {}
-        };
-        auto* ctx = new NvidiaCleanupContext(image.pImage, image.pEco,
-                                             f_image_avail);
-
-        // Bind the callback directly to the frame reference tracking array
-        hw.hw_frame->buf[0] = av_buffer_create(
-            image.pImage, size_bytes,
-            [](void* opaque, uint8_t*) {
-                auto* c = reinterpret_cast<NvidiaCleanupContext*>(opaque);
-                c->f_avail(c->pImage, c->pEco); // Triggers automatically downstream when freed.
-                delete c;
-            },
-            ctx, 0
-        );
+        // The image has now been copied into the CUDA frame.
+        // cpu_frame still points at the Magewell buffer
+        av_frame_unref(hw.cpu_frame);
     }
     else
     {
-#ifdef LOG_ELAPSED
-        chrono::steady_clock::time_point map_start
-            = chrono::steady_clock::now();
-#endif
+        size_bytes = av_image_fill_arrays(src_data, src_linesize, image.pImage,
+                                          m_sw_pix_fmt, m_params.width,
+                                          m_params.height, 1);
+        if (size_bytes < 0)
         {
-            std::unique_lock<std::mutex> lock(m_pool_mutex);
-            m_preped_avail.wait(lock, [this]() {
-                return !m_running.load() || !m_preped_frames.empty();
-            });
-
-            if (!m_running.load())
-                return -1;
-
-            hw = std::move(m_preped_frames.front());
-            m_preped_frames.pop_front();
+            m_log->error("av_image_fill_arrays failed: {}",
+                         AVerr2str(size_bytes));
+            return add_image_error_cleanup(std::move(image), std::move(hw));
         }
-#ifdef LOG_ELAPSED
-        chrono::steady_clock::time_point map_end
-            = chrono::steady_clock::now();
 
-        chrono::steady_clock::time_point copy_start
-            = chrono::steady_clock::now();
-#endif
-        // Direct memory block transfer into the mapped staging area
-        av_image_copy(hw.mapped->data, hw.mapped->linesize,
-                      const_cast<const uint8_t**>(src_data), src_linesize,
+        // Direct memory block transfer into the cpu_frame staging area
+        av_image_copy(hw.cpu_frame->data, hw.cpu_frame->linesize,
+                      const_cast<const uint8_t**>(src_data),
+                      src_linesize,
                       m_sw_pix_fmt, m_params.width, m_params.height);
+    }
+
 #ifdef LOG_ELAPSED
-        chrono::steady_clock::time_point copy_end
-            = chrono::steady_clock::now();
+    chrono::steady_clock::time_point copy_end
+        = chrono::steady_clock::now();
 
-        auto buf_dur = chrono::duration_cast<chrono::microseconds>
-                  (map_end - map_start);
-        auto copy_dur = chrono::duration_cast<chrono::microseconds>
-                   (copy_end - copy_start);
+    auto buf_dur = chrono::duration_cast<chrono::microseconds>
+                   (map_end - map_start);
+    auto transfer_dur = chrono::duration_cast<chrono::microseconds>
+                        (copy_end - copy_start);
 
-        if (buf_dur > 1ms || copy_dur > 15ms)
-        {
-            m_log->debug("Wait for prepared buf {}μs. Image copy {}μs",
-                         buf_dur.count(),
-                         copy_dur.count());
-        }
+    if (buf_dur > 1ms || transfer_dur > 15ms)
+    {
+        m_log->debug("Wait for prepared buf {}μs. Image transfer {}μs",
+                     buf_dur.count(),
+                     transfer_dur.count());
+    }
 #endif
 
-        // Release Magewell frame buffer after copying is complete
-        f_image_avail(image.pImage, image.pEco);
-    }
+    // Release Magewell frame buffer after copying is complete
+    f_image_avail(image.pImage, image.pEco);
 
     // Metadata injection
     hw.hw_frame->colorspace      = m_params.color.space;
@@ -1077,7 +1227,7 @@ int VideoStream::AddImage(Image&& image)
         }
     }
 
-    // Push hwframe/mapped into the queue for the encoder thread
+    // Push hw_frame/cpu_frame into the queue for the encoder thread
     {
         std::scoped_lock lock(m_queue_mutex);
         m_active_frames.push_back(hw);

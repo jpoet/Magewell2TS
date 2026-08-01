@@ -2682,22 +2682,10 @@ bool Magewell::capture_video(void)
                     eco_params.dwFOURCC = MWFOURCC_P010;
                     params.pix_fmt = AV_PIX_FMT_P010LE;
                 }
-                else if (m_encoderType == VideoStream::QSV ||
-                         m_encoderType == VideoStream::VAAPI)
+                else
                 {
                     eco_params.dwFOURCC = MWFOURCC_NV12;
                     params.pix_fmt = AV_PIX_FMT_NV12;
-                }
-                else if (m_encoderType == VideoStream::NV)
-                {
-                    eco_params.dwFOURCC = MWFOURCC_I420;
-                    params.pix_fmt = AV_PIX_FMT_NV12;
-                }
-                else
-                {
-                    m_log->critical("Failed to determine best magewell "
-                                    "pixel format.");
-                    Shutdown();
                 }
             }
             params.encoder_type = m_encoderType;

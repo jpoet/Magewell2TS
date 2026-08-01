@@ -476,9 +476,8 @@ bool OutputTS::queue_packets(int stream_id, int version,
         }
 
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
-        {
             return true;
-        }
+
         if (ret < 0)
         {
             m_log->warn("Failed encoding frame: {}",
@@ -509,7 +508,8 @@ bool OutputTS::queue_packets(int stream_id, int version,
                 .is_marker    = false,
                 .stream_id    = stream_id,
                 .version      = version,
-                .time_base    = enc->time_base,
+                //.time_base = enc->time_base,
+                .time_base = TimeBase::MPEG_TS,
                 .pkt          = std::move(pkt),
                 .codec_par    = nullptr
             };
@@ -538,6 +538,7 @@ bool OutputTS::EncodeFrame(int stream_id, int version,
         chrono::steady_clock::time_point encode_start
             = chrono::steady_clock::now();
 #endif
+
         // Try to submit the frame
         int ret = avcodec_send_frame(enc, frame);
 
