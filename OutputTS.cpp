@@ -1017,7 +1017,7 @@ void OutputTS::process_video(void)
                           (encode_end - encode_start);
         if (m_imageQ.size())
         {
-            m_log->debug("Total Encode {}us image q size {}",
+            m_log->debug("Total Encode {}μs image q size {}",
                          encode_dur.count(), m_imageQ.size());
         }
 #endif

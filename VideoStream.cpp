@@ -1072,7 +1072,7 @@ void VideoStream::prepare_frames(void)
 
             if (map_dur > 7ms)
             {
-                m_log->debug("Prepare: get: {} s map:{} s",
+                m_log->debug("Prepare: get: {}μs map:{}μs",
                              get_dur.count(),
                              map_dur.count());
             }
