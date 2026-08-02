@@ -478,6 +478,10 @@ bool OutputTS::queue_packets(int stream_id, int version,
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
             return true;
 
+#if 0
+        log_packet("queue_packets", m_formatContext, pkt.get(), 0);
+#endif
+
         if (ret < 0)
         {
             m_log->warn("Failed encoding frame: {}",

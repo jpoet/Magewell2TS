@@ -551,27 +551,37 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
     AVDictionary* opt = nullptr;
 
     if (opt_arg && *opt_arg)
-    {
         av_dict_copy(&opt, *opt_arg, 0);
-    }
 
     m_encoder->global_quality = m_args.quality;
 
     if (!m_args.preset.empty())
     {
-        av_opt_set(m_encoder->priv_data, "preset", m_args.preset.c_str(), 0);
+        av_opt_set(m_encoder->priv_data,
+                   "preset",
+                   m_args.preset.c_str(),
+                   0);
+
         if (m_verbose > 0)
         {
             m_log->info("VAAPI Engine: Applied preset '{}' for {}",
-                        m_args.preset, m_args.codecName);
+                        m_args.preset,
+                        m_args.codecName);
         }
     }
 
-    av_opt_set(m_encoder->priv_data, "async_depth", "4", 0);
-    int surface_count_padding = m_args.extraHWframes + m_args.buffers + 4;
-    if (m_args.lookahead > 0)
+    // Live capture: don't allow encoder frame reordering.
+    av_dict_set(&opt, "bf", "0", 0);
+    av_opt_set_int(m_encoder->priv_data,
+                   "async_depth", 4, 0);
+
+    if (m_args.lookahead > 0 && av_opt_find(m_encoder->priv_data,
+                                            "lookahead", nullptr, 0,
+                                            AV_OPT_SEARCH_CHILDREN))
     {
-        surface_count_padding += m_args.lookahead;
+        av_opt_set_int(m_encoder->priv_data, "lookahead", 1, 0);
+        av_opt_set_int(m_encoder->priv_data, "lookahead_depth",
+                       m_args.lookahead, 0);
     }
 
     string child_device = "/dev/dri/" + m_args.device;
@@ -581,43 +591,46 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
         setenv("LIBVA_MESSAGING_LEVEL", "0", 1);
 
         AVBufferRef* raw_hw_ctx = nullptr;
+
         ret = av_hwdevice_ctx_create(&raw_hw_ctx,
                                      AV_HWDEVICE_TYPE_VAAPI,
-                                     child_device.c_str(), nullptr, 0);
+                                     child_device.c_str(),
+                                     nullptr,
+                                     0);
 
         if (ret < 0 || !raw_hw_ctx)
         {
             m_log->error("Failed to acquire persistent VAAPI Device "
                          "Context on path '{}': {}",
-                         child_device, AVerr2str(ret));
+                         child_device,
+                         AVerr2str(ret));
+
             if (opt)
-            {
                 av_dict_free(&opt);
-            }
+
             return false;
         }
 
-        // Safely transfer ownership to the smart pointer
         m_hw_device_ctx.reset(raw_hw_ctx);
 
         m_log->trace("VAAPI hardware runtime engine successfully bound.");
     }
 
-    if (opt)
-    {
-        av_dict_free(&opt);
-    }
-
     m_encoder->pix_fmt = AV_PIX_FMT_VAAPI;
 
-    // Clear out the old generation context safely using the smart pointer API
     m_hw_frames_ctx.reset();
 
-    AVBufferRef* raw_frames_ctx = av_hwframe_ctx_alloc(m_hw_device_ctx.get());
-    if (raw_frames_ctx == nullptr)
+    AVBufferRef* raw_frames_ctx =
+        av_hwframe_ctx_alloc(m_hw_device_ctx.get());
+
+    if (!raw_frames_ctx)
     {
         m_log->error("VAAPI Pool Builder: Failed to allocate hardware "
                      "frames memory block.");
+
+        if (opt)
+            av_dict_free(&opt);
+
         return false;
     }
 
@@ -626,46 +639,76 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
     AVHWFramesContext* frames_ctx =
         reinterpret_cast<AVHWFramesContext*>(m_hw_frames_ctx->data);
 
+    int hw_surface_pool_size =
+        m_args.extraHWframes + m_args.buffers + 4;
+
+    if (m_args.lookahead > 0)
+        hw_surface_pool_size += m_args.lookahead;
+
+    frames_ctx->initial_pool_size = hw_surface_pool_size + 16;
     frames_ctx->width = m_encoder->width;
     frames_ctx->height = m_encoder->height;
     frames_ctx->format = AV_PIX_FMT_VAAPI;
     frames_ctx->sw_format = m_sw_pix_fmt;
-    frames_ctx->initial_pool_size = surface_count_padding + 16;
 
     ret = av_hwframe_ctx_init(m_hw_frames_ctx.get());
+
     if (ret < 0)
     {
         m_log->error("VAAPI Kernel Driver rejected fresh format "
-                     "surface pool request: {}", AVerr2str(ret));
-        m_hw_frames_ctx.reset(); // Safely calls av_buffer_unref internally
+                     "surface pool request: {}",
+                     AVerr2str(ret));
+
+        m_hw_frames_ctx.reset();
+
+        if (opt)
+            av_dict_free(&opt);
+
         return false;
     }
 
-    // Explicitly unref the encoder's old context if it exists to avoid leakage
     if (m_encoder->hw_frames_ctx)
-    {
         av_buffer_unref(&m_encoder->hw_frames_ctx);
-    }
 
-    // av_buffer_ref increments the internal atomic reference counter.
-    // The encoder takes ownership of this reference, and will clean
-    // it up automatically via avcodec_free_context().
-    m_encoder->hw_frames_ctx = av_buffer_ref(m_hw_frames_ctx.get());
-//    m_encoder->thread_count = 1;
+    m_encoder->hw_frames_ctx =
+        av_buffer_ref(m_hw_frames_ctx.get());
 
-    // Kernel initialization codec activation
-    ret = avcodec_open2(m_encoder.get(), codec, nullptr);
+    // Open the encoder.  Do NOT start frame preparation here.
+    ret = avcodec_open2(m_encoder.get(), codec, &opt);
+
     if (ret < 0)
     {
-        m_log->critical("Fatal Error: VAAPI codec activation rejected "
-                        "by system kernel: {}", AVerr2str(ret));
+        m_log->critical("Fatal Error: VAAPI codec activation rejected: {}",
+                        AVerr2str(ret));
+
+        if (opt)
+            av_dict_free(&opt);
+
         Shutdown();
         return false;
     }
 
+    if (opt)
+    {
+        AVDictionaryEntry* entry = nullptr;
+
+        while ((entry = av_dict_get(opt, "", entry,
+                                    AV_DICT_IGNORE_SUFFIX)))
+        {
+            m_log->warn("VAAPI encoder option '{}' was not consumed "
+                        "(value '{}')",
+                        entry->key,
+                        entry->value);
+        }
+
+        av_dict_free(&opt);
+    }
+
     m_log->trace("VAAPI pipeline fully active at "
                  "hardware resolution {}x{}",
-                 frames_ctx->width, frames_ctx->height);
+                 frames_ctx->width,
+                 frames_ctx->height);
+
     return true;
 }
 
@@ -1013,8 +1056,8 @@ void VideoStream::prepare_frames(void)
 
             int ret = av_hwframe_map(job.cpu_frame,
                                      job.hw_frame,
-                                     AV_HWFRAME_MAP_WRITE |
-                                     AV_HWFRAME_MAP_OVERWRITE
+                                     AV_HWFRAME_MAP_WRITE
+                                   | AV_HWFRAME_MAP_OVERWRITE
                                      );
 
 #ifdef LOG_ELAPSED
