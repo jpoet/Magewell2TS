@@ -1087,6 +1087,21 @@ void VideoStream::prepare_frames(void)
                 av_frame_free(&job.hw_frame);
                 return;
             }
+#if 0
+            m_log->info("Mapped frame: format={} sw_format={} "
+                        "width={} height={} "
+                        "linesize[0]={} linesize[1]={} "
+                        "data[0]={} data[1]={}",
+                        av_get_pix_fmt_name
+                            (static_cast<AVPixelFormat>(job.cpu_frame->format)),
+                        av_get_pix_fmt_name(m_sw_pix_fmt),
+                        job.cpu_frame->width,
+                        job.cpu_frame->height,
+                        job.cpu_frame->linesize[0],
+                        job.cpu_frame->linesize[1],
+                        static_cast<void*>(job.cpu_frame->data[0]),
+                        static_cast<void*>(job.cpu_frame->data[1]));
+#endif
         }
 
         {
@@ -1208,6 +1223,22 @@ int VideoStream::AddImage(Image&& image)
                          AVerr2str(size_bytes));
             return add_image_error_cleanup(std::move(image), std::move(hw));
         }
+
+#if 0
+        m_log->info("Magewell: {}x{} size={} | src Y stride={} UV stride={}",
+                    m_params.width,
+                    m_params.height,
+                    size_bytes,
+                    src_linesize[0],
+                    src_linesize[1]);
+
+        m_log->info("QSV/VAAPI CPU frame: Y stride={} UV stride={} "
+                    "linesize[0]={} linesize[1]={}",
+                    hw.cpu_frame->linesize[0],
+                    hw.cpu_frame->linesize[1],
+                    hw.cpu_frame->linesize[0],
+                    hw.cpu_frame->linesize[1]);
+#endif
 
         // Direct memory block transfer into the cpu_frame staging area
         av_image_copy(hw.cpu_frame->data, hw.cpu_frame->linesize,
