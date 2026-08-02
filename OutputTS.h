@@ -10,6 +10,7 @@
 #include <thread>
 #include <atomic>
 #include <functional>
+#include <chrono>
 
 #include <spdlog/spdlog.h>
 #ifdef SPDLOG_FMT_EXTERNAL
@@ -79,7 +80,7 @@ class OutputTS
     std::shared_ptr<spdlog::logger> m_log;
     int                     m_verbose;
 
-    uint m_generation {0};
+    std::chrono::milliseconds m_frame_ms { 16 };
 
     std::shared_ptr<VideoStream> m_videoStream {nullptr};
     std::mutex            m_videoStream_mutex;

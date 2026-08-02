@@ -40,7 +40,6 @@
 #include <thread>
 #include <cstdlib>
 #include <fcntl.h>
-#include <chrono>
 #include <algorithm>
 #include <array>
 #include <semaphore>
@@ -673,6 +672,11 @@ void OutputTS::sync_markers(void)
     {
         outPkt = m_videoPktQ.PopValue();
         m_video_current_version = outPkt->version;
+
+        constexpr AVRational ms_time_base = {1, 1000};
+        m_frame_ms = std::chrono::milliseconds(av_rescale_q(1,
+                                                    outPkt->frame_duration,
+                                                    ms_time_base));
 #if 0
         m_sequence.Push(*outPkt, outPkt->pkt.get());
 #endif
@@ -688,7 +692,6 @@ void OutputTS::sync_markers(void)
     m_log->trace("Pending DTS; audio {} video {}",
                  m_audioPktQ.PeekDts(), m_videoPktQ.PeekDts());
 
-    ++m_generation;
     open_container();
 }
 
@@ -998,9 +1001,9 @@ void OutputTS::process_video(void)
         auto dur = chrono::duration_cast<chrono::microseconds>
                    (end - start);
 
-        if (dur > 16ms)
-            m_log->debug("Wait for image {}μs queue size {}",
-                         dur.count(),
+        if (dur > m_frame_ms)
+            m_log->debug("Wait for image {}μs(>{}ms) queue size {}",
+                         dur.count(), m_frame_ms.count(),
                          m_imageQ.size());
 #endif
         // Encoder reconfiguration request
