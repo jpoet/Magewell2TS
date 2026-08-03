@@ -1,8 +1,13 @@
 #pragma once
 
-#include <string>
+#include <chrono>
 #include <deque>
+#include <iostream>
 #include <set>
+#include <string>
+#include <vector>
+
+#include <spdlog/spdlog.h>
 
 #include <mutex>
 #include <condition_variable>
@@ -14,41 +19,37 @@
 #include "OutputTS.h"
 
 /**
- * @brief Magewell class for controlling video capture cards using Magewell API
+ * @brief Magewell class for controlling video capture cards using
+ * Magewell API
  *
  * This class provides functionality to open channels, capture video and audio,
- * handle HDR information, and manage video buffers for Magewell capture devices.
+ * Handle HDR information, and manage video buffers for Magewell
+ * capture devices.
  *
  * @author John Patrick Poet
  * @date 2022-2026
  */
+
 class Magewell
 {
     // Type definitions
     using imageset_t = std::set<uint8_t*>;     ///< Set of image buffers
     using imageque_t = std::deque<uint8_t*>;   ///< Queue of available image buffers
-    using ecoque_t  = std::vector<std::unique_ptr<MWCAP_VIDEO_ECO_CAPTURE_FRAME>>;
+    using ecoque_t  =
+        std::vector<std::unique_ptr<MWCAP_VIDEO_ECO_CAPTURE_FRAME>>;
 
-public:
-    /**
-     * @brief Constructor for Magewell class
-     *
-     * Initializes the MWCapture library instance. If initialization fails,
-     * sets fatal error flag.
-     */
+    enum : uint8_t
+    {
+        HDMI_EOTF_SDR          = 0,
+        HDMI_EOTF_HDR_GAMMA    = 1,
+        HDMI_EOTF_ST2084_PQ    = 2,
+        HDMI_EOTF_HLG          = 3
+    };
+
+  public:
     Magewell(void);
-
-    /**
-     * @brief Destructor for Magewell class
-     *
-     * Cleans up resources by closing the channel and exiting the MWCapture instance.
-     */
     ~Magewell(void);
 
-    /**
-     * @brief Set verbose level for logging
-     * @param v Verbose level (0-3)
-     */
     void Verbose(int v) { m_verbose = v; }
 
     /**
@@ -78,18 +79,6 @@ public:
     bool WaitForInputs(int cnt) const;
 
     /**
-     * @brief Display current audio volume settings
-     */
-    void DisplayVolume(void);
-
-    /**
-     * @brief Set audio volume level
-     * @param volume_level Volume level (0-100)
-     * @return true always
-     */
-    bool SetVolume(int volume_level);
-
-    /**
      * @brief Read EDID information from the device
      * @param filepath Path to save EDID data
      * @return true if successful, false otherwise
@@ -103,21 +92,9 @@ public:
      */
     bool WriteEDID(const std::string & filepath);
 
-    /**
-     * @brief Start video capture with specified parameters
-     * @param video_codec Video codec to use
-     * @param preset Encoding preset
-     * @param quality Quality setting
-     * @param look_ahead Look ahead setting
-     * @param no_audio Whether to disable audio capture
-     * @param p010 Whether to use P010 format
-     * @param gpu_device GPU device to use
-     * @return true if successful, false otherwise
-     */
-    bool Capture(const std::string & video_codec, const std::string & preset,
-                 int quality, int look_ahead, bool no_audio, bool p010,
-                 const std::string & gpu_device, float gop_secs,
-                 int extra_hw_frames, int gpu_buffers, int video_buffers);
+    bool Capture(VideoStream::Args&& video_args,
+                 bool no_audio, std::chrono::milliseconds settle_time,
+                 int video_buffers, bool realtime);
 
     /**
      * @brief Shutdown the capture process
@@ -125,17 +102,12 @@ public:
     void Shutdown(void);
 
     /**
-     * @brief Reset the capture process
-     */
-    void Reset(void);
-
-    /**
      * @brief Check if fatal error occurred
      * @return true if fatal error, false otherwise
      */
     bool operator! (void) { return m_fatal; }
 
-private:
+  private:
     /**
      * @brief Describe input channel information
      * @param channel Handle to the channel
@@ -143,26 +115,10 @@ private:
      */
     std::string describe_input(HCHANNEL channel);
 
-    /**
-     * @brief Update HDR color space information
-     * @param signal_status Video signal status
-     * @return true if color space changed, false otherwise
-     */
-    bool update_HDRcolorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status);
+    bool get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
+                        VideoStream::ColorSpace& meta);
 
-    /**
-     * @brief Update HDR frame information
-     * @return true if successful, false otherwise
-     */
-    bool update_HDRframe(void);
-
-    /**
-     * @brief Update HDR information from info frames
-     * @return true if successful, false otherwise
-     */
-    bool update_HDRinfo(void);
-
-    size_t   AllocateImageBuffer(void);
+    size_t   AllocateImageBuffers(void);
     uint8_t* GetFrameImage(size_t frame_idx);
 
     /**
@@ -179,21 +135,9 @@ private:
      */
     void eco_image_buffer_available(uint8_t* pbImage, void* buf);
 
-    /**
-     * @brief Add a new PRO image buffer
-     * @return true if successful, false otherwise
-     */
-    bool add_pro_image_buffers(void);
-
-    /**
-     * @brief Add ECO image buffers
-     * @return true if successful, false otherwise
-     */
-    bool add_eco_image_buffers(void);
-
-    /**
-     * @brief Free all image buffers
-     */
+    bool create_pro_image_buffers(void);
+    bool create_eco_image_buffers(void);
+    bool register_eco_image_buffers(void);
     void free_image_buffers(void);
 
     /**
@@ -220,6 +164,8 @@ private:
      */
     void close_eco_video(void);
 
+    void log_stats(size_t used);
+
     /**
      * @brief Capture video using ECO capture method
      * @param eco_params ECO capture parameters
@@ -229,10 +175,10 @@ private:
      * @param interlaced Whether video is interlaced
      */
     bool capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
+                           std::optional<VideoStream::Params>&& pParams,
                            int eco_event,
                            HNOTIFY video_notify,
-                           ULONGLONG ullStatusBits,
-                           bool interlaced);
+                           ULONGLONG ullStatusBits);
 
     /**
      * @brief Capture video using PRO capture method
@@ -246,19 +192,19 @@ private:
      * @param interlaced Whether video is interlaced
      */
     bool capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
+                           std::optional<VideoStream::Params>&& pParams,
                            HNOTIFY video_notify,
                            MWCAP_PTR notify_event,
                            MWCAP_PTR capture_event,
                            int       frame_wrap_idx,
                            DWORD     event_mask,
-                           ULONGLONG ullStatusBits,
-                           bool interlaced);
+                           ULONGLONG ullStatusBits);
 
     /**
      * @brief Main video capture loop
      * @return true always
      */
-    bool capture_video(int quality);
+    bool capture_video(void);
 
     /**
      * @brief Capture audio data
@@ -266,27 +212,22 @@ private:
     void capture_audio_loop(void);
     void capture_audio(void);
 
-private:
+  private:
     // spdlog
     std::shared_ptr<spdlog::logger> m_log;
 
     // Capture components
-    OutputTS*            m_out2ts  {nullptr};  ///< Output TS handler
-    HCHANNEL             m_channel {nullptr};   ///< Channel handle
-    MWCAP_CHANNEL_INFO   m_channel_info  {0};  ///< Channel information
-    int                  m_channel_idx   {0};  ///< Channel index
-
-    // HDR information
-    HDMI_INFOFRAME_PACKET m_infoPacket      {0};  ///< Info packet
-    HDMI_HDR_INFOFRAME_PAYLOAD& m_HDRinfo {m_infoPacket.hdrInfoFramePayload};  ///< HDR info
-    HDMI_INFOFRAME_PACKET m_infoPacket_prev {0};  ///< Previous info packet
-    HDMI_HDR_INFOFRAME_PAYLOAD& m_HDRinfo_prev {m_infoPacket_prev.hdrInfoFramePayload};  ///< Previous HDR info
+    OutputTS*            m_out2ts  {nullptr};    ///< Output TS handler
+    HCHANNEL             m_channel {nullptr};    ///< Channel handle
+    MWCAP_CHANNEL_INFO   m_channel_info  {0};    ///< Channel information
+    int                  m_channel_idx   {0};    ///< Channel index
+    std::chrono::milliseconds m_settle_time   {5000}; ///< signal change timeout
 
     std::unique_ptr<uint64_t[]> m_image_buffer;
     size_t                      m_image_size_qwords {0};
-    bool                        m_pinned   {false};
+    bool                        m_pinned            {false};
 
-    size_t       m_requested_buffers       {0};
+    size_t       m_image_buffers           {0};
     size_t       m_image_buffers_total     {0}; ///< Total image buffers
     size_t       m_image_buffers_avail     {0}; ///< Available image buffers
     imageque_t   m_avail_image_buffers;         ///< Queue of available buffers
@@ -295,11 +236,15 @@ private:
     std::condition_variable m_image_returned;   ///< Condition variable for buffer return
 
     // Video parameters
-    int m_num_pixels         {0};  ///< Number of pixels
+    VideoStream::Args        m_video_args;
+    VideoStream::EncoderType m_encoderType;
+    enum AVPixelFormat       m_pix_fmt;
+
     int m_image_size         {0};  ///< Image size in bytes
     int m_min_stride         {0};  ///< Minimum stride
-    int m_frame_ms           {17}; ///< Frame time in milliseconds
-    int m_frame_ms2          {34}; ///< Double frame time
+    int m_frame_ms           {17}; ///< Video Frame time in milliseconds
+    int m_frame_ms2          {34}; ///< Double video frame time
+    int m_frame_half_ms      {8};  ///< Half of video frame time
 
     int     m_frame_cnt      {0};  ///< Number of frames processed
     int64_t m_expected_ts    {-1}; ///< Expected next timestamp
@@ -309,19 +254,19 @@ private:
 
     // State flags
     std::atomic<bool> m_running     {true};  ///< Running flag
-    std::atomic<bool> m_reset_audio {true};  ///< Audio reset flag
-    std::atomic<bool> m_reset_video {true};  ///< Video reset flag
-    std::chrono::steady_clock::time_point m_last_reset;  ///< Last reset time
 
     // Function pointer
     std::function<bool (void)>  f_open_video;  ///< Video open function
 
     // Device flags
     bool m_isEco   {false};  ///< Whether using ECO capture
-    bool m_isHDR   {false};  ///< Whether HDR is active
-    bool m_p010    {false};  ///< Whether P010 format is used
+
     bool m_fatal   {false};  ///< Fatal error flag
     int  m_verbose {1};      ///< Verbose level
 
-    std::function<void(AudioBuffer::AudioFrame&&)> f_audio_sink;
+#if 0
+    FrameRateDetector m_rateDetector;
+#endif
+
+    std::chrono::steady_clock::time_point m_start_tm;
 };

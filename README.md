@@ -277,3 +277,17 @@ git clone git://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.
 ```
 
 If you want to update the firmware on the Arc itself, this might help: [https://forum.level1techs.com/t/remember-to-update-your-intel-arc-firmware-on-linux/208736](https://forum.level1techs.com/t/remember-to-update-your-intel-arc-firmware-on-linux/208736)
+
+# Real Time Threads
+If you want to use the --realtime option, the user running magewell2ts needs to be configure with "real time" priority. For example, create the file
+```
+/etc/security/limits.d/99-mythtv-realtime.conf
+```
+with
+```
+mythtv   soft   rtprio   99
+mythtv   hard   rtprio   99
+mythtv   soft   nice     -20
+mythtv   hard   nice     -20
+```
+to allow the mythtv user to request real time priority.
