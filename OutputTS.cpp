@@ -164,7 +164,7 @@ inline std::string DumpAVFormat(const AVFormatContext* fmtctx,
             }
 
             default:
-                break;
+              break;
         }
     }
 
@@ -465,8 +465,13 @@ bool OutputTS::queue_packets(int stream_id, int version,
         {
             if (ret == AVERROR_EOF)
                 return true;
+
             if (ret == AVERROR(EAGAIN))
-                continue;
+            {
+                m_log->warn("Encoder returned EAGAIN while flushing.");
+                return true;
+            }
+
             if (ret < 0)
             {
                 m_log->warn("Failed encoding frame: {}",
@@ -555,26 +560,27 @@ bool OutputTS::EncodeFrame(int stream_id, int version,
 #endif
         if (ret == 0)
         {
-            // The encoder accepted ownership of the frame buffers.
-            int ret = queue_packets(stream_id, version,
-                          enc, pktQ, false);
+            // The encoder accepted the frame. It now holds whatever
+            // references/copies it needs internally.
+            ret = queue_packets(stream_id, version,
+                                enc, pktQ, false);
 #ifdef LOG_ELAPSED
             chrono::steady_clock::time_point queue_end
-            = chrono::steady_clock::now();
+                = chrono::steady_clock::now();
 
-        auto encode_dur = chrono::duration_cast<chrono::microseconds>
-                   (encode_end - encode_start);
-        auto queue_dur = chrono::duration_cast<chrono::microseconds>
-                          (queue_end - queue_start);
+            auto encode_dur = chrono::duration_cast<chrono::microseconds>
+                              (encode_end - encode_start);
+            auto queue_dur = chrono::duration_cast<chrono::microseconds>
+                             (queue_end - queue_start);
 
-        if (stream_id == VIDEO_STREAM_ID &&
-            (encode_dur > 6ms || queue_dur > 1ms))
-        {
-            m_log->debug("avcodec_send_frame {}μs queue_packets {}μs",
-                         encode_dur.count(), queue_dur.count());
-        }
+            if (stream_id == VIDEO_STREAM_ID &&
+                (encode_dur > 6ms || queue_dur > 1ms))
+            {
+                m_log->debug("avcodec_send_frame {}μs queue_packets {}μs",
+                             encode_dur.count(), queue_dur.count());
+            }
 #endif
-        return ret;
+            return ret;
         }
 
         if (ret == AVERROR(EAGAIN))
@@ -626,7 +632,7 @@ bool OutputTS::FlushPackets(int stream_id, int version, AVCodecContext* enc)
                        : m_videoPktQ;
 
     m_log->trace("flush_packets id={} version={} Started, PktQ size {}",
-                stream_id, version, pktQ.GetSize());
+                 stream_id, version, pktQ.GetSize());
 
     // Enter draining mode by passing nullptr
     int ret = avcodec_send_frame(enc, nullptr);
@@ -639,10 +645,14 @@ bool OutputTS::FlushPackets(int stream_id, int version, AVCodecContext* enc)
         return false;
     }
 
-    queue_packets(stream_id, version,
-                  enc, pktQ, true);
+    if (!queue_packets(stream_id, version, enc, pktQ, true))
+    {
+        m_log->error("Failed draining encoder during flush.");
+        return false;
+    }
+
     m_log->trace("flush_packets id={} version={} Finished, PktQ size {}",
-                stream_id, version, pktQ.GetSize());
+                 stream_id, version, pktQ.GetSize());
 
     return true;
 }
@@ -655,9 +665,9 @@ void OutputTS::sync_markers(void)
     std::scoped_lock lock(m_audio_pktQ_mutex, m_video_pktQ_mutex);
 
     m_log->trace("MARKER received. Video current {} latest {}; "
-                "Audio current {} latest {}",
-                m_video_current_version, m_video_latest_version.load(),
-                m_audio_current_version, m_audio_latest_version.load());
+                 "Audio current {} latest {}",
+                 m_video_current_version, m_video_latest_version.load(),
+                 m_audio_current_version, m_audio_latest_version.load());
 
     if (m_videoPktQ.PeekMarker())
     {
@@ -852,14 +862,14 @@ int OutputTS::AddMarker(int id, CodecParamsPtr&& codecpar,
     {
         m_log->trace("AddMarker: Audio");
         version = marker.version =
-            m_audio_latest_version.fetch_add(1, std::memory_order_relaxed) + 1;
+                  m_audio_latest_version.fetch_add(1, std::memory_order_relaxed) + 1;
         m_audioPktQ.Push(std::move(marker));
     }
     else if (id == VIDEO_STREAM_ID)
     {
         m_log->trace("AddMarker: Video");
         version = marker.version =
-            m_video_latest_version.fetch_add(1, std::memory_order_relaxed) + 1;
+                  m_video_latest_version.fetch_add(1, std::memory_order_relaxed) + 1;
         m_videoPktQ.Push(std::move(marker));
     }
     m_pktQ_ready.notify_one();

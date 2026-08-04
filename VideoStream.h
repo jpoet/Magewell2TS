@@ -105,8 +105,8 @@ class VideoStream
 
     struct PreparedFrame
     {
-        AVFrame* hw_frame;
-        AVFrame* cpu_frame;
+        FramePtr hw_frame;
+        FramePtr cpu_frame;
     };
     using hw_frame_t = std::deque<PreparedFrame>;
 
@@ -174,15 +174,17 @@ class VideoStream
 
     MagCallback f_image_avail;
 
-    std::mutex          m_pool_mutex;      // Protects m_empty_shells & m_preped_frames
-    std::condition_variable m_empty_avail; // Signaled when an empty shell is returned
+    std::mutex m_empty_shell_mutex;
+    mutable std::mutex m_active_frame_mutex;
+    std::mutex m_preped_frame_mutex;
+
+    std::condition_variable m_shell_avail; // Signaled when an empty shell is returned
     std::condition_variable m_preped_avail; // Signaled when a fresh GPU frame is ready
 
     mutable std::mutex      m_queue_mutex;  // Protects m_active_frames
 
     // Thread management
     std::mutex m_hwframe_mutex;    // Controls access to m_preped_frames
-    std::condition_variable m_hwframe_used; // Signaled when m_preped_frames has space/items
 
     std::thread       m_prep_thread;
     std::atomic<bool> m_running      {false};
