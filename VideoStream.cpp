@@ -1373,11 +1373,37 @@ int VideoStream::AddImage(Image&& image)
                     hw.cpu_frame->linesize[1]);
 #endif
 
-        // Direct memory block transfer into the cpu_frame staging area
-        av_image_copy(hw.cpu_frame->data, hw.cpu_frame->linesize,
-                      const_cast<const uint8_t**>(src_data),
-                      src_linesize,
-                      m_sw_pix_fmt, m_params.width, m_params.height);
+        if (!m_initialized_packing) [[unlikely]]
+        {
+            m_is_packed =
+                hw.cpu_frame->linesize[0] == src_linesize[0] &&
+                hw.cpu_frame->linesize[1] == src_linesize[1] &&
+                hw.cpu_frame->data[1]     == (hw.cpu_frame->data[0]
+                                              + (hw.cpu_frame->linesize[0]
+                                                 * m_params.height)) &&
+                src_data[1]               == (src_data[0]
+                                              + (src_linesize[0]
+                                                 * m_params.height));
+            m_initialized_packing = true;
+        }
+
+        if (m_is_packed)
+        {
+            // Fast path: Single contiguous memory block copy
+            std::memcpy(hw.cpu_frame->data[0], image.pImage, size_bytes);
+        }
+        else
+        {
+            // Slow(er) path: Plane-by-plane copy accounting for
+            // padding alignment
+            av_image_copy(hw.cpu_frame->data,
+                          hw.cpu_frame->linesize,
+                          const_cast<const uint8_t**>(src_data),
+                          src_linesize,
+                          m_sw_pix_fmt,
+                          m_params.width,
+                          m_params.height);
+        }
     }
 
 #ifdef LOG_ELAPSED
@@ -1389,7 +1415,7 @@ int VideoStream::AddImage(Image&& image)
     auto transfer_dur = chrono::duration_cast<chrono::microseconds>
                         (copy_end - copy_start);
 
-    if (buf_dur > 1ms || transfer_dur > 15ms)
+    if (buf_dur > 1ms || transfer_dur > 10ms)
     {
         m_log->debug("Wait for prepared buf {}μs. Image transfer {}μs",
                      buf_dur.count(),

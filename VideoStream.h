@@ -153,6 +153,9 @@ class VideoStream
 
     EncoderType m_encoderType { UNKNOWN };
 
+    bool m_is_packed           {false};
+    bool m_initialized_packing {false};
+
     int m_frame_cnt {0};
     CodecContextPtr m_encoder;
 
