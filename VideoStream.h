@@ -191,6 +191,12 @@ class VideoStream
 
     std::thread       m_prep_thread;
     std::atomic<bool> m_running      {false};
+
+#ifdef LOG_ELAPSED
+    uint64_t m_total_transfer_time_us = 0;
+    uint64_t m_total_buf_wait_time_us  = 0;
+    uint32_t m_frame_counter           = 0;
+#endif
 };
 
 // Custom format specification for spdlog / libfmt

@@ -223,9 +223,9 @@ class Magewell
     int                  m_channel_idx   {0};    ///< Channel index
     std::chrono::milliseconds m_settle_time   {5000}; ///< signal change timeout
 
-    std::unique_ptr<uint64_t[]> m_image_buffer;
-    size_t                      m_image_size_qwords {0};
-    bool                        m_pinned            {false};
+    std::unique_ptr<uint8_t[]> m_image_buffer;
+    size_t                     m_aligned_image_size {0};
+    bool                       m_pinned            {false};
 
     size_t       m_image_buffers           {0};
     size_t       m_image_buffers_total     {0}; ///< Total image buffers

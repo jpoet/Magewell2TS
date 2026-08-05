@@ -63,12 +63,12 @@
 #include "IEC61937Parser.h"
 
 #ifdef USE_LIBFMT_FALLBACK
-  #include <fmt/format.h>
-  #include <fmt/chrono.h>
-  using fmt::format;
+#include <fmt/format.h>
+#include <fmt/chrono.h>
+using fmt::format;
 #else
-  #include <format>
-  using std::format;
+#include <format>
+using std::format;
 #endif
 
 // #define DUMP_RAW_AUDIO_ALLBITS
@@ -563,24 +563,24 @@ void Magewell::ListInputs(void)
                    prev_channelInfo.szBoardSerialNo) != 0)
         {
             desc += format("\nBoard: {}"
-                                ", Product: {}"
-                                ", SerialNo: {}\n"
-                                "\tFirmware: {}"
-                                ", Driver: {}\n",
-                                static_cast<int>(channelInfo.byBoardIndex),
-                                channelInfo.szProductName,
-                                channelInfo.szBoardSerialNo,
-                                channelInfo.dwFirmwareVersion,
-                                channelInfo.dwDriverVersion);
+                           ", Product: {}"
+                           ", SerialNo: {}\n"
+                           "\tFirmware: {}"
+                           ", Driver: {}\n",
+                           static_cast<int>(channelInfo.byBoardIndex),
+                           channelInfo.szProductName,
+                           channelInfo.szBoardSerialNo,
+                           channelInfo.dwFirmwareVersion,
+                           channelInfo.dwDriverVersion);
         }
         prev_channelInfo = channelInfo;
 
         // Display channel information
         desc += format("{:3d}: [{}:{}] {}\n",
-                            idx + 1,
-                            channelInfo.byBoardIndex,
-                            channelInfo.byChannelIndex + 1,
-                            describe_input(hChannel));
+                       idx + 1,
+                       channelInfo.byBoardIndex,
+                       channelInfo.byChannelIndex + 1,
+                       describe_input(hChannel));
 
         // Close channel after use
         MWCloseChannel(hChannel);
@@ -998,9 +998,9 @@ void Magewell::capture_audio_loop(void)
         }
         notify_audio  = MWRegisterNotify(m_channel, eco_event,
                                        (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED
-//                                     | (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE
-                                       | (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET
-                                    );
+                                     | (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE
+                                     | (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET
+                                         );
     }
     else
     {
@@ -1012,9 +1012,9 @@ void Magewell::capture_audio_loop(void)
             return;
         }
         notify_audio  = MWRegisterNotify(m_channel, notify_event,
-                                     (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED |
-                                     (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE  |
-                                     (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET);
+                                    (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED
+                                  | (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE
+                                  | (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET);
     }
 
     // Main audio capture loop
@@ -1375,8 +1375,8 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
     {
         // Get HDR info frame
         if (MW_SUCCEEDED != MWGetHDMIInfoFramePacket(m_channel,
-                                             MWCAP_HDMI_INFOFRAME_ID_HDR,
-                                             &info_packet))
+                                                     MWCAP_HDMI_INFOFRAME_ID_HDR,
+                                                     &info_packet))
             return false;
 
         color.space     = AVCOL_SPC_BT2020_NCL;
@@ -1418,7 +1418,7 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
 
     // Example output: "SDR | Space:bt709 | TRC:bt709 | Rng:tv"
     color.description = format("SDR | Space:{} | TRC:{} | Rng:{}",
-                                        s_str, t_str, r_str);
+                               s_str, t_str, r_str);
 
     if (0 == (uiValidFlag & MWCAP_HDMI_INFOFRAME_MASK_HDR))
     {
@@ -1528,10 +1528,10 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
     double max_nits = av_q2d(color.max_luminance);
 
     // Example output: "HDR | Space:bt2020nc | TRC:smpte2084 | Rng:tv | Luma:1000 nits | CLL:1000/400"
-    color.description = format(
-            "HDR Space:{} TRC:{} Rng:{} Luma:{:.0f}nits CLL:{}/{}",
-            s_str, t_str, r_str, max_nits, color.MaxCLL, color.MaxFALL
-    );
+    color.description =
+        format("HDR Space:{} TRC:{} Rng:{} Luma:{:.0f}nits CLL:{}/{}",
+               s_str, t_str, r_str, max_nits, color.MaxCLL, color.MaxFALL
+               );
 
     /*
      * FFmpeg AVMasteringDisplayMetadata expects:
@@ -1608,31 +1608,32 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
 
 size_t Magewell::AllocateImageBuffers(void)
 {
-    m_image_size_qwords = (m_image_size + 7) / 8;
-    size_t total_qwords = m_image_size_qwords * m_image_buffers;
+    // This rounds up to the nearest 4KB block.
+    m_aligned_image_size = (m_image_size + 4095) & ~4095;
+    size_t total_bytes = m_aligned_image_size * m_image_buffers;
 
-    m_log->trace(">>>>>>>>>>>>>>>>>>>>>> Allocating Magewell frames: "
-                 "{} /8= {} total8 {} for {}KB",
-                 m_image_size, m_image_size_qwords,
-                 total_qwords, total_qwords * 8 / 1024);
+    m_log->trace("Allocating Magewell frames: {} bytes per frame "
+                 "(aligned to {}), Total allocation: {} KB",
+                 m_image_size, m_aligned_image_size, total_bytes / 1024);
 
-    m_image_buffer = std::make_unique<uint64_t[]>(total_qwords);
+    // Use standard byte array allocation
+    m_image_buffer = std::make_unique<uint8_t[]>(total_bytes);
     if (m_image_buffer == nullptr)
     {
-        m_log->critical("Failed to allocate {} for Magewell image buffer",
-                        total_qwords * sizeof(uint64_t));
+        m_log->critical("Failed to allocate {} bytes for "
+                        "Magewell image buffer", total_bytes);
         return 0;
     }
 
-    return total_qwords;
+    return total_bytes;
 }
 
 uint8_t* Magewell::GetFrameImage(size_t frame_index)
 {
     if (frame_index >= m_image_buffers)
         return nullptr;
-    return reinterpret_cast<uint8_t*>
-        (m_image_buffer.get() + (frame_index * m_image_size_qwords));
+
+    return m_image_buffer.get() + (frame_index * m_aligned_image_size);
 }
 
 /**
@@ -1686,13 +1687,15 @@ void Magewell::free_image_buffers(void)
 
     std::unique_lock<std::mutex> lock(m_image_buffer_mutex);
 
+    // Wait until all buffers are returned from the processing pipeline
     while (m_image_buffers_total > m_image_buffers_avail)
     {
         m_log->info("Waiting for Magewell buffers to be returned. "
                     "Total: {} avail: {}", m_image_buffers_total,
                     m_image_buffers_avail);
-        if (m_image_returned.wait_for(lock, chrono::seconds(1))
-            == cv_status::timeout)
+
+        if (m_image_returned.wait_for(lock,
+                         std::chrono::seconds(1)) == std::cv_status::timeout)
         {
             if (m_running == false)
                 break;
@@ -1706,8 +1709,9 @@ void Magewell::free_image_buffers(void)
     {
         if (m_pinned)
         {
-            size_t total_qwords = m_image_size_qwords * m_image_buffers;
-            munlock(m_image_buffer.get(), total_qwords * sizeof(uint64_t));
+            // Byte-based size tracking for POSIX munlock
+            size_t total_bytes = m_aligned_image_size * m_image_buffers;
+            munlock(m_image_buffer.get(), total_bytes);
             m_pinned = false;
         }
         m_eco_image_buffers.clear();
@@ -1716,41 +1720,41 @@ void Magewell::free_image_buffers(void)
     {
         if (m_pinned)
         {
-            MW_RESULT result;
-            uint8_t*  pbImage;
-
             for (size_t idx = 0; idx < m_image_buffers_total; ++idx)
             {
-                pbImage = GetFrameImage(idx);
-                result = MWUnpinVideoBuffer(m_channel, pbImage);
+                uint8_t* pbImage = GetFrameImage(idx);
+                MW_RESULT result = MWUnpinVideoBuffer(m_channel, pbImage);
+
                 switch (result)
                 {
                     case MW_SUCCEEDED:
                       break;
                     case MW_FAILED:
-                      m_log->warn("Failed to Unpin Magewell frame buffer.");
+                      m_log->warn("Failed to Unpin Magewell frame buffer "
+                                  "at index {}.", idx);
                       break;
                     case MW_INVALID_PARAMS:
                       m_log->warn("Failed to Unpin Magewell frame buffer. "
-                                  "Invalid arguments.");
+                                  "Invalid arguments/alignment.");
                       break;
                     case MW_ENODATA:
                       break;
                 }
             }
+
             if (m_verbose > 3)
             {
-                size_t total_qwords = m_image_size_qwords * m_image_buffers;
-                m_log->info("Freed Magewell frames: "
-                            "{} /8= {} total8 {} for {}KB",
-                            m_image_size, m_image_size_qwords,
-                            total_qwords, total_qwords * 8 / 1024);
+                size_t total_bytes = m_aligned_image_size * m_image_buffers;
+                m_log->info("Freed Magewell frames: {} bytes per frame, "
+                            "Total allocation: {} KB",
+                            m_aligned_image_size, total_bytes / 1024);
             }
         }
         m_avail_image_buffers.clear();
         m_pinned = false;
     }
 
+    // Deallocate the underlying memory buffer
     m_image_buffer.reset();
 
     // Reset buffer counters
@@ -1767,8 +1771,6 @@ void Magewell::free_image_buffers(void)
  */
 bool Magewell::create_eco_image_buffers(void)
 {
-    uint      idx;
-
     if (!m_eco_image_buffers.empty())
     {
         m_log->error("Eco image buffers already allocated!");
@@ -1778,50 +1780,55 @@ bool Magewell::create_eco_image_buffers(void)
     if (m_verbose > 3)
         m_log->info("Creating image buffers for Eco capture. Size:{} Stride:{}",
                     m_image_size, m_min_stride);
-    for (idx = 0; idx < m_image_buffers; ++idx)
+
+    for (size_t idx = 0; idx < m_image_buffers; ++idx)
     {
         auto& buf = m_eco_image_buffers.emplace_back
                     (std::make_unique<MWCAP_VIDEO_ECO_CAPTURE_FRAME>());
-        buf->cbFrame  = m_image_size;
-        buf->cbStride = m_min_stride;
+        buf->cbFrame   = m_image_size;
+        buf->cbStride  = m_min_stride;
         buf->bBottomUp = false;
     }
 
-    size_t total_qwords = AllocateImageBuffers();
-    if (total_qwords == 0)
+    // Allocate memory using the byte-aligned architecture
+    size_t total_bytes = AllocateImageBuffers();
+    if (total_bytes == 0)
         return false;
 
-    if (mlock(m_image_buffer.get(), total_qwords * sizeof(uint64_t)) != 0)
+    // Pin memory using native bytes via POSIX mlock
+    if (mlock(m_image_buffer.get(), total_bytes) != 0)
     {
         m_log->warn("Failed to PIN Magewell image buffer memory.");
-        m_log->warn("Performance may by slightly lower.");
+        m_log->warn("Performance may be slightly lower.");
         m_log->warn("Perhaps update systemd service file with: "
                     "LimitMEMLOCK=infinity");
         m_log->warn("And/or see /etc/security/limits.conf and set "
-                    "to at least {}KB for this user.",
-                    total_qwords * sizeof(uint64_t) / 1024);
+                    "to at least {} KB for this user.",
+                    total_bytes / 1024);
     }
     else
+    {
         m_pinned = true;
+    }
 
     if (m_verbose > 3)
     {
         struct rlimit rl;
         if (getrlimit(RLIMIT_MEMLOCK, &rl) == 0)
         {
-            // RLIMIT_MEMLOCK corresponds to ulimit -l
             m_log->info("Current soft memory limit (-l): {}",
-                        (rl.rlim_cur == RLIM_INFINITY) ?
-                        "unlimited" : std::to_string(rl.rlim_cur));
+                        (rl.rlim_cur == RLIM_INFINITY)
+                        ? "unlimited"
+                        : std::to_string(rl.rlim_cur));
             m_log->info("Current hard memory limit (-l): {}",
-                        (rl.rlim_max == RLIM_INFINITY) ?
-                        "unlimited" : std::to_string(rl.rlim_max));
+                        (rl.rlim_max == RLIM_INFINITY)
+                        ? "unlimited"
+                        : std::to_string(rl.rlim_max));
         }
         else
         {
-            m_log->warn("Failed to check current "
-                        "'maximum locked-in-memory size': {}",
-                        strerror(errno));
+            m_log->warn("Failed to check current 'maximum locked-in-memory "
+                        "size': {}", strerror(errno));
         }
     }
 
@@ -1830,26 +1837,25 @@ bool Magewell::create_eco_image_buffers(void)
 
 bool Magewell::register_eco_image_buffers(void)
 {
-    uint      idx;
-    ecoque_t::iterator Ibuf;
-    for (Ibuf = m_eco_image_buffers.begin(), idx = 0;
-         Ibuf != m_eco_image_buffers.end(); ++Ibuf, ++idx)
+    size_t idx = 0;
+    for (auto& buf : m_eco_image_buffers)
     {
-        (*Ibuf)->pvFrame = reinterpret_cast<MWCAP_PTR>(GetFrameImage(idx));
-        (*Ibuf)->pvContext = reinterpret_cast<MWCAP_PTR>
-                             (std::to_address(*Ibuf));
+        buf->pvFrame   = reinterpret_cast<MWCAP_PTR>(GetFrameImage(idx));
+        buf->pvContext = reinterpret_cast<MWCAP_PTR>(std::to_address(buf));
 
         // Register buffer with capture system
         if (MWCaptureSetVideoEcoFrame(m_channel,
-                                      std::to_address(*Ibuf)) != MW_SUCCEEDED)
+                                      std::to_address(buf)) != MW_SUCCEEDED)
         {
-            m_log->critical("MWCaptureSetVideoEcoFrame failed!");
+            m_log->critical("MWCaptureSetVideoEcoFrame failed at index {}!",
+                            idx);
             return false;
         }
+
+        ++idx;
     }
 
     m_image_buffers_avail = m_image_buffers_total = m_image_buffers;
-
     return true;
 }
 
@@ -1865,26 +1871,27 @@ bool Magewell::create_pro_image_buffers(void)
     if (AllocateImageBuffers() == 0)
         return false;
 
-    MW_RESULT result;
-    uint8_t*  pbImage;
-
     m_pinned = false;
     for (size_t idx = 0; idx < m_image_buffers; ++idx)
     {
-        pbImage = GetFrameImage(idx);
+        uint8_t* pbImage = GetFrameImage(idx);
         m_avail_image_buffers.push_back(pbImage);
-        result = MWPinVideoBuffer(m_channel, (MWCAP_PTR)pbImage, m_image_size);
+
+        MW_RESULT result = MWPinVideoBuffer(m_channel, (MWCAP_PTR)pbImage,
+                                            m_aligned_image_size);
+
         switch (result)
         {
             case MW_SUCCEEDED:
-              m_pinned = true;
+              m_pinned = true; // Pinning succeeded! PCIe DMA is ready.
               break;
             case MW_FAILED:
-              m_log->warn("Failed to Pin Magewell frame buffer.");
+              m_log->warn("Failed to Pin Magewell frame buffer at index {}.",
+                          idx);
               break;
             case MW_INVALID_PARAMS:
               m_log->warn("Failed to Pin Magewell frame buffer. "
-                          "Invalid arguments.");
+                          "Invalid arguments/alignment.");
               break;
             case MW_ENODATA:
               break;
@@ -1892,7 +1899,6 @@ bool Magewell::create_pro_image_buffers(void)
     }
 
     m_image_buffers_avail = m_image_buffers_total = m_image_buffers;
-
     return true;
 }
 
@@ -2019,18 +2025,18 @@ void Magewell::log_stats(size_t used)
 
 #ifdef USEVIDSTATS
         m_log->debug("Mag pool used 1m:{:<5d} "
-                    "5m:{:<5d} 10m:{:<5d} of {:<3d} "
-                    "({})",
-                    vidpool_used_1m, *vidpool_5m_max,
-                    *vidpool_10m_max, m_image_buffers_total,
-                    extra);
+                     "5m:{:<5d} 10m:{:<5d} of {:<3d} "
+                     "({})",
+                     vidpool_used_1m, *vidpool_5m_max,
+                     *vidpool_10m_max, m_image_buffers_total,
+                     extra);
 #else
         m_log->debug("Mag pool used 1m:{:<3d} "
-                    "5m:{:<3d} 10m:{:<3d} of {:<3d} "
-                    "({})",
-                    vidpool_used_1m, *vidpool_5m_max,
-                    *vidpool_10m_max, m_image_buffers_total,
-                    extra);
+                     "5m:{:<3d} 10m:{:<3d} of {:<3d} "
+                     "({})",
+                     vidpool_used_1m, *vidpool_5m_max,
+                     *vidpool_10m_max, m_image_buffers_total,
+                     extra);
 #endif
         vidpool_used_1m = 0;
 
@@ -2121,18 +2127,18 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             || eco_status.pvFrame == reinterpret_cast<MWCAP_PTR>(nullptr))
         {
 
-        // Check signal lock status
-        MWGetVideoSignalStatus(m_channel, &videoSignalStatus);
-        if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
-        {
-            if (m_frame_cnt > 2000)
+            // Check signal lock status
+            MWGetVideoSignalStatus(m_channel, &videoSignalStatus);
+            if (videoSignalStatus.state != MWCAP_VIDEO_SIGNAL_LOCKED)
             {
-                m_log->warn("DAMAGED: Video signal lost lock. (frame {})",
-                            m_frame_cnt);
+                if (m_frame_cnt > 2000)
+                {
+                    m_log->warn("DAMAGED: Video signal lost lock. (frame {})",
+                                m_frame_cnt);
+                }
+                this_thread::sleep_for(chrono::milliseconds(5));
+                return false;
             }
-            this_thread::sleep_for(chrono::milliseconds(5));
-            return false;
-        }
 
             continue;
         }
@@ -2147,7 +2153,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         if (m_expected_ts == -1 && timestamp < 0)
         {
             eco_image_buffer_available(pbImage,
-                               reinterpret_cast<void*>(eco_status.pvContext));
+                                reinterpret_cast<void*>(eco_status.pvContext));
             continue;
         }
         else if (m_expected_ts > 0 &&
@@ -2765,7 +2771,11 @@ bool Magewell::capture_video(void)
                             break;
                         }
                     }
-                    register_eco_image_buffers();
+                    if (!register_eco_image_buffers())
+                    {
+                        Shutdown();
+                        break;
+                    }
                 }
             }
             else

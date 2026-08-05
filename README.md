@@ -8,9 +8,9 @@ This application reads audio and video from a Magewell PRO or ECO PCIe capture c
 
 If bitstream audio is detected it will be muxed directly into the resulting Transport Stream. LPCM audio will be encoded as AC3 and then muxed.
 
-Both AC3 and EAC3 (5.1) are supported if the source device outputs them as a bitstream. EAC3 7.1 is not supported because FFmpeg does not understand >6 channels of audio in EAC3.
+Both AC3 and EAC3 (5.1) are supported if the source device outputs them as a bitstream.
 
-More than two channels of LPCM are not currently supported. Adding such support is possible but I do not have a source device to test with.
+In theory, more than two channels of LPCM should work, but has not been tested.
 
 The Magewell driver provides V4L2 and ALSA interfaces to the card. This application by-passes those interfaces and talks directly to it via the Magewell API. A big advantage to this is you don't have to figure out which /dev/videoX or ALSA "device" is needed to make it work. The other advantage is that a raw bitstream can be captured. Unfortunately, the Magewell API depends on ALSA so we have to link it even though it is not used.
 
@@ -19,7 +19,7 @@ The Magewell driver provides V4L2 and ALSA interfaces to the card. This applicat
 
 The Magewell PRO and ECO capture cards capture raw audio and video. The video (at least) needs compressed and it is up to the Linux PC to do that. The only practical way of accomplishing this is with GPU assist. Intel QSV and nVidia nvenc are supported. I don't test with nVidia very often, so there may be times when that is broken -- please let me know.
 
-Note that the ECO cards do not allow more than one capture process per input. They are also bad at detecting "signal changes" such as video frame rate and bitstream vs pcm audio changes.
+Eco cards are noticably weaker than Pro cards, and not as good at handling signal changes.
 
 ***
 ## Magewell driver
@@ -81,7 +81,7 @@ Download the Linux version. Then unpacket it
 ```bash
 mkdir -p ~/src/Magewell/
 cd ~/src/Magewell/
-gtar -xzvf ~/Download/Magewell_Capture_SDK_Linux_3.3.1.1505.tar.gz
+gtar -xzvf ~/Download/Magewell_Capture_SDK_Linux_3.3.1.1515.tar.gz
 
 ```
 Along side the Magewell SDK directory, grab the source for this application:
@@ -100,7 +100,7 @@ FFmpeg
 ```bash
 sudo dnf install ffmpeg-devel
 ```
-For Intel GPU and oneVPL:
+##### Intel GPU and oneVPL:
 ```bash
 sudo dnf install libvpl-devel intel-media-driver libvpl-tools
 ```
@@ -108,6 +108,8 @@ Verify that oneVPL is installed correctly:
 ```
 vpl-inspect
 ```
+
+##### nVidia
 
 For nVidia GPU you will want to have the closed source driver installed as well as cuda libs. For example:
 ```bash
@@ -123,7 +125,7 @@ FFmpeg
 ```bash
 apt-get install ffmpeg-dev
 ```
-For Intel GPU and onvVPL:
+##### Intel GPU and onvVPL:
 ```bash
 sudo apt-get install intel-media-va-driver-non-free libmfx1 intel-opencl-icd libmfx-gen1.2 libvpl-dev onevpl-tools
 ```
@@ -132,17 +134,13 @@ Verify that oneVPL is installed correctly:
 ```
 vpl-inspect
 ```
-For nVidia GPU:
+##### nVidia
 ```
 sudo apt-get install nvidia-cuda-toolkit
 ```
 
 
 If you have trouble with oneVPL, check out [https://www.intel.com/content/www/us/en/developer/articles/guide/onevpl-installation-guide.html](https://www.intel.com/content/www/us/en/developer/articles/guide/onevpl-installation-guide.html) for more information.
-
-
-If you want bitstream audio to work, then a minimum of FFmpeg 6.1 is needed. At least 7.1 is prefered. You may need to build FFmpeg from source if your distribution does not provide recent enough packages.
-
 
 ## Building the application
 ```bash
@@ -278,7 +276,9 @@ git clone git://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.
 
 If you want to update the firmware on the Arc itself, this might help: [https://forum.level1techs.com/t/remember-to-update-your-intel-arc-firmware-on-linux/208736](https://forum.level1techs.com/t/remember-to-update-your-intel-arc-firmware-on-linux/208736)
 
-# Real Time Threads
+# Optimizing
+
+## Real Time Threads
 If you want to use the --realtime option, the user running magewell2ts needs to be configure with "real time" priority. For example, create the file
 ```
 /etc/security/limits.d/99-mythtv-realtime.conf
@@ -291,3 +291,38 @@ mythtv   soft   nice     -20
 mythtv   hard   nice     -20
 ```
 to allow the mythtv user to request real time priority.
+
+By default the two threads (audio and video) responsible for capturing from the Magewell card are given a higher than normal priority with the --realtime option.
+
+## CPU cores
+If you are capturing multiple streams at the same time, it can be beneficial to make sure the load is well balanced across the CPU cores.
+
+Allow all cores to handle interrupts:
+```
+sudo systemctl enable --now irqbalance
+```
+
+Pin each capture to a (set) of cores to make sure they don't all try to use the same:
+```
+# Instance 1: Runs all its threads only on Cores 2 and 3
+taskset -c 2,3 ./magewell2ts -i 1 -m
+
+# Instance 2: Runs all its threads only on Cores 4 and 5
+taskset -c 4,5 ./magewell2ts -i 2 -m
+
+# Instance 3: Runs all its threads only on Cores 6 and 7
+taskset -c 6,7 ./magewell2ts -i 3 -m
+
+# Instance 4: Runs all its threads only on Cores 8 and 9
+taskset -c 8,9 ./magewell2ts -i 4 -m
+```
+In this example, cores 0,1 are left to the operating system. Note that when choosing cores, avoid E(fficiency) cores.
+
+Optionally promote all the the magewell2ts threads to a higher priority:
+```
+sudo nice -n -10 taskset -c 0,1 ./magewell2ts -i 1 -m
+```
+or, if you have given the user real-time permissions:
+```
+nice -n -10 taskset -c 0,1 ./magewell2ts -i 1 -m
+```

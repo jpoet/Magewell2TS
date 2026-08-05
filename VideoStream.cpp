@@ -1373,53 +1373,37 @@ int VideoStream::AddImage(Image&& image)
                     hw.cpu_frame->linesize[1]);
 #endif
 
-        if (!m_initialized_packing) [[unlikely]]
-        {
-            m_is_packed =
-                hw.cpu_frame->linesize[0] == src_linesize[0] &&
-                hw.cpu_frame->linesize[1] == src_linesize[1] &&
-                hw.cpu_frame->data[1]     == (hw.cpu_frame->data[0]
-                                              + (hw.cpu_frame->linesize[0]
-                                                 * m_params.height)) &&
-                src_data[1]               == (src_data[0]
-                                              + (src_linesize[0]
-                                                 * m_params.height));
-            m_initialized_packing = true;
-        }
-
-        if (m_is_packed)
-        {
-            // Fast path: Single contiguous memory block copy
-            std::memcpy(hw.cpu_frame->data[0], image.pImage, size_bytes);
-        }
-        else
-        {
-            // Slow(er) path: Plane-by-plane copy accounting for
-            // padding alignment
-            av_image_copy(hw.cpu_frame->data,
-                          hw.cpu_frame->linesize,
-                          const_cast<const uint8_t**>(src_data),
-                          src_linesize,
-                          m_sw_pix_fmt,
-                          m_params.width,
-                          m_params.height);
-        }
+        av_image_copy(hw.cpu_frame->data,
+                      hw.cpu_frame->linesize,
+                      const_cast<const uint8_t**>(src_data),
+                      src_linesize,
+                      m_sw_pix_fmt,
+                      m_params.width,
+                      m_params.height);
     }
 
 #ifdef LOG_ELAPSED
-    chrono::steady_clock::time_point copy_end
-        = chrono::steady_clock::now();
+    chrono::steady_clock::time_point copy_end = chrono::steady_clock::now();
 
-    auto buf_dur = chrono::duration_cast<chrono::microseconds>
-                   (map_end - map_start);
-    auto transfer_dur = chrono::duration_cast<chrono::microseconds>
-                        (copy_end - copy_start);
+    auto buf_dur = chrono::duration_cast<chrono::microseconds>(map_end - map_start);
+    auto transfer_dur = chrono::duration_cast<chrono::microseconds>(copy_end - copy_start);
 
-    if (buf_dur > 1ms || transfer_dur > 10ms)
+    m_total_transfer_time_us += transfer_dur.count();
+    m_total_buf_wait_time_us += buf_dur.count();
+    ++m_frame_counter;
+
+    if (m_frame_counter >= 3600) [[unlikely]]
     {
-        m_log->debug("Wait for prepared buf {}μs. Image transfer {}μs",
-                     buf_dur.count(),
-                     transfer_dur.count());
+        uint64_t avg_transfer = m_total_transfer_time_us / m_frame_counter;
+        uint64_t avg_buf_wait  = m_total_buf_wait_time_us / m_frame_counter;
+
+        m_log->debug("Over past {} frames -> Avg Transfer: {}μs | "
+                     "Avg Buf Wait: {}μs",
+                     m_frame_counter, avg_transfer, avg_buf_wait);
+
+        m_total_transfer_time_us = 0;
+        m_total_buf_wait_time_us  = 0;
+        m_frame_counter           = 0;
     }
 #endif
 
