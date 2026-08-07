@@ -295,9 +295,9 @@ to allow the mythtv user to request real time priority.
 By default the two threads (audio and video) responsible for capturing from the Magewell card are given a higher than normal priority with the --realtime option.
 
 ## CPU cores
-If you are capturing multiple streams at the same time, it can be beneficial to make sure the load is well balanced across the CPU cores.
+If you are capturing multiple streams at the same time, it might be beneficial to make sure the load is well balanced across the CPU cores.
 
-Allow all cores to handle interrupts:
+Experiment with allowing all cores to handle interrupts:
 ```
 sudo systemctl enable --now irqbalance
 ```
@@ -326,3 +326,5 @@ or, if you have given the user real-time permissions:
 ```
 nice -n -10 taskset -c 0,1 ./magewell2ts -i 1 -m
 ```
+
+Test each of these to make sure they are benificial on your setup before using them in production.

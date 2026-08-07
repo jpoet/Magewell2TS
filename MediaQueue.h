@@ -75,22 +75,6 @@ class MediaQueue
         {
             return true;
         }
-#if 0 // This is very dependant on the (video) encoder driver
-        /*
-          If the next packet is marker, it is probably followed by a
-          discontinuity, which can have mixed up packets. Save the
-          next six in that situation, so they can be sorted.
-        */
-        if (!m_queue.front().is_marker || m_queue.front().stream_id != 0)
-        {
-            return false;
-        }
-        if (m_queue.size() < 6)
-        {
-            return true;
-        }
-        FixUpDtsPts();
-#endif
         return false;
     }
 
@@ -131,76 +115,6 @@ class MediaQueue
         }
 
         return m_queue.front().is_marker;
-    }
-
-    void FixUpDtsPts(void)
-    {
-        /*
-          The DTS of the 6 packets after a discontinuity can be
-          messy. Attempt to fix them up.
-        */
-
-        // Must be called with > 2 elements and the mutex locked.
-
-        // Only extract up to the first 6 packets for fixing
-        std::vector<Packet> tmpVec;
-        const size_t elementsToFix = 6;
-        tmpVec.reserve(elementsToFix);
-
-        for (size_t i = 0; i < elementsToFix; ++i)
-        {
-            tmpVec.push_back(std::move(m_queue.front()));
-            m_queue.pop();
-        }
-
-        // Sort, skipping the marker and the keyframe
-        std::sort(tmpVec.begin() + 2, tmpVec.end(),
-                  [](const Packet& a, const Packet& b)
-                  {
-                      return a.pkt->dts < b.pkt->dts;
-                  });
-
-        // Calculate step size using the first valid packet's frame
-        // rate and time_base
-        int64_t dts_step = av_rescale_q(1,
-                                        tmpVec[1].frame_duration,
-                                        TimeBase::MPEG_TS);
-
-        // Adjust the DTS within the "discontinuity" block backwards
-        // from our anchor (Index 5)
-        for (size_t i = tmpVec.size() - 1; i > 0; --i)
-        {
-            size_t current_idx = i - 1;
-            size_t next_idx = i;
-
-            // Calculate the original offset between this packet's PTS and DTS
-            int64_t pts_dts_offset = tmpVec[current_idx].pkt->pts -
-                                     tmpVec[current_idx].pkt->dts;
-
-            // Assign the new clean DTS step
-            tmpVec[current_idx].pkt->dts = tmpVec[next_idx].pkt->dts - dts_step;
-
-            // Re-apply the original offset to the new DTS to get the
-            // new correct PTS
-            tmpVec[current_idx].pkt->pts = tmpVec[current_idx].pkt->dts +
-                                           pts_dts_offset;
-        }
-
-        // Recombine everything back into m_queue in the exact correct order.
-        // First, push the 6 freshly fixed packets back into the queue.
-        for (Packet& pkt : tmpVec)
-        {
-            m_queue.push(std::move(pkt));
-        }
-
-        // Then, cycle the remaining old packets behind them to
-        // restore the FIFO structure.
-        size_t remainingElements = m_queue.size() - elementsToFix;
-        for (size_t i = 0; i < remainingElements; ++i)
-        {
-            m_queue.push(std::move(m_queue.front()));
-            m_queue.pop();
-        }
     }
 
     void Shutdown()

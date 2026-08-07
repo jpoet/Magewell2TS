@@ -739,6 +739,9 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
         av_opt_set(m_encoder->priv_data, "skip_frame",
                    "insert_dummy", 0);
         av_opt_set(m_encoder->priv_data, "async_depth", "4", 0);
+#if 1
+        av_dict_set(&opt, "bf", "0", 0);
+#endif
     }
 
     av_opt_set_int(m_encoder->priv_data, "extra_hw_frames",
@@ -951,7 +954,6 @@ void VideoStream::prepare_frames(void)
         PreparedFrame job;
         {
             std::unique_lock<std::mutex> lock(m_empty_shell_mutex);
-
             m_shell_avail.wait(lock, [this]() {
                 return !m_running.load() || !m_empty_shells.empty();
             });

@@ -698,10 +698,11 @@ void OutputTS::sync_markers(void)
 void OutputTS::mux(void)
 {
     struct StreamState {
-        int     stream_id{-1};
         int64_t pts{AV_NOPTS_VALUE};
         int64_t dts{AV_NOPTS_VALUE};
-    } prev_state;
+    };
+
+    std::array<StreamState, 2> prev_state;
 
     for (;;)
     {
@@ -782,22 +783,36 @@ void OutputTS::mux(void)
             continue;
         }
 
+#if 1
         // Non-monotonic Timestamp Protection
-        if (prev_state.dts != AV_NOPTS_VALUE && pkt->dts <= prev_state.dts)
-        {
-            m_log->trace("MUX [{}] DTS delta {} non-monotonic: "
-                         "Fix: {:12d} -> {:12d}",
-                         stream_id, pkt->dts - prev_state.dts,
-                         pkt->dts, prev_state.dts + 1);
-            pkt->dts = prev_state.dts + 1;
-            pkt->pts = std::max(pkt->pts, pkt->dts);
-        }
+        auto& prev = prev_state[stream_id];
 
-        if (pkt->pts < pkt->dts)
+        if (prev.dts != AV_NOPTS_VALUE && pkt->dts <= prev.dts)
         {
-            m_log->warn("PTS < DTS adjustment on stream {}", stream_id);
-            pkt->pts = pkt->dts;
+            m_log->info("MUX [{}] DTS delta {} non-monotonic: "
+                         "Fix: {} -> {}",
+                         stream_id,
+                         pkt->dts - prev.dts,
+                         pkt->dts,
+                         prev.dts + 1);
+
+            pkt->dts = prev.dts + 1;
+
+            if (pkt->pts < pkt->dts)
+                pkt->pts = pkt->dts;
         }
+#else
+        auto& prev = prev_state[stream_id];
+
+        if (prev.dts != AV_NOPTS_VALUE && pkt->dts <= prev.dts)
+        {
+            m_log->error("NON-MONOTONIC DTS stream={} "
+                         "previous pts={} dts={} -> current pts={} dts={}",
+                         stream_id,
+                         prev.pts, prev.dts,
+                         pkt->pts, pkt->dts);
+        }
+#endif
 
         m_log->trace("MUX [id{:<2d} version:{}] pts:{:#018x} dts:{:#018x} "
                      "duration:{} size:{}",
@@ -805,24 +820,19 @@ void OutputTS::mux(void)
                      pkt->duration, pkt->size);
 
         StreamState state = StreamState {
-            .stream_id = stream_id,
             .pts = pkt->pts,
             .dts = pkt->dts
         };
 
-#if 1
         int ret = av_interleaved_write_frame(m_formatContext, pkt.get());
-#else
-        int ret = av_write_frame(m_formatContext, pkt.get());
-#endif
         if (ret < 0)
         {
             if (ret == AVERROR(EINVAL))
             {
                 m_log->warn("DAMAGED: Mux rejected packet "
                             "id={} pts={} -> {} dts={} -> {}: {}",
-                            stream_id, prev_state.pts, state.pts,
-                            prev_state.dts, state.dts,
+                            stream_id, prev.pts, state.pts,
+                            prev.dts, state.dts,
                             AVerr2str(ret));
             }
             else
@@ -833,7 +843,7 @@ void OutputTS::mux(void)
         }
         else
         {
-            prev_state = state;
+            prev_state[stream_id] = state;
         }
     }
 }
