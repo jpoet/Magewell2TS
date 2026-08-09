@@ -330,7 +330,6 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
 
     av_dict_set(&opt, "rc", "constqp", 0);
     av_dict_set_int(&opt, "qp", m_args.quality, 0);
-//    m_encoder->global_quality = m_args.quality;
 
     if (!m_args.preset.empty())
     {
