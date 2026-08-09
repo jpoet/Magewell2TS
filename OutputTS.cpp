@@ -275,34 +275,12 @@ void OutputTS::log_packet(string where, const AVFormatContext* fmt_ctx,
 
 void OutputTS::optimize_mpegts(AVFormatContext* format_ctx)
 {
-    // Maximize the OS Kernel pipe capacity for stdout
-    fcntl(STDOUT_FILENO, F_SETPIPE_SZ, 1048576);
+    // Give the stdout pipe some room for transient output bursts.
+    fcntl(STDOUT_FILENO, F_SETPIPE_SZ, 1024 * 1024);
 
-    // Enable real-time low-latency packet configurations
+    // Flush MPEG-TS output promptly rather than allowing AVIO buffering
+    // to introduce additional latency.
     format_ctx->flags |= AVFMT_FLAG_FLUSH_PACKETS;
-    av_opt_set_int(format_ctx->priv_data, "muxrate",
-                   0, AV_OPT_SEARCH_CHILDREN);
-    av_opt_set_int(format_ctx->priv_data, "pes_payload_size",
-                   0, AV_OPT_SEARCH_CHILDREN);
-
-    // Optimize FFmpeg's internal pipe buffer to match the 1MB
-    // kernel pipe size This stops it from performing hundreds of
-    // tiny, unbuffered 188-byte writes
-    if (format_ctx->pb)
-    {
-        constexpr int PIPE_BUFFER_SIZE = 1048576; // 1MB
-        uint8_t* new_buf = (uint8_t*)av_malloc(PIPE_BUFFER_SIZE);
-        if (new_buf)
-        {
-            // Safely swap out the tiny default 32KB internal
-            // buffer for a 1MB buffer
-            av_free(format_ctx->pb->buffer);
-            format_ctx->pb->buffer = new_buf;
-            format_ctx->pb->buffer_size = PIPE_BUFFER_SIZE;
-            format_ctx->pb->buf_ptr = new_buf;
-            format_ctx->pb->buf_end = new_buf + PIPE_BUFFER_SIZE;
-        }
-    }
 }
 
 // Open Transport Stream container
@@ -333,11 +311,12 @@ bool OutputTS::open_container(void)
     if (v_st == nullptr)
         return false;
 
-    avcodec_parameters_copy(v_st->codecpar, m_video_marker->codec_par.get());
-    v_st->time_base = m_video_marker->time_base;
+    ret = avcodec_parameters_from_context(v_st->codecpar,
+                                         m_video_marker->marker->encoder.get());
+    v_st->time_base = m_video_marker->marker->time_base;
     v_st->avg_frame_rate = AVRational {
-        m_video_marker->frame_duration.den,
-        m_video_marker->frame_duration.num
+        m_video_marker->marker->frame_duration.den,
+        m_video_marker->marker->frame_duration.num
     };
 
     // TRACK 1: Audio track initialization (Conditional)
@@ -347,11 +326,11 @@ bool OutputTS::open_container(void)
         if (a_st == nullptr) return false;
 
         avcodec_parameters_copy(a_st->codecpar,
-                                m_audio_marker->codec_par.get());
-        a_st->time_base = m_audio_marker->time_base;
+                                m_audio_marker->marker->codec_par.get());
+        a_st->time_base = m_audio_marker->marker->time_base;
         a_st->avg_frame_rate = AVRational {
-            m_audio_marker->frame_duration.den,
-            m_audio_marker->frame_duration.num
+            m_audio_marker->marker->frame_duration.den,
+            m_audio_marker->marker->frame_duration.num
         };
     }
 
@@ -378,13 +357,9 @@ bool OutputTS::open_container(void)
     }
 
     AVDictionary* muxer_opts = nullptr;
-    // Force the muxer to insert a PCR timestamp at minimum every 20ms to 40ms
+
+    // Request PCR insertion at least every 20 ms.
     av_dict_set(&muxer_opts, "pcr_period", "20", 0);
-
-    // Ensure strict transport stream compliance layout
-
-    // VBR mode, but forces clock packets
-    av_dict_set(&muxer_opts, "muxrate", "0", 0);
 
     optimize_mpegts(m_formatContext);
 
@@ -483,7 +458,18 @@ bool OutputTS::queue_packets(int stream_id, int version,
             return true;
 
 #if 0
-        log_packet("queue_packets", m_formatContext, pkt.get(), 0);
+        if (stream_id == VIDEO_STREAM_ID)
+        {
+            log_packet("queue_packets (after receive, before scale)", m_formatContext, pkt.get(), 0);
+            m_log->info(
+                        "ENCODER packet TB={}/{} pts={} ({:.6f}s) dts={} ({:.6f}s)",
+                        enc->time_base.num,
+                        enc->time_base.den,
+                        pkt->pts,
+                        pkt->pts * av_q2d(enc->time_base),
+                        pkt->dts,
+                        pkt->dts * av_q2d(enc->time_base));
+        }
 #endif
 
         if (ret < 0)
@@ -498,11 +484,26 @@ bool OutputTS::queue_packets(int stream_id, int version,
                              enc->time_base,
                              TimeBase::MPEG_TS);
 
-        // Some encoders omit DTS
+#if 0
+        if (stream_id == VIDEO_STREAM_ID)
+        {
+            log_packet("queue_packets (after receive, after scale)", m_formatContext, pkt.get(), 0);
+            m_log->info(
+                        "STREAM packet TB={}/{} pts={} ({:.6f}s) dts={} ({:.6f}s)",
+                        TimeBase::MPEG_TS.num,
+                        TimeBase::MPEG_TS.den,
+                        pkt->pts,
+                        pkt->pts * av_q2d(TimeBase::MPEG_TS),
+                        pkt->dts,
+                        pkt->dts * av_q2d(TimeBase::MPEG_TS));
+        }
+#endif
+
         if (pkt->dts == AV_NOPTS_VALUE)
         {
-            m_log->warn("Encoder did not generate a DTS. Using PTS.");
-            pkt->dts = pkt->pts;
+            m_log->error("Encoder returned packet without DTS: pts={}",
+                         pkt->pts);
+            return false;
         }
 
         if (pkt->stream_index != stream_id)
@@ -511,19 +512,12 @@ bool OutputTS::queue_packets(int stream_id, int version,
                          stream_id, pkt->stream_index);
         }
 
-        Packet qp
-            {
-                .is_marker    = false,
-                .stream_id    = stream_id,
-                .version      = version,
-                //.time_base = enc->time_base,
-                .time_base = TimeBase::MPEG_TS,
-                .pkt          = std::move(pkt),
-                .codec_par    = nullptr
-            };
+        Packet qp {
+            .version      = version,
+            .pkt          = std::move(pkt),
+        };
 
         pktQ.Push(std::move(qp));
-        m_pktQ_ready.notify_one();
     }
 
     return true;
@@ -547,6 +541,24 @@ bool OutputTS::EncodeFrame(int stream_id, int version,
             = chrono::steady_clock::now();
 #endif
 
+#if 0
+        if (stream_id == VIDEO_STREAM_ID)
+        {
+            m_log->info(
+                         "ENCODE SEND stream={} frame_pts={} duration={}",
+                         stream_id,
+                         frame->pts,
+                         frame->duration);
+            m_log->info(
+                        "ENCODER time_base={}/{} framerate={}/{} frame_pts={}",
+                        enc->time_base.num,
+                        enc->time_base.den,
+                        enc->framerate.num,
+                        enc->framerate.den,
+                        frame->pts);
+        }
+#endif
+
         // Try to submit the frame
         int ret = avcodec_send_frame(enc, frame);
 
@@ -559,8 +571,6 @@ bool OutputTS::EncodeFrame(int stream_id, int version,
 #endif
         if (ret == 0)
         {
-            // The encoder accepted the frame. It now holds whatever
-            // references/copies it needs internally.
             ret = queue_packets(stream_id, version,
                                 enc, pktQ, false);
 #ifdef LOG_ELAPSED
@@ -579,13 +589,14 @@ bool OutputTS::EncodeFrame(int stream_id, int version,
                              encode_dur.count(), queue_dur.count());
             }
 #endif
+            m_pktQ_ready.notify_all();
             return ret;
         }
 
         if (ret == AVERROR(EAGAIN))
         {
-            // The encoder internal buffer is full. Pull packets out
-            // to make room.
+            // A packet needs drained before the encoder can accept
+            // another frame.
             m_log->info("Encoder saturated (EAGAIN). "
                         "Flushing packets to clear space.");
 
@@ -604,8 +615,7 @@ bool OutputTS::EncodeFrame(int stream_id, int version,
         // If it's EOF (during flush) or another critical error code
         if (ret == AVERROR_EOF)
         {
-            return queue_packets(stream_id, version,
-                                 enc, pktQ, false);
+            return queue_packets(stream_id, version, enc, pktQ, false);
         }
 
         m_log->warn("Critical failure sending a frame to the encoder: {}",
@@ -675,8 +685,8 @@ void OutputTS::sync_markers(void)
 
         constexpr AVRational ms_time_base = {1, 1000};
         m_frame_ms = std::chrono::milliseconds(av_rescale_q(1,
-                                                    outPkt->frame_duration,
-                                                    ms_time_base));
+                                            outPkt->marker->frame_duration,
+                                                            ms_time_base));
 #if 0
         m_sequence.Push(*outPkt, outPkt->pkt.get());
 #endif
@@ -706,35 +716,11 @@ void OutputTS::mux(void)
 
     for (;;)
     {
-        std::shared_ptr<VideoStream> vidStream = nullptr;
-
         {
             std::unique_lock<std::mutex> cv_lock(m_pktQ_mutex);
-            m_pktQ_ready.wait(cv_lock, [this, &vidStream] {
-                if (!m_running)
-                    return true;
-                if (!m_videoPktQ.IsEmpty())
-                    return true;
-
-                std::scoped_lock lock(m_videoStream_mutex);
-                if (m_videoStream)
-                {
-                    if (m_videoStream->HasActiveFrames())
-                    {
-                        // Cache the pointer for work outside the lock
-                        vidStream = m_videoStream;
-                        return true;
-                    }
-                }
-                return false;
+            m_pktQ_ready.wait(cv_lock, [this] {
+                return !m_running || !m_videoPktQ.IsEmpty();
             });
-        }
-
-        if (vidStream)
-        {
-            while (vidStream->EncodeFrame())
-                ;
-            vidStream.reset();
         }
 
         if (m_videoPktQ.IsEmpty())
@@ -783,7 +769,6 @@ void OutputTS::mux(void)
             continue;
         }
 
-#if 1
         // Non-monotonic Timestamp Protection
         auto& prev = prev_state[stream_id];
 
@@ -797,22 +782,7 @@ void OutputTS::mux(void)
                          prev.dts + 1);
 
             pkt->dts = prev.dts + 1;
-
-            if (pkt->pts < pkt->dts)
-                pkt->pts = pkt->dts;
         }
-#else
-        auto& prev = prev_state[stream_id];
-
-        if (prev.dts != AV_NOPTS_VALUE && pkt->dts <= prev.dts)
-        {
-            m_log->error("NON-MONOTONIC DTS stream={} "
-                         "previous pts={} dts={} -> current pts={} dts={}",
-                         stream_id,
-                         prev.pts, prev.dts,
-                         pkt->pts, pkt->dts);
-        }
-#endif
 
         m_log->trace("MUX [id{:<2d} version:{}] pts:{:#018x} dts:{:#018x} "
                      "duration:{} size:{}",
@@ -848,42 +818,35 @@ void OutputTS::mux(void)
     }
 }
 
-
-int OutputTS::AddMarker(int id, CodecParamsPtr&& codecpar,
-                        AVRational timebase, AVRational frameduration,
-                        int64_t timestamp)
+int OutputTS::AddMarker(Marker&& marker, int64_t timestamp)
 {
-    Packet marker;
+    Packet packet;
 
     int64_t marker_dts_pts = av_rescale_q(timestamp,
                                           TimeBase::Magewell,
                                           TimeBase::MPEG_TS);
 
-    marker.stream_id      = id;
-    marker.is_marker      = true;
-    marker.codec_par      = std::move(codecpar);
-    marker.time_base      = TimeBase::MPEG_TS;
-    marker.frame_duration = frameduration;
-    marker.pkt = make_packet();
-    marker.pkt->pts = marker_dts_pts;
-    marker.pkt->dts = marker_dts_pts;
+    packet.marker = std::move(marker);
+    packet.pkt = make_packet();
+    packet.pkt->pts = marker_dts_pts;
+    packet.pkt->dts = marker_dts_pts;
 
     int version;
 
     // Note: fetch_add returns the previous value, so incr it.
-    if (id == AUDIO_STREAM_ID)
+    if (marker.stream_id == AUDIO_STREAM_ID)
     {
         m_log->trace("AddMarker: Audio");
-        version = marker.version =
+        version = packet.version =
                   m_audio_latest_version.fetch_add(1, std::memory_order_relaxed) + 1;
-        m_audioPktQ.Push(std::move(marker));
+        m_audioPktQ.Push(std::move(packet));
     }
-    else if (id == VIDEO_STREAM_ID)
+    else if (marker.stream_id == VIDEO_STREAM_ID)
     {
         m_log->trace("AddMarker: Video");
-        version = marker.version =
+        version = packet.version =
                   m_video_latest_version.fetch_add(1, std::memory_order_relaxed) + 1;
-        m_videoPktQ.Push(std::move(marker));
+        m_videoPktQ.Push(std::move(packet));
     }
     m_pktQ_ready.notify_one();
     return version;

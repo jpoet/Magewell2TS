@@ -125,7 +125,7 @@ class VideoStream
 
     bool HasActiveFrames(void) const;
     int AddImage(Image&& image);
-    bool EncodeFrame(void);
+    bool EncodeFrame(PreparedFrame&& hw);
 
     std::string ColorSpaceDesc(void) const
         { return m_params.color.description; }
@@ -153,11 +153,8 @@ class VideoStream
 
     EncoderType m_encoderType { UNKNOWN };
 
-    bool m_is_packed           {false};
-    bool m_initialized_packing {false};
-
     int m_frame_cnt {0};
-    CodecContextPtr m_encoder;
+    SharedCodecContextPtr m_encoder;
 
     BufferRefPtr m_hw_device_ctx;
     BufferRefPtr m_hw_frames_ctx;

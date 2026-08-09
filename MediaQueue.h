@@ -23,18 +23,20 @@ inline constexpr AVRational AUDIO48  {1, 48000};
 inline constexpr AVRational MS       {1, 1000};
 }
 
+struct Marker
+{
+    int                   stream_id {-1};
+    AVRational            time_base {0, 1};
+    AVRational            frame_duration {0, 1};
+    CodecParamsPtr        codec_par;
+    SharedCodecContextPtr encoder;
+};
+
 struct Packet
 {
-    bool is_marker {false};
-    int stream_id {-1};
-
-    int version {0};
-
-    AVRational time_base {0, 1};
-    AVRational frame_duration {0, 1};
-
-    PacketPtr pkt;
-    CodecParamsPtr codec_par;
+    int                   version {0};
+    PacketPtr             pkt;
+    std::optional<Marker> marker;
 };
 
 class MediaQueue
@@ -88,33 +90,36 @@ class MediaQueue
     {
         std::scoped_lock lock(m_mutex);
         if (m_queue.empty())
-        {
-            return 0;
-        }
+            return AV_NOPTS_VALUE;
 
         return m_queue.front().pkt->dts;
+    }
+
+    int64_t PeekPts() const
+    {
+        std::scoped_lock lock(m_mutex);
+        if (m_queue.empty())
+            return AV_NOPTS_VALUE;
+
+        return m_queue.front().pkt->pts;
     }
 
     AVRational PeekTimebase() const
     {
         std::scoped_lock lock(m_mutex);
-        if (m_queue.empty())
-        {
+        if (m_queue.empty() || !m_queue.front().marker)
             return AVRational{0, 1};
-        }
 
-        return m_queue.front().time_base;
+        return m_queue.front().marker->time_base;
     }
 
     bool PeekMarker() const
     {
         std::scoped_lock lock(m_mutex);
         if (m_queue.empty())
-        {
             return false;
-        }
 
-        return m_queue.front().is_marker;
+        return m_queue.front().marker.has_value();
     }
 
     void Shutdown()

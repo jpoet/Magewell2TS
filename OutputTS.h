@@ -57,8 +57,8 @@ class OutputTS
     uint GetVideoVersion(void) const { return m_video_current_version; }
     uint GetAudioVersion(void) const { return m_audio_current_version; }
 
-    int AddMarker(int id, CodecParamsPtr&& codecpar, AVRational timebase,
-                  AVRational framerate, int64_t timestamp);
+    int AddMarker(Marker&& marker, int64_t timestamp);
+
     void AddAudioPkt(Packet&& pkt);
     void AddAudioSamples(AudioStream::Samples&& audio);
     void AddVideoImage(VideoStream::Image&& image);

@@ -33,11 +33,13 @@ void BitStream::AddSamples(AudioStream::Samples&& samples)
         m_iec61937.PushSamples(samples.data.data(), samples.data.size(),
                                samples.timestamp,   m_params.sample_rate))
     {
-        m_version = m_parent.AddMarker(OutputTS::AUDIO_STREAM_ID,
-                                       std::move(codecpar),
-                                       TimeBase::MPEG_TS,
-                                       m_params.frame_duration,
-                                       m_pts);
+        Marker marker {
+            .stream_id = OutputTS::AUDIO_STREAM_ID,
+            .time_base = TimeBase::MPEG_TS,
+            .frame_duration = m_params.frame_duration,
+            .codec_par = std::move(codecpar)
+        };
+        m_version = m_parent.AddMarker(std::move(marker), m_pts);
     }
 
     while(auto frame = m_iec61937.PopFrame())
@@ -93,11 +95,8 @@ void BitStream::AddSamples(AudioStream::Samples&& samples)
                      TimeBase::Magewell.den);
 
         Packet qp {
-            .is_marker    = false,
             .version      = m_version,
-            .time_base    = TimeBase::Magewell,
             .pkt          = std::move(pkt),
-            .codec_par    = nullptr
         };
 
         m_parent.AddAudioPkt(std::move(qp));

@@ -256,3 +256,27 @@ inline ContentLightMetadataPtr
 {
     return ContentLightMetadataPtr(av_content_light_metadata_alloc(nullptr));
 }
+
+
+/*
+  Shared version of AVCodecContext
+*/
+struct AVCodecContextSharedDeleter
+{
+    void operator()(AVCodecContext* ctx) const noexcept
+    {
+        if (ctx)
+            avcodec_free_context(&ctx);
+    }
+};
+
+
+using SharedCodecContextPtr = std::shared_ptr<AVCodecContext>;
+
+// helper to instantiate a shared context variant
+inline SharedCodecContextPtr make_shared_codec_context
+  (const AVCodec* codec = nullptr)
+{
+    return SharedCodecContextPtr(avcodec_alloc_context3(codec),
+                                 AVCodecContextSharedDeleter{});
+}

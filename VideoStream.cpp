@@ -52,14 +52,14 @@ VideoStream::VideoStream(OutputTS& parent, int verbose_level, Args& args,
         Shutdown();
     }
 
-    CodecParamsPtr codecpar = make_codec_params();
-    avcodec_parameters_from_context(codecpar.get(), m_encoder.get());
+    Marker marker {
+        .stream_id      = OutputTS::VIDEO_STREAM_ID,
+        .time_base      = m_encoder->time_base,
+        .frame_duration = m_params.frame_duration,
+        .encoder        = m_encoder
+    };
 
-    m_version = m_parent.AddMarker(OutputTS::VIDEO_STREAM_ID,
-                                   std::move(codecpar),
-                                   m_encoder->time_base,
-                                   m_params.frame_duration,
-                                   timestamp);
+    m_version = m_parent.AddMarker(std::move(marker), timestamp);
 }
 
 VideoStream::~VideoStream(void)
@@ -303,6 +303,8 @@ bool VideoStream::open_video(void)
     }
 
     start_frame_preparation();
+    CodecContextPtr vid_encoder = make_codec_context();
+
 
     if (local_opt != nullptr)
     {
@@ -327,7 +329,8 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
     // ---------------------------------------------------------------------
 
     av_dict_set(&opt, "rc", "constqp", 0);
-    m_encoder->global_quality = m_args.quality;
+    av_dict_set_int(&opt, "qp", m_args.quality, 0);
+//    m_encoder->global_quality = m_args.quality;
 
     if (!m_args.preset.empty())
     {
@@ -341,22 +344,18 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
         }
     }
 
-#if 0
-    // Configure real-time, low-latency streaming pipeline behavior
-    av_dict_set(&opt, "delay", "0", 0);
-    av_dict_set(&opt, "forced-idr", "1", 0);
-    av_dict_set(&opt, "zerolatency", "1", 0);
-#endif
-
     // This is critical! Otherwise there will be muxing issues.
-    av_dict_set(&opt, "bf", "0", 0);
+    m_encoder->max_b_frames = 0;
+    av_dict_set_int(&opt, "bf", 0, 0);
 
+#if 0
     if (m_args.lookahead > 0)
     {
         av_dict_set_int(&opt, "rc-lookahead", m_args.lookahead, 0);
         av_dict_set_int(&opt, "no-scenecut", 1, 0);
     }
     else
+#endif
     {
         av_dict_set(&opt, "rc-lookahead", "0", 0);
     }
@@ -456,9 +455,7 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
 
     // The encoder needs access to the CUDA device.
     if (m_encoder->hw_device_ctx)
-    {
         av_buffer_unref(&m_encoder->hw_device_ctx);
-    }
 
     m_encoder->hw_device_ctx =
         av_buffer_ref(m_hw_device_ctx.get());
@@ -473,11 +470,8 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
         return false;
     }
 
-    // Tell NVENC which CUDA frame pool it will receive frames from.
     if (m_encoder->hw_frames_ctx)
-    {
         av_buffer_unref(&m_encoder->hw_frames_ctx);
-    }
 
     m_encoder->hw_frames_ctx =
         av_buffer_ref(m_hw_frames_ctx.get());
@@ -542,33 +536,31 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
 
     m_encoder->global_quality = m_args.quality;
 
-    if (!m_args.preset.empty())
-    {
-        av_opt_set(m_encoder->priv_data,
-                   "preset",
-                   m_args.preset.c_str(),
-                   0);
-
-        if (m_verbose > 0)
-        {
-            m_log->info("VAAPI Engine: Applied preset '{}' for {}",
-                        m_args.preset,
-                        m_args.codecName);
-        }
-    }
-
     // Live capture: don't allow encoder frame reordering.
-    av_dict_set(&opt, "bf", "0", 0);
-    av_opt_set_int(m_encoder->priv_data,
-                   "async_depth", 4, 0);
+    m_encoder->has_b_frames = 0;
+    m_encoder->max_b_frames = 0;
+    av_dict_set_int(&opt, "bf", 0, 0);
 
-    if (m_args.lookahead > 0 && av_opt_find(m_encoder->priv_data,
-                                            "lookahead", nullptr, 0,
-                                            AV_OPT_SEARCH_CHILDREN))
+    av_opt_set_int(m_encoder->priv_data, "async_depth", 4, 0);
+
+    if (m_args.gopSecs > 0)
     {
-        av_opt_set_int(m_encoder->priv_data, "lookahead", 1, 0);
-        av_opt_set_int(m_encoder->priv_data, "lookahead_depth",
-                       m_args.lookahead, 0);
+        AVRational encoder_fps = AVRational
+                                 {
+                                     m_params.frame_duration.den,
+                                     m_params.frame_duration.num
+                                 };
+
+        // Reduces the fraction while preserving accuracy within a safe
+        // limit
+        av_reduce(&encoder_fps.num, &encoder_fps.den,
+                  m_params.frame_duration.den, m_params.frame_duration.num,
+                  INT_MAX);
+
+        m_encoder->gop_size =
+            static_cast<int>((static_cast<double>(encoder_fps.num) /
+                              static_cast<double>(encoder_fps.den)) *
+                             static_cast<double>(m_args.gopSecs) + 0.5);
     }
 
     string child_device = "/dev/dri/" + m_args.device;
@@ -589,8 +581,7 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
         {
             m_log->error("Failed to acquire persistent VAAPI Device "
                          "Context on path '{}': {}",
-                         child_device,
-                         AVerr2str(ret));
+                         child_device, AVerr2str(ret));
 
             if (opt)
                 av_dict_free(&opt);
@@ -598,6 +589,7 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
             return false;
         }
 
+        // Bind to smart pointer
         m_hw_device_ctx.reset(raw_hw_ctx);
 
         m_log->trace("VAAPI hardware runtime engine successfully bound.");
@@ -606,13 +598,10 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
     m_encoder->pix_fmt = AV_PIX_FMT_VAAPI;
 
     m_hw_frames_ctx.reset();
-
-    AVBufferRef* raw_frames_ctx =
-        av_hwframe_ctx_alloc(m_hw_device_ctx.get());
-
+    AVBufferRef* raw_frames_ctx = av_hwframe_ctx_alloc(m_hw_device_ctx.get());
     if (!raw_frames_ctx)
     {
-        m_log->error("VAAPI Pool Builder: Failed to allocate hardware "
+        m_log->error("VAAPI Pool: Failed to allocate hardware "
                      "frames memory block.");
 
         if (opt)
@@ -621,18 +610,13 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
         return false;
     }
 
+    // Bind to smart pointer.
     m_hw_frames_ctx.reset(raw_frames_ctx);
 
     AVHWFramesContext* frames_ctx =
         reinterpret_cast<AVHWFramesContext*>(m_hw_frames_ctx->data);
 
-    int hw_surface_pool_size =
-        m_args.extraHWframes + m_args.buffers + 4;
-
-    if (m_args.lookahead > 0)
-        hw_surface_pool_size += m_args.lookahead;
-
-    frames_ctx->initial_pool_size = hw_surface_pool_size + 16;
+    frames_ctx->initial_pool_size = m_args.extraHWframes + 16;
     frames_ctx->width = m_encoder->width;
     frames_ctx->height = m_encoder->height;
     frames_ctx->format = AV_PIX_FMT_VAAPI;
@@ -660,12 +644,11 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
     m_encoder->hw_frames_ctx =
         av_buffer_ref(m_hw_frames_ctx.get());
 
-    // Open the encoder.  Do NOT start frame preparation here.
     ret = avcodec_open2(m_encoder.get(), codec, &opt);
 
     if (ret < 0)
     {
-        m_log->critical("Fatal Error: VAAPI codec activation rejected: {}",
+        m_log->critical("Fatal Error: VAAPI codec activation failed: {}",
                         AVerr2str(ret));
 
         if (opt)
@@ -682,7 +665,7 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
         while ((entry = av_dict_get(opt, "", entry,
                                     AV_DICT_IGNORE_SUFFIX)))
         {
-            m_log->warn("VAAPI encoder option '{}' was not consumed "
+            m_log->warn("VAAPI encoder option '{}' was rejected "
                         "(value '{}')",
                         entry->key,
                         entry->value);
@@ -691,8 +674,7 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
         av_dict_free(&opt);
     }
 
-    m_log->trace("VAAPI pipeline fully active at "
-                 "hardware resolution {}x{}",
+    m_log->trace("VAAPI pipeline hardware resolution {}x{}",
                  frames_ctx->width,
                  frames_ctx->height);
 
@@ -705,44 +687,50 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     AVDictionary* opt = nullptr;
 
     if (opt_arg && *opt_arg)
-    {
         av_dict_copy(&opt, *opt_arg, 0);
-    }
 
     // Configure Intel QSV private encoder compression options
     av_opt_set(m_encoder->priv_data, "rc_mode", "ICQ", 0);
     m_encoder->global_quality = m_args.quality;
 
-    if (m_args.codecName != "av1_qsv")
+    if (!m_args.preset.empty())
     {
-        if (!m_args.preset.empty())
+        av_opt_set(m_encoder->priv_data, "preset",
+                   m_args.preset.c_str(), 0);
+
+        if (m_verbose > 0)
         {
-            av_opt_set(m_encoder->priv_data, "preset",
-                       m_args.preset.c_str(), 0);
-            if (m_verbose > 0)
-                m_log->info("QSV Engine: Applied preset '{}' for {}",
-                            m_args.preset, m_args.codecName);
+            m_log->info("QSV Engine: Applied preset '{}' for {}",
+                        m_args.preset, m_args.codecName);
         }
-
-        av_opt_set(m_encoder->priv_data, "scenario",
-                   "livestreaming", 0);
-
-        if (m_args.lookahead > 0 && av_opt_find(m_encoder->priv_data,
-                                                "lookahead", nullptr, 0,
-                                                AV_OPT_SEARCH_CHILDREN))
-        {
-            av_opt_set_int(m_encoder->priv_data, "lookahead", 1, 0);
-            av_opt_set_int(m_encoder->priv_data, "lookahead_depth",
-                           m_args.lookahead, 0);
-        }
-
-        av_opt_set(m_encoder->priv_data, "skip_frame",
-                   "insert_dummy", 0);
-        av_opt_set(m_encoder->priv_data, "async_depth", "4", 0);
-#if 1
-        av_dict_set(&opt, "bf", "0", 0);
-#endif
     }
+
+#if 0
+    av_opt_set(m_encoder->priv_data, "scenario", "cameracapture", 0);
+#else
+    av_opt_set(m_encoder->priv_data, "scenario", "archive", 0);
+#endif
+
+    if (m_args.lookahead > 0 && av_opt_find(m_encoder->priv_data,
+                                            "lookahead", nullptr, 0,
+                                            AV_OPT_SEARCH_CHILDREN))
+    {
+        av_opt_set_int(m_encoder->priv_data, "lookahead", 1, 0);
+        av_opt_set_int(m_encoder->priv_data, "lookahead_depth",
+                       m_args.lookahead, 0);
+    }
+
+#if 0
+    av_opt_set(m_encoder->priv_data, "skip_frame",
+               "insert_dummy", 0);
+#endif
+
+    // Live capture: don't allow encoder frame reordering.
+    m_encoder->has_b_frames = 0;
+    m_encoder->max_b_frames = 0;
+    av_dict_set_int(&opt, "bf", 0, 0);
+
+    av_opt_set_int(m_encoder->priv_data, "async_depth", 4, 0);
 
     av_opt_set_int(m_encoder->priv_data, "extra_hw_frames",
                    m_args.extraHWframes + m_args.lookahead + 4, 0);
@@ -765,6 +753,9 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
         }
     }
 
+/*
+ *  Open the encoder
+ */
     string child_device = "/dev/dri/" + m_args.device;
 
     if (m_hw_device_ctx == nullptr)
@@ -787,13 +778,12 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
                          "Device Context on device '{}': {}",
                          m_args.device, AVerr2str(ret));
             if (opt)
-            {
                 av_dict_free(&opt);
-            }
+
             return false;
         }
 
-        // Anchor safely into our smart pointer
+        // Bind to smart pointer
         m_hw_device_ctx.reset(raw_hw_ctx);
 
         m_log->trace("Intel QSV hardware runtime engine successfully bound");
@@ -803,24 +793,20 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
                  av_buffer_get_ref_count(m_hw_device_ctx.get()));
 
     if (opt)
-    {
         av_dict_free(&opt);
-    }
 
     m_encoder->pix_fmt = AV_PIX_FMT_QSV;
 
-    // Safely free the old generation context layout using the smart pointer API
     m_hw_frames_ctx.reset();
-
     AVBufferRef* raw_frames_ctx = av_hwframe_ctx_alloc(m_hw_device_ctx.get());
     if (raw_frames_ctx == nullptr)
     {
-        m_log->error("QSV Pool Builder: Failed to allocate hardware "
+        m_log->error("QSV Pool: Failed to allocate hardware "
                      "frames memory block.");
         return false;
     }
 
-    // Bind to smart pointer immediately
+    // Bind to smart pointer.
     m_hw_frames_ctx.reset(raw_frames_ctx);
 
     AVHWFramesContext* frames_ctx =
@@ -831,7 +817,8 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     frames_ctx->height = INTEL_ALIGN(m_encoder->height);
     frames_ctx->format = AV_PIX_FMT_QSV;
     frames_ctx->sw_format = m_sw_pix_fmt;
-    frames_ctx->initial_pool_size = m_args.extraHWframes + m_args.lookahead + 16;
+    frames_ctx->initial_pool_size = m_args.extraHWframes
+                                    + m_args.lookahead + 16;
 
 #if defined(HAS_MAGEWELL_QSV_SUPPORT) && (LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(58, 0, 0))
     // This code only compiles if the hardware/library dependencies exist system-wide
@@ -843,7 +830,6 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     }
 #endif
 
-    // Initialize the context using our smart pointer inner raw pointer
     ret = av_hwframe_ctx_init(m_hw_frames_ctx.get());
     if (ret < 0)
     {
@@ -858,46 +844,26 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
         av_buffer_unref(&m_encoder->hw_frames_ctx);
     }
     m_encoder->hw_frames_ctx = av_buffer_ref(m_hw_frames_ctx.get());
-//    m_encoder->thread_count = 1;
 
     // Intel kernel initialization codec activation
     ret = avcodec_open2(m_encoder.get(), codec, nullptr);
     if (ret < 0)
     {
-        m_log->critical("Fatal Error: Intel QSV codec activation rejected "
-                        "by system kernel: {}", AVerr2str(ret));
+        m_log->critical("Fatal Error: Intel QSV codec activation failed: ",
+                        AVerr2str(ret));
         Shutdown();
         return false;
     }
 
-    m_log->trace("Intel QSV pipeline fully active at "
-                 "hardware resolution {}x{}",
+    m_log->trace("Intel QSV pipeline hardware resolution {}x{}",
                  frames_ctx->width, frames_ctx->height);
 
     return true;
 }
 
-bool VideoStream::EncodeFrame(void)
+bool VideoStream::EncodeFrame(PreparedFrame&& job)
 {
 #ifdef LOG_ELAPSED
-    chrono::steady_clock::time_point active_start
-        = chrono::steady_clock::now();
-#endif
-
-    PreparedFrame job;
-    {
-        std::unique_lock<std::mutex> lock(m_active_frame_mutex);
-        if (m_active_frames.empty())
-            return false;
-
-        job = std::move(m_active_frames.front());
-        m_active_frames.pop_front();
-    }
-
-#ifdef LOG_ELAPSED
-    chrono::steady_clock::time_point active_end
-        = chrono::steady_clock::now();
-
     chrono::steady_clock::time_point encode_start
         = chrono::steady_clock::now();
 #endif
@@ -910,15 +876,12 @@ bool VideoStream::EncodeFrame(void)
     chrono::steady_clock::time_point encode_end
         = chrono::steady_clock::now();
 
-    auto active_dur = chrono::duration_cast<chrono::microseconds>
-                      (active_end - active_start);
     auto encode_dur = chrono::duration_cast<chrono::microseconds>
                       (encode_end - encode_start);
 
-    if (active_dur > 1ms || encode_dur > 7ms)
+    if (encode_dur > 7ms)
     {
-        m_log->debug("Wait for active buf {}μs. Encode {}μs",
-                     active_dur.count(), encode_dur.count());
+        m_log->debug("Wait for Encode {}μs", encode_dur.count());
     }
 #endif
 
@@ -1447,17 +1410,11 @@ int VideoStream::AddImage(Image&& image)
     }
 
     // Push hw_frame/cpu_frame into the queue for the encoder thread
-    int available;
 
-    {
-        std::scoped_lock lock(m_active_frame_mutex);
-        m_active_frames.push_back(std::move(hw));
-    }
+    EncodeFrame(std::move(hw));
 
     {
         std::scoped_lock lock(m_preped_frame_mutex);
-        available = m_args.buffers - m_preped_frames.size();
+        return m_args.buffers - m_preped_frames.size();
     }
-
-    return available;
 }

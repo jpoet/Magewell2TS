@@ -105,13 +105,15 @@ bool PCMStream::open_encoder(void)
 
     CodecParamsPtr codecpar = make_codec_params();
     avcodec_parameters_from_context(codecpar.get(), m_encoder.get());
+    Marker marker {
+        .stream_id = OutputTS::AUDIO_STREAM_ID,
+        .time_base = TimeBase::AUDIO48,
+        .frame_duration = m_params.frame_duration,
+        .codec_par = std::move(codecpar)
+    };
 
     // m_pts has native Magewell timestamp at this point.
-    m_version = m_parent.AddMarker(OutputTS::AUDIO_STREAM_ID,
-                                   std::move(codecpar),
-                                   TimeBase::AUDIO48,
-                                   m_params.frame_duration,
-                                   m_pts);
+    m_version = m_parent.AddMarker(std::move(marker), m_pts);
 
     m_pts = av_rescale_q(m_pts,
                          TimeBase::Magewell,
