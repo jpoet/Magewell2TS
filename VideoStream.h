@@ -123,9 +123,7 @@ class VideoStream
 
     void Shutdown(void);
 
-    bool HasActiveFrames(void) const;
     int AddImage(Image&& image);
-    bool EncodeFrame(PreparedFrame&& hw);
 
     std::string ColorSpaceDesc(void) const
         { return m_params.color.description; }
@@ -137,8 +135,9 @@ class VideoStream
     bool open_vaapi(const AVCodec* codec, AVDictionary** opt_arg);
     bool open_qsv(const AVCodec* codec, AVDictionary** opt_arg);
 
-    void start_frame_preparation(void);
-    void stop_frame_preparation(void);
+    void start_encoder(void);
+    void stop_encoder(void);
+    bool encode_frames(void);
     void prepare_frames(void);
     int add_image_error_cleanup(Image&& image, PreparedFrame&& hw);
 
@@ -178,15 +177,16 @@ class VideoStream
     mutable std::mutex m_active_frame_mutex;
     std::mutex m_preped_frame_mutex;
 
-    std::condition_variable m_shell_avail; // Signaled when an empty shell is returned
-    std::condition_variable m_preped_avail; // Signaled when a fresh GPU frame is ready
+    std::condition_variable m_shell_avail;
+    std::condition_variable m_preped_avail;
+    std::condition_variable m_active_avail;
 
     mutable std::mutex      m_queue_mutex;  // Protects m_active_frames
 
     // Thread management
     std::mutex m_hwframe_mutex;    // Controls access to m_preped_frames
 
-    std::thread       m_prep_thread;
+    std::thread       m_encode_thread;
     std::atomic<bool> m_running      {false};
 
 #ifdef LOG_ELAPSED

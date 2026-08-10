@@ -1202,7 +1202,7 @@ void Magewell::capture_audio_loop(void)
                     if (buffered_frame_idx != macf.iFrame)
                     {
                         m_log->warn("DAMAGED: Lost audio frame. Got: {}, "
-                                    "expected: {}; total: {}",
+                                    "expected: {}. (frame {})",
                                     macf.iFrame, buffered_frame_idx,
                                     macf.cFrameCount);
                         buffered_frame_idx = macf.iFrame;
@@ -2205,14 +2205,14 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                             {
                                 m_log->warn("DAMAGED: Magewell lost {:.0f} "
                                             "video frames, "
-                                            "have skipped {:.0f} : {}",
+                                            "have skipped {:.0f} (frame {})",
                                             skipped, skipped_frame_cnt,
                                             m_frame_cnt);
                             }
                             else
                             {
                                 m_log->warn("Magewell lost {:.0f} video "
-                                            "frames, have skipped {:.0f} : {}",
+                                            "frames, have skipped {:.0f} (frame {})",
                                             skipped, skipped_frame_cnt,
                                             m_frame_cnt);
                             }
@@ -2428,7 +2428,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 if (skipped_frame_cnt > 1 && m_frame_cnt > 2000)
                 {
                     m_log->warn("DAMAGED: Magewell lost {} video frames. "
-                                "Have skipped {} : {}",
+                                "Have skipped {} (frame {})",
                                 skipped, skipped_frame_cnt, m_frame_cnt);
                 }
             }

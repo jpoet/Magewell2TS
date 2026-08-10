@@ -725,7 +725,7 @@ void OutputTS::mux(void)
 
         if (m_videoPktQ.IsEmpty())
         {
-            if (!m_running)
+            if (!m_running.load())
                 break; // shutdown
             continue; // Catch spurious wakeups
         }
@@ -939,8 +939,6 @@ void OutputTS::process_video(void)
     std::chrono::steady_clock::time_point current_tm;
     int duration;
 
-    m_log->debug(format("GPU pool used: used+mapped"));
-
     for (;;)
     {
         VideoStream::Image image;
@@ -1003,7 +1001,7 @@ void OutputTS::process_video(void)
                           (encode_end - encode_start);
         if (m_imageQ.size())
         {
-            m_log->debug("Total Encode {}us image q size {}",
+            m_log->debug("Total AddImage {}us image q size {}",
                          encode_dur.count(), m_imageQ.size());
         }
 #endif

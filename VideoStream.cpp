@@ -64,21 +64,24 @@ VideoStream::VideoStream(OutputTS& parent, int verbose_level, Args& args,
 
 VideoStream::~VideoStream(void)
 {
-    stop_frame_preparation();
+    stop_encoder();
     close_video();
 }
 
 void VideoStream::Shutdown(void)
 {
     m_running.store(false);
-    m_shell_avail.notify_all();
+    m_active_avail.notify_all();
     m_preped_avail.notify_all();
+    m_shell_avail.notify_all();
 }
 
 void VideoStream::close_video(void)
 {
     m_parent.FlushPackets(OutputTS::VIDEO_STREAM_ID, m_version,
                           m_encoder.get());
+
+    Shutdown();
 
     if (m_verbose > 1)
     {
@@ -96,24 +99,23 @@ void VideoStream::close_video(void)
         m_log->info("VideoStream::close_video: encoder hw_frames_ctx refs={}",
                     av_buffer_get_ref_count(m_encoder->hw_frames_ctx));
     }
+    m_encoder.reset();
 
     if (m_hw_frames_ctx)
     {
         m_log->info("VideoStream::close_video: local hw_frames_ctx refs={}",
                     av_buffer_get_ref_count(m_hw_frames_ctx.get()));
     }
-
-    m_encoder.reset();
     m_hw_frames_ctx.reset();
 
     m_log->info("VideoStream:Close {}", m_params);
 }
 
-void VideoStream::start_frame_preparation(void)
+void VideoStream::start_encoder(void)
 {
     if (m_running.load())
     {
-        m_log->warn("Frame preparation thread is already arunning.");
+        m_log->warn("Encoder thread is already arunning.");
         return;
     }
 
@@ -128,28 +130,29 @@ void VideoStream::start_frame_preparation(void)
         m_empty_shells.push_back(std::move(shell));
     }
 
-    // Spawn the worker thread using a member function pointer
-    m_prep_thread = std::thread(&VideoStream::prepare_frames, this);
-    pthread_setname_np(m_prep_thread.native_handle(), "gpubuf");
-    m_log->info("Started frame preparation thread.");
+    m_encode_thread = std::thread(&VideoStream::encode_frames, this);
+    pthread_setname_np(m_encode_thread.native_handle(), "videnc");
+    m_log->info("Started frame encoding thread.");
 }
 
-void VideoStream::stop_frame_preparation(void)
+void VideoStream::stop_encoder(void)
 {
-    if (!m_running.load() && !m_prep_thread.joinable())
+    if (!m_running.load() && !m_encode_thread.joinable())
         return;
 
-    m_log->info("Stopping frame preparation thread...");
+    m_log->info("Stopping encoder thread...");
+
     m_running.store(false);
+    m_active_avail.notify_all();
     m_shell_avail.notify_all();
 
-    if (m_prep_thread.joinable())
-        m_prep_thread.join();
+    if (m_encode_thread.joinable())
+        m_encode_thread.join();
 
-    // PreparedFrame owns its AVFrames.
+    m_active_frames.clear();
     m_preped_frames.clear();
 
-    m_log->info("Frame preparation thread fully stopped and queue flushed.");
+    m_log->info("Encoder thread stopped and queue flushed.");
 }
 
 /*
@@ -302,9 +305,8 @@ bool VideoStream::open_video(void)
           break;
     }
 
-    start_frame_preparation();
+    start_encoder();
     CodecContextPtr vid_encoder = make_codec_context();
-
 
     if (local_opt != nullptr)
     {
@@ -725,9 +727,9 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
 #endif
 
     // Live capture: don't allow encoder frame reordering.
-    m_encoder->has_b_frames = 0;
-    m_encoder->max_b_frames = 0;
-    av_dict_set_int(&opt, "bf", 0, 0);
+    m_encoder->has_b_frames = 1;
+    m_encoder->max_b_frames = 10;
+    av_dict_set_int(&opt, "bf", 10, 0);
 
     av_opt_set_int(m_encoder->priv_data, "async_depth", 4, 0);
 
@@ -860,53 +862,65 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     return true;
 }
 
-bool VideoStream::EncodeFrame(PreparedFrame&& job)
+bool VideoStream::encode_frames(void)
 {
+    while (m_running.load() == true)
+    {
+        prepare_frames();
+
+        PreparedFrame job;
+        {
+            std::unique_lock<std::mutex> cv_lock(m_active_frame_mutex);
+            m_active_avail.wait(cv_lock, [this] {
+                return !m_running || !m_active_frames.empty();
+            });
+
+            if (!m_running || m_active_frames.empty())
+                continue;
+
+            job = std::move(m_active_frames.front());
+            m_active_frames.pop_front();
+        }
 #ifdef LOG_ELAPSED
-    chrono::steady_clock::time_point encode_start
-        = chrono::steady_clock::now();
+        chrono::steady_clock::time_point encode_start
+            = chrono::steady_clock::now();
 #endif
 
-    bool result = m_parent.EncodeFrame(OutputTS::VIDEO_STREAM_ID,
-                                       m_version,
-                                       m_encoder.get(), job.hw_frame.get());
+        bool result = m_parent.EncodeFrame(OutputTS::VIDEO_STREAM_ID,
+                                           m_version,
+                                           m_encoder.get(), job.hw_frame.get());
 
 #ifdef LOG_ELAPSED
-    chrono::steady_clock::time_point encode_end
-        = chrono::steady_clock::now();
+        chrono::steady_clock::time_point encode_end
+            = chrono::steady_clock::now();
 
-    auto encode_dur = chrono::duration_cast<chrono::microseconds>
-                      (encode_end - encode_start);
+        auto encode_dur = chrono::duration_cast<chrono::microseconds>
+                          (encode_end - encode_start);
 
-    if (encode_dur > 7ms)
-    {
-        m_log->debug("Wait for Encode {}μs", encode_dur.count());
-    }
+//        if (encode_dur > 7ms)
+        {
+            m_log->debug("Encode took {}μs", encode_dur.count());
+        }
 #endif
 
-    av_frame_unref(job.cpu_frame.get());
-    av_frame_unref(job.hw_frame.get());
+#if 0
+        av_frame_unref(job.cpu_frame.get());
+        av_frame_unref(job.hw_frame.get());
+#endif
 
-    {
-        std::unique_lock<std::mutex> lock(m_empty_shell_mutex);
-        m_empty_shells.push_back(std::move(job));
-    }
+        {
+            std::unique_lock<std::mutex> lock(m_empty_shell_mutex);
+            m_empty_shells.push_back(std::move(job));
+        }
 
-    m_shell_avail.notify_one();
-
-    if (!result)
-    {
-        m_log->error("Video encode_frame pipeline step dropped out or failed.");
-        return false;
+        if (!result)
+        {
+            m_log->error("Video encode_frame pipeline step dropped out or failed.");
+            return false;
+        }
     }
 
     return true;
-}
-
-bool VideoStream::HasActiveFrames(void) const
-{
-    std::scoped_lock lock(m_active_frame_mutex);
-    return !m_active_frames.empty();
 }
 
 void VideoStream::prepare_frames(void)
@@ -915,12 +929,8 @@ void VideoStream::prepare_frames(void)
     {
         PreparedFrame job;
         {
-            std::unique_lock<std::mutex> lock(m_empty_shell_mutex);
-            m_shell_avail.wait(lock, [this]() {
-                return !m_running.load() || !m_empty_shells.empty();
-            });
-
-            if (!m_running.load())
+            std::scoped_lock<std::mutex> lock(m_empty_shell_mutex);
+            if (m_empty_shells.empty())
                 return;
 
             job = std::move(m_empty_shells.front());
@@ -1057,155 +1067,11 @@ void VideoStream::prepare_frames(void)
         }
 
         m_preped_avail.notify_one();
+
+        std::scoped_lock<std::mutex> lock(m_active_frame_mutex);
+        if (!m_active_frames.empty())
+            return;
     }
-    {
-        PreparedFrame job;
-        {
-            std::unique_lock<std::mutex> lock(m_empty_shell_mutex);
-
-            m_shell_avail.wait(lock, [this]() {
-                return !m_running.load() || !m_empty_shells.empty();
-            });
-
-            if (!m_running.load())
-                return;
-
-            job = std::move(m_empty_shells.front());
-            m_empty_shells.pop_front();
-        }
-
-        size_t retries = 0;
-
-#ifdef LOG_ELAPSED
-        chrono::steady_clock::time_point get_start;
-        chrono::steady_clock::time_point get_end;
-#endif
-
-        for (;;)
-        {
-            av_frame_unref(job.cpu_frame.get());
-            av_frame_unref(job.hw_frame.get());
-
-#ifdef LOG_ELAPSED
-            get_start = chrono::steady_clock::now();
-#endif
-
-            int ret = av_hwframe_get_buffer(m_hw_frames_ctx.get(),
-                                            job.hw_frame.get(),
-                                            0);
-
-#ifdef LOG_ELAPSED
-            get_end = chrono::steady_clock::now();
-#endif
-
-            if (ret == 0)
-                break;
-
-            if (ret != AVERROR(ENOMEM))
-            {
-                m_log->error("av_hwframe_get_buffer failed: {}",
-                             AVerr2str(ret));
-                return;
-            }
-
-            ++retries;
-
-            m_log->warn("av_hwframe_get_buffer ENOMEM retry {}",
-                        retries);
-
-            {
-                std::unique_lock<std::mutex> lock(m_empty_shell_mutex);
-
-                m_shell_avail.wait_for(lock,
-                                       std::chrono::milliseconds(3),
-                                       [this]() {
-                                           return !m_running.load();
-                                       });
-            }
-
-            if (!m_running.load())
-            {
-                m_log->info("Frame preparation loop aborted via "
-                            "shutdown signal.");
-                return;
-            }
-        }
-
-        if (retries)
-        {
-            m_log->warn("Prepared frame took {} retries",
-                        retries);
-        }
-
-        // -------------------------------------------------------------
-        // QSV / VAAPI: create a CPU-visible frame.
-        //
-        // NVIDIA/CUDA: leave hw_frame as a CUDA frame. The CPU -> CUDA
-        // transfer is performed by AddImage().
-        // -------------------------------------------------------------
-
-        if (m_params.encoder_type != NV)
-        {
-#ifdef LOG_ELAPSED
-            chrono::steady_clock::time_point map_start =
-                chrono::steady_clock::now();
-#endif
-
-            int ret = av_hwframe_map(job.cpu_frame.get(),
-                                     job.hw_frame.get(),
-                                     AV_HWFRAME_MAP_WRITE
-                                     | AV_HWFRAME_MAP_OVERWRITE
-                                     );
-
-#ifdef LOG_ELAPSED
-            chrono::steady_clock::time_point map_end =
-                chrono::steady_clock::now();
-
-            auto get_dur =
-                chrono::duration_cast<chrono::microseconds>(get_end - get_start);
-
-            auto map_dur =
-                chrono::duration_cast<chrono::microseconds>(map_end - map_start);
-
-            if (map_dur > 7ms)
-            {
-                m_log->debug("Prepare: get: {}μs map:{}μs",
-                             get_dur.count(),
-                             map_dur.count());
-            }
-#endif
-
-            if (ret < 0)
-            {
-                m_log->error("av_hwframe_map failed: {}",
-                             AVerr2str(ret));
-                return;
-            }
-#if 0
-            m_log->info("Mapped frame: format={} sw_format={} "
-                        "width={} height={} "
-                        "linesize[0]={} linesize[1]={} "
-                        "data[0]={} data[1]={}",
-                        av_get_pix_fmt_name
-                        (static_cast<AVPixelFormat>(job.cpu_frame->format)),
-                        av_get_pix_fmt_name(m_sw_pix_fmt),
-                        job.cpu_frame->width,
-                        job.cpu_frame->height,
-                        job.cpu_frame->linesize[0],
-                        job.cpu_frame->linesize[1],
-                        static_cast<void*>(job.cpu_frame->data[0]),
-                        static_cast<void*>(job.cpu_frame->data[1]));
-#endif
-        }
-
-        {
-            std::unique_lock<std::mutex> lock(m_preped_frame_mutex);
-            m_preped_frames.push_back(std::move(job));
-        }
-
-        m_preped_avail.notify_one();
-    }
-
 }
 
 int VideoStream::add_image_error_cleanup(Image&& image, PreparedFrame&& hw)
@@ -1409,9 +1275,11 @@ int VideoStream::AddImage(Image&& image)
     }
 
     // Push hw_frame/cpu_frame into the queue for the encoder thread
-
-    EncodeFrame(std::move(hw));
-
+    {
+        std::scoped_lock<std::mutex> lock(m_active_frame_mutex);
+        m_active_frames.push_back(std::move(hw));
+    }
+    m_active_avail.notify_one();
     {
         std::scoped_lock lock(m_preped_frame_mutex);
         return m_args.buffers - m_preped_frames.size();
