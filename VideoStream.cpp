@@ -727,9 +727,9 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
 #endif
 
     // Live capture: don't allow encoder frame reordering.
-    m_encoder->has_b_frames = 1;
-    m_encoder->max_b_frames = 10;
-    av_dict_set_int(&opt, "bf", 10, 0);
+    m_encoder->has_b_frames = 0;
+    m_encoder->max_b_frames = 0;
+    av_dict_set_int(&opt, "bf", 0, 0);
 
     av_opt_set_int(m_encoder->priv_data, "async_depth", 4, 0);
 
