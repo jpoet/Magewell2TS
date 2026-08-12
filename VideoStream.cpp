@@ -130,6 +130,10 @@ void VideoStream::start_encoder(void)
         m_empty_shells.push_back(std::move(shell));
     }
 
+    m_prepare_thread = std::thread(&VideoStream::prepare_frames, this);
+    pthread_setname_np(m_prepare_thread.native_handle(), "vidprep");
+    m_log->info("Started frame prepare thread.");
+
     m_encode_thread = std::thread(&VideoStream::encode_frames, this);
     pthread_setname_np(m_encode_thread.native_handle(), "videnc");
     m_log->info("Started frame encoding thread.");
@@ -137,22 +141,27 @@ void VideoStream::start_encoder(void)
 
 void VideoStream::stop_encoder(void)
 {
-    if (!m_running.load() && !m_encode_thread.joinable())
-        return;
-
-    m_log->info("Stopping encoder thread...");
-
-    m_running.store(false);
-    m_active_avail.notify_all();
-    m_shell_avail.notify_all();
-
     if (m_encode_thread.joinable())
+    {
+        m_log->info("Stopping encoder thread...");
+
+        m_running.store(false);
+        m_active_avail.notify_all();
         m_encode_thread.join();
+    }
+
+    if (m_prepare_thread.joinable())
+    {
+        m_log->info("Stopping prepare thread...");
+
+        m_shell_avail.notify_all();
+        m_prepare_thread.join();
+    }
 
     m_active_frames.clear();
     m_preped_frames.clear();
 
-    m_log->info("Encoder thread stopped and queue flushed.");
+    m_log->info("Encoder and Prepare threads stopped and queue flushed.");
 }
 
 /*
@@ -866,8 +875,6 @@ bool VideoStream::encode_frames(void)
 {
     while (m_running.load() == true)
     {
-        prepare_frames();
-
         PreparedFrame job;
         {
             std::unique_lock<std::mutex> cv_lock(m_active_frame_mutex);
@@ -912,6 +919,7 @@ bool VideoStream::encode_frames(void)
             std::unique_lock<std::mutex> lock(m_empty_shell_mutex);
             m_empty_shells.push_back(std::move(job));
         }
+        m_shell_avail.notify_one();
 
         if (!result)
         {
@@ -929,9 +937,13 @@ void VideoStream::prepare_frames(void)
     {
         PreparedFrame job;
         {
-            std::scoped_lock<std::mutex> lock(m_empty_shell_mutex);
-            if (m_empty_shells.empty())
-                return;
+            std::unique_lock<std::mutex> cv_lock(m_empty_shell_mutex);
+            m_shell_avail.wait(cv_lock, [this] {
+                return !m_running || !m_empty_shells.empty();
+            });
+
+            if (!m_running || m_empty_shells.empty())
+                continue;
 
             job = std::move(m_empty_shells.front());
             m_empty_shells.pop_front();
@@ -1067,10 +1079,6 @@ void VideoStream::prepare_frames(void)
         }
 
         m_preped_avail.notify_one();
-
-        std::scoped_lock<std::mutex> lock(m_active_frame_mutex);
-        if (!m_active_frames.empty())
-            return;
     }
 }
 

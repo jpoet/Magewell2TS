@@ -186,6 +186,7 @@ class VideoStream
     // Thread management
     std::mutex m_hwframe_mutex;    // Controls access to m_preped_frames
 
+    std::thread       m_prepare_thread;
     std::thread       m_encode_thread;
     std::atomic<bool> m_running      {false};
 

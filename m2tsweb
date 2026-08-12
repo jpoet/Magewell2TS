@@ -34,6 +34,7 @@ class RootPage:
         cherrypy.response.stream = True
         cherrypy.response.headers['Content-Type'] = 'application/octet-stream'
 
+#        args = ['magewell2ts', '-m', '--p010']
         args = ['magewell2ts', '-m']
         args += coalesce('-i', input, arguments.input)
         args += coalesce('-b', board, arguments.board)
