@@ -23,4 +23,6 @@ class PCMStream : public AudioStream
 
     CodecContextPtr m_encoder;
     AudioFifoPtr    m_fifo;
+
+    SwrContextPtr m_swr{nullptr};
 };

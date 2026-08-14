@@ -723,7 +723,7 @@ void OutputTS::mux(void)
             });
         }
 
-        if (m_videoPktQ.IsEmpty())
+        if (m_videoPktQ.IsEmpty() || (!m_no_audio && m_audioPktQ.IsEmpty()))
         {
             if (!m_running.load())
                 break; // shutdown
