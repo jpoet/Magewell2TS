@@ -318,6 +318,20 @@ If you want to update the firmware on the Arc itself, this guide may help: <http
 
 # Optimizing
 
+Normally, no system optimizations are required for smooth usage of this program. If you are trying to run it on a lower end system, though, you may want to try some of the following tricks:
+
+## Adjust buffers
+
+There are two command line options which control how many video frame buffers are allocated: `--video-buffers` and `--gpu-buffers`.
+
+The "video" buffers are used to smooth out the transfer of data from the magewell card into the encoder threads. The "gpu" buffers are used to smooth out the transfer of data to the GPU. It is generally more important to have enough "video" buffers. The "gpu" buffers become important depending how how fast your RAM and video card are.
+
+Run with verbose level 4:
+```
+magewell2ts -b 1 -i 1 -m -v 4
+```
+to have it log buffer usage every minute. Note that it is normal for most of the buffers to show as in-use on initial start up as the pipeline is primed. Give it a couple of minutes to settle to see how many buffers are actually being used.
+
 ## Real-Time Threads
 
 If you want to use the `--realtime` option, the user running `magewell2ts` needs to be configured with real-time priority. For example, create the file `/etc/security/limits.d/99-mythtv-realtime.conf` with the following contents:
@@ -333,9 +347,15 @@ This allows the `mythtv` user to request real-time priority.
 
 By default, the two threads (audio and video) responsible for capturing from the Magewell card are given a higher-than-normal priority when using the `--realtime` option.
 
+Optionally, you can promote all of the `magewell2ts` threads to a higher priority:
+
+```bash
+nice -n -10 ./magewell2ts -i 1 -m
+```
+
 ## CPU Cores
 
-If you are capturing multiple streams at the same time, it can be beneficial to ensure the load is well-balanced across the CPU cores. This is typically unnecessary for 1080p, but can help significantly with 4K streams.
+If you are capturing multiple streams at the same time, it might be beneficial to ensure the load is well-balanced across the CPU cores. This is typically unnecessary (even harmful) for 1080p, but can help with 4K streams.
 
 Experiment with allowing all cores to handle hardware interrupts:
 
@@ -355,19 +375,15 @@ taskset -c 6,7 ./magewell2ts -i 2 -m
 
 In this example, cores 0 and 1 are left entirely to the operating system. When choosing cores, avoid E-cores (Efficiency cores). Hyper-threaded (HT) cores are perfectly fine as long as they are paired directly with the physical P-core they are associated with.
 
-Optionally, you can promote all of the `magewell2ts` threads to a higher priority:
-
-```bash
-sudo nice -n -10 taskset -c 0,1 ./magewell2ts -i 1 -m
-```
-
-Alternatively, if you have already given the user real-time permissions:
-
-```bash
-nice -n -10 taskset -c 0,1 ./magewell2ts -i 1 -m
-```
-
 Test each of these optimizations to ensure they are beneficial to your specific hardware setup before putting them into a production environment.
+
+When using the `--p010` option or with HDR, the amount of data being copied from the magewell card to the GPU doubles. Even if you don't have a 4K HDR capture card, you can stress your setup with something like:
+
+```
+magewell2ts -i 3 -m --p010 -q 5
+```
+
+I personally cannot tell the difference in video quality between `-q 19` and `-q 5`.  I do believe I see a slight reduction in the moire pattern on dark scenes when using `--p010`, but that is heavily dependant on the source.
 
 ---
 
