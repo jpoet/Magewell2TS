@@ -26,6 +26,7 @@ void PCMStream::Reset(void)
     open_encoder();
 }
 
+#if 0
 static bool ac3_sample_rate_supported(const AVCodec* codec, int sample_rate)
 {
     if (!codec)
@@ -54,6 +55,7 @@ static bool ac3_sample_rate_supported(const AVCodec* codec, int sample_rate)
 
     return false;
 }
+#endif
 
 bool PCMStream::open_encoder(void)
 {
@@ -75,6 +77,7 @@ bool PCMStream::open_encoder(void)
 
     // AC3 standard sample rate
     m_encoder->sample_rate = m_params.sample_rate;
+#if 0
     if (!ac3_sample_rate_supported(codec, m_params.sample_rate))
     {
         m_log->warn("AC-3 does not support {} Hz, resampling to 48000 Hz",
@@ -83,6 +86,9 @@ bool PCMStream::open_encoder(void)
     }
     else
         m_encoder->sample_rate = m_params.sample_rate;
+#else // MythTV doesn't like AC3 at anything besides 48KHz
+    m_encoder->sample_rate = 48000;
+#endif
 
     // Internal m_encoderoder format
     m_encoder->sample_fmt = AV_SAMPLE_FMT_FLTP;
