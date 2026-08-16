@@ -730,10 +730,8 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
                        m_args.lookahead, 0);
     }
 
-#if 0
     av_opt_set(m_encoder->priv_data, "skip_frame",
                "insert_dummy", 0);
-#endif
 
     // Live capture: don't allow encoder frame reordering.
     m_encoder->has_b_frames = 0;
