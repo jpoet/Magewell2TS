@@ -123,11 +123,8 @@ void VideoStream::start_encoder(void)
 
     for (int idx = 0; idx < m_args.buffers; ++idx)
     {
-        PreparedFrame shell {
-            .hw_frame = make_frame(),
-            .cpu_frame = make_frame()
-        };
-        m_empty_shells.push_back(std::move(shell));
+        FramePtr hw = make_frame();
+        m_empty_shells.push_back(std::move(hw));
     }
 
     m_prepare_thread = std::thread(&VideoStream::prepare_frames, this);
@@ -873,7 +870,7 @@ bool VideoStream::encode_frames(void)
 {
     while (m_running.load() == true)
     {
-        PreparedFrame job;
+        FramePtr hw;
         {
             std::unique_lock<std::mutex> cv_lock(m_active_frame_mutex);
             m_active_avail.wait(cv_lock, [this] {
@@ -883,7 +880,7 @@ bool VideoStream::encode_frames(void)
             if (!m_running || m_active_frames.empty())
                 continue;
 
-            job = std::move(m_active_frames.front());
+            hw = std::move(m_active_frames.front());
             m_active_frames.pop_front();
         }
 #ifdef LOG_ELAPSED
@@ -893,7 +890,7 @@ bool VideoStream::encode_frames(void)
 
         bool result = m_parent.EncodeFrame(OutputTS::VIDEO_STREAM_ID,
                                            m_version,
-                                           m_encoder.get(), job.hw_frame.get());
+                                           m_encoder.get(), hw.get());
 
 #ifdef LOG_ELAPSED
         chrono::steady_clock::time_point encode_end
@@ -902,20 +899,15 @@ bool VideoStream::encode_frames(void)
         auto encode_dur = chrono::duration_cast<chrono::microseconds>
                           (encode_end - encode_start);
 
-//        if (encode_dur > 7ms)
+        if (encode_dur > 7ms)
         {
             m_log->debug("Encode took {}μs", encode_dur.count());
         }
 #endif
 
-#if 0
-        av_frame_unref(job.cpu_frame.get());
-        av_frame_unref(job.hw_frame.get());
-#endif
-
         {
             std::unique_lock<std::mutex> lock(m_empty_shell_mutex);
-            m_empty_shells.push_back(std::move(job));
+            m_empty_shells.push_back(std::move(hw));
         }
         m_shell_avail.notify_one();
 
@@ -933,7 +925,7 @@ void VideoStream::prepare_frames(void)
 {
     while (m_running.load())
     {
-        PreparedFrame job;
+        FramePtr hw;
         {
             std::unique_lock<std::mutex> cv_lock(m_empty_shell_mutex);
             m_shell_avail.wait(cv_lock, [this] {
@@ -943,7 +935,7 @@ void VideoStream::prepare_frames(void)
             if (!m_running || m_empty_shells.empty())
                 continue;
 
-            job = std::move(m_empty_shells.front());
+            hw = std::move(m_empty_shells.front());
             m_empty_shells.pop_front();
         }
 
@@ -954,22 +946,17 @@ void VideoStream::prepare_frames(void)
         chrono::steady_clock::time_point get_end;
 #endif
 
+#ifdef LOG_ELAPSED
+        get_start = chrono::steady_clock::now();
+#endif
+
         for (;;)
         {
-            av_frame_unref(job.cpu_frame.get());
-            av_frame_unref(job.hw_frame.get());
-
-#ifdef LOG_ELAPSED
-            get_start = chrono::steady_clock::now();
-#endif
+            av_frame_unref(hw.get());
 
             int ret = av_hwframe_get_buffer(m_hw_frames_ctx.get(),
-                                            job.hw_frame.get(),
+                                            hw.get(),
                                             0);
-
-#ifdef LOG_ELAPSED
-            get_end = chrono::steady_clock::now();
-#endif
 
             if (ret == 0)
                 break;
@@ -1004,87 +991,33 @@ void VideoStream::prepare_frames(void)
             }
         }
 
+#ifdef LOG_ELAPSED
+        get_end = chrono::steady_clock::now();
+        auto get_dur =
+            chrono::duration_cast<chrono::microseconds>(get_end - get_start);
+        if (get_dur > 1ms)
+        {
+            m_log->debug("Prepare: get: {}μs", get_dur.count());
+        }
+#endif
+
         if (retries)
         {
             m_log->warn("Prepared frame took {} retries",
                         retries);
         }
 
-        // -------------------------------------------------------------
-        // QSV / VAAPI: create a CPU-visible frame.
-        //
-        // NVIDIA/CUDA: leave hw_frame as a CUDA frame. The CPU -> CUDA
-        // transfer is performed by AddImage().
-        // -------------------------------------------------------------
-
-        if (m_params.encoder_type != NV)
-        {
-#ifdef LOG_ELAPSED
-            chrono::steady_clock::time_point map_start =
-                chrono::steady_clock::now();
-#endif
-
-            int ret = av_hwframe_map(job.cpu_frame.get(),
-                                     job.hw_frame.get(),
-                                     AV_HWFRAME_MAP_WRITE
-                                     | AV_HWFRAME_MAP_OVERWRITE
-                                     );
-
-#ifdef LOG_ELAPSED
-            chrono::steady_clock::time_point map_end =
-                chrono::steady_clock::now();
-
-            auto get_dur =
-                chrono::duration_cast<chrono::microseconds>(get_end - get_start);
-
-            auto map_dur =
-                chrono::duration_cast<chrono::microseconds>(map_end - map_start);
-
-            if (map_dur > 7ms)
-            {
-                m_log->debug("Prepare: get: {}μs map:{}μs",
-                             get_dur.count(),
-                             map_dur.count());
-            }
-#endif
-
-            if (ret < 0)
-            {
-                m_log->error("av_hwframe_map failed: {}",
-                             AVerr2str(ret));
-                return;
-            }
-#if 0
-            m_log->info("Mapped frame: format={} sw_format={} "
-                        "width={} height={} "
-                        "linesize[0]={} linesize[1]={} "
-                        "data[0]={} data[1]={}",
-                        av_get_pix_fmt_name
-                        (static_cast<AVPixelFormat>(job.cpu_frame->format)),
-                        av_get_pix_fmt_name(m_sw_pix_fmt),
-                        job.cpu_frame->width,
-                        job.cpu_frame->height,
-                        job.cpu_frame->linesize[0],
-                        job.cpu_frame->linesize[1],
-                        static_cast<void*>(job.cpu_frame->data[0]),
-                        static_cast<void*>(job.cpu_frame->data[1]));
-#endif
-        }
-
         {
             std::unique_lock<std::mutex> lock(m_preped_frame_mutex);
-            m_preped_frames.push_back(std::move(job));
+            m_preped_frames.push_back(std::move(hw));
         }
 
         m_preped_avail.notify_one();
     }
 }
 
-int VideoStream::add_image_error_cleanup(Image&& image, PreparedFrame&& hw)
+int VideoStream::add_image_error_cleanup(Image&& image, FramePtr&& hw)
 {
-    av_frame_unref(hw.cpu_frame.get());
-    av_frame_unref(hw.hw_frame.get());
-
     f_image_avail(image.pImage, image.pEco);
 
     {
@@ -1099,9 +1032,7 @@ int VideoStream::add_image_error_cleanup(Image&& image, PreparedFrame&& hw)
 int VideoStream::AddImage(Image&& image)
 {
     int size_bytes;
-    uint8_t* src_data[4] = { nullptr };
-    int src_linesize[4] = { 0 };
-    PreparedFrame hw;
+    FramePtr hw;
 
     /* Make sure encoder is open */
     if (!m_encoder || !m_hw_frames_ctx)
@@ -1114,7 +1045,7 @@ int VideoStream::AddImage(Image&& image)
 
     /* Get a prepared VRAM frame */
 #ifdef LOG_ELAPSED
-    chrono::steady_clock::time_point map_start
+    chrono::steady_clock::time_point prep_start
         = chrono::steady_clock::now();
 #endif
     {
@@ -1134,94 +1065,49 @@ int VideoStream::AddImage(Image&& image)
         m_preped_frames.pop_front();
     }
 #ifdef LOG_ELAPSED
-    chrono::steady_clock::time_point map_end
+    chrono::steady_clock::time_point prep_end
         = chrono::steady_clock::now();
 
     chrono::steady_clock::time_point copy_start
         = chrono::steady_clock::now();
 #endif
 
-    if (m_params.encoder_type == NV)
+    AVFrame cpu_frame{};
+
+    cpu_frame.format = m_sw_pix_fmt;
+    cpu_frame.width  = m_params.width;
+    cpu_frame.height = m_params.height;
+
+    size_bytes = av_image_fill_arrays(cpu_frame.data,
+                                      cpu_frame.linesize,
+                                      image.pImage,
+                                      m_sw_pix_fmt,
+                                      m_params.width,
+                                      m_params.height,
+                                      1);
+
+    if (size_bytes < 0)
     {
-        av_frame_unref(hw.cpu_frame.get()); // safety net
-
-        hw.cpu_frame->format = m_sw_pix_fmt;
-        hw.cpu_frame->width = m_params.width;
-        hw.cpu_frame->height = m_params.height;
-
-        size_bytes = av_image_fill_arrays(hw.cpu_frame->data,
-                                          hw.cpu_frame->linesize,
-                                          image.pImage,
-                                          m_sw_pix_fmt,
-                                          m_params.width,
-                                          m_params.height,
-                                          1);
-
-        if (size_bytes < 0)
-        {
-            m_log->error("av_image_fill_arrays failed: {}",
-                         AVerr2str(size_bytes));
-            return add_image_error_cleanup(std::move(image),
-                                           std::move(hw));
-        }
-
-        int ret = av_hwframe_transfer_data(hw.hw_frame.get(),
-                                           hw.cpu_frame.get(),
-                                           0);
-
-        if (ret < 0)
-        {
-            m_log->error("av_hwframe_transfer_data failed: {}",
-                         AVerr2str(ret));
-            return add_image_error_cleanup(std::move(image),
-                                           std::move(hw));
-        }
-
-        // The image has now been copied into the CUDA frame.
-        // cpu_frame still points at the Magewell buffer
-        av_frame_unref(hw.cpu_frame.get());
+        m_log->error("av_image_fill_arrays failed: {}",
+                     AVerr2str(size_bytes));
+        return add_image_error_cleanup(std::move(image),
+                                       std::move(hw));
     }
-    else
+
+    int ret = av_hwframe_transfer_data(hw.get(), &cpu_frame, 0);
+
+    if (ret < 0)
     {
-        size_bytes = av_image_fill_arrays(src_data, src_linesize, image.pImage,
-                                          m_sw_pix_fmt, m_params.width,
-                                          m_params.height, 1);
-        if (size_bytes < 0)
-        {
-            m_log->error("av_image_fill_arrays failed: {}",
-                         AVerr2str(size_bytes));
-            return add_image_error_cleanup(std::move(image), std::move(hw));
-        }
-
-#if 0
-        m_log->info("Magewell: {}x{} size={} | src Y stride={} UV stride={}",
-                    m_params.width,
-                    m_params.height,
-                    size_bytes,
-                    src_linesize[0],
-                    src_linesize[1]);
-
-        m_log->info("QSV/VAAPI CPU frame: Y stride={} UV stride={} "
-                    "linesize[0]={} linesize[1]={}",
-                    hw.cpu_frame->linesize[0],
-                    hw.cpu_frame->linesize[1],
-                    hw.cpu_frame->linesize[0],
-                    hw.cpu_frame->linesize[1]);
-#endif
-
-        av_image_copy(hw.cpu_frame->data,
-                      hw.cpu_frame->linesize,
-                      const_cast<const uint8_t**>(src_data),
-                      src_linesize,
-                      m_sw_pix_fmt,
-                      m_params.width,
-                      m_params.height);
+        m_log->error("av_hwframe_transfer_data failed: {}",
+                     AVerr2str(ret));
+        return add_image_error_cleanup(std::move(image),
+                                       std::move(hw));
     }
 
 #ifdef LOG_ELAPSED
     chrono::steady_clock::time_point copy_end = chrono::steady_clock::now();
 
-    auto buf_dur = chrono::duration_cast<chrono::microseconds>(map_end - map_start);
+    auto buf_dur = chrono::duration_cast<chrono::microseconds>(prep_end - prep_start);
     auto transfer_dur = chrono::duration_cast<chrono::microseconds>(copy_end - copy_start);
 
     m_total_transfer_time_us += transfer_dur.count();
@@ -1247,14 +1133,14 @@ int VideoStream::AddImage(Image&& image)
     f_image_avail(image.pImage, image.pEco);
 
     // Metadata injection
-    hw.hw_frame->colorspace      = m_params.color.space;
-    hw.hw_frame->color_primaries = m_params.color.primaries;
-    hw.hw_frame->color_trc       = m_params.color.trc;
-    hw.hw_frame->color_range     = m_params.color.range;
+    hw->colorspace      = m_params.color.space;
+    hw->color_primaries = m_params.color.primaries;
+    hw->color_trc       = m_params.color.trc;
+    hw->color_range     = m_params.color.range;
 
     // Set Presentation Timestamps
-    hw.hw_frame->pts = av_rescale_q(image.timestamp, TimeBase::Magewell,
-                                          m_encoder->time_base);
+    hw->pts = av_rescale_q(image.timestamp, TimeBase::Magewell,
+                                    m_encoder->time_base);
 
     // Inject HDR metadata properties safely if present
     if (m_params.color.is_HDR)
@@ -1262,7 +1148,7 @@ int VideoStream::AddImage(Image&& image)
         if (m_display_primaries)
         {
             AVMasteringDisplayMetadata* primaries =
-                av_mastering_display_metadata_create_side_data(hw.hw_frame.get());
+                av_mastering_display_metadata_create_side_data(hw.get());
             if (primaries)
             {
                 *primaries = *m_display_primaries;
@@ -1272,7 +1158,7 @@ int VideoStream::AddImage(Image&& image)
         if (m_content_light)
         {
             AVContentLightMetadata* light =
-                av_content_light_metadata_create_side_data(hw.hw_frame.get());
+                av_content_light_metadata_create_side_data(hw.get());
             if (light)
             {
                 *light = *m_content_light;
@@ -1280,7 +1166,7 @@ int VideoStream::AddImage(Image&& image)
         }
     }
 
-    // Push hw_frame/cpu_frame into the queue for the encoder thread
+    // Push hw_frame into the queue for the encoder thread
     {
         std::scoped_lock<std::mutex> lock(m_active_frame_mutex);
         m_active_frames.push_back(std::move(hw));

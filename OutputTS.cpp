@@ -981,7 +981,7 @@ void OutputTS::process_video(void)
         auto encode_end = chrono::steady_clock::now();
         auto encode_dur = chrono::duration_cast<chrono::microseconds>
                           (encode_end - encode_start);
-        if (m_imageQ.size())
+        if (m_imageQ.size() > 10)
         {
             m_log->debug("Total AddImage {}us image q size {}",
                          encode_dur.count(), m_imageQ.size());

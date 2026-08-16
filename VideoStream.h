@@ -103,12 +103,7 @@ class VideoStream
     };
     using imageque_t = std::deque<Image>;
 
-    struct PreparedFrame
-    {
-        FramePtr hw_frame;
-        FramePtr cpu_frame;
-    };
-    using hw_frame_t = std::deque<PreparedFrame>;
+    using hw_frame_t = std::deque<FramePtr>;
 
     VideoStream(OutputTS& parent, int verbose_level, Args& args,
                 Params&& params, MagCallback image_buffer_avail,
@@ -139,7 +134,7 @@ class VideoStream
     void stop_encoder(void);
     bool encode_frames(void);
     void prepare_frames(void);
-    int add_image_error_cleanup(Image&& image, PreparedFrame&& hw);
+    int add_image_error_cleanup(Image&& image, FramePtr&& hw);
 
     void set_light(const ColorSpace& color);
 
