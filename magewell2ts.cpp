@@ -85,14 +85,14 @@ void show_help(string_view app)
     clog << "--board (-b)       : board id, if you have more than one [0]\n"
          << "--device (-d)      : vaapi/qsv device (e.g. renderD129) [renderD128]\n"
          << "--input (-i)       : input idx, *required*. Starts at 1\n"
-         << "--settle-time (-s) : How long to wait for signal changes to 'settle' [99(ms)]\n"
+         << "--settle-time      : How long to wait for signal changes to 'settle' [99(ms)]\n"
          << "--list (-l)        : List capture card inputs\n"
          << "--mux (-m)         : capture audio and video and mux into TS [false]\n"
          << "--no-audio (-n)    : Only capture video. [false]\n"
          << "--read-edid (-r)   : Read EDID info for input to file\n"
          << "--logfile          : Also log messages to the given file\n"
          << "--color (-o)       : Use color when logging to the console\n"
-         << "--thread (-t)      : Show thread name\n"
+         << "---show-threads (-s) : Show thread name\n"
          << "--verbose (-v)     : message verbose level. 0=completely quiet [1]\n"
          << "--video-codec (-c) : Video codec name (e.g. hevc_qsv, h264_nvenc) [hevc_qsv]\n"
          << "--lookahead (-a)   : How many frames to 'look ahead' [35]\n"
@@ -101,8 +101,8 @@ void show_help(string_view app)
          << "--p010             : Force p010 (10bit) video format.\n"
          << "--gop_secs (-g)    : GOP size in seconds [1.5] (0 to disable)\n"
          << "--idr-interval     : Frequency that keyframe will be IDR [0]\n"
-         << "--gpu-buffers      : GPU video buffers count [8]\n"
-         << "--video-buffers    : Video buffers count (RAM) [16]\n"
+         << "--copy-threads (-t) : Number of GPU copy threads [2]\n"
+         << "--video-buffers    : Video buffers count (RAM) [20]\n"
          << "--extra-hw-frames  : Extra HW frames used for encoding [32]\n"
          << "--write-edid (-w)  : Write EDID info from file to input\n"
          << "--wait-for         : Wait for given number of inputs to be initialized. 10 second timeout\n"
@@ -285,7 +285,7 @@ int main(int argc, char* argv[])
     bool        write_edid  = false;
     bool        no_audio      = false;
 
-    int         video_buffers = 16;
+    int         video_buffers = 20;
     VideoStream::Args  video_args;
 
 
@@ -400,17 +400,17 @@ int main(int argc, char* argv[])
         {
             video_args.device = *(++iter);
         }
-        else if (*iter == "-s" || *iter == "--settle-time")
+        else if (*iter == "--settle-time")
         {
             int ms;
             if (!string_to_int(*(++iter), ms, "Settle time"))
                 exit(1);
             settle_time = chrono::milliseconds(ms);
         }
-        else if (*iter == "--gpu-buffers")
+        else if (*iter == "-t" || *iter == "--copy_threads")
         {
-            if (!string_to_int(*(++iter), video_args.buffers,
-                               "GPU buffers"))
+            if (!string_to_int(*(++iter), video_args.num_threads,
+                               "Copy threads"))
                 exit(1);
         }
         else if (*iter == "--video-buffers")
@@ -436,7 +436,7 @@ int main(int argc, char* argv[])
         {
             color = true;
         }
-        else if (*iter == "-t" || *iter == "--thread")
+        else if (*iter == "-s" || *iter == "--show-threads")
         {
             thread_name = true;
         }

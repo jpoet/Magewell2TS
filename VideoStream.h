@@ -1,15 +1,16 @@
 #pragma once
 
 #include <thread>
-#include <atomic>
 #include <mutex>
 #include <condition_variable>
+#include <deque>
+#include <array>
+#include <optional>
+#include <atomic>
 
 #include <string>
 #include <utility>
-#include <optional>
 #include <functional>
-#include <deque>
 
 #include <variant>
 #include <utility>
@@ -71,7 +72,7 @@ class VideoStream
         std::string preset { };
         int quality       { 25 };
         int lookahead     { 35 };
-        int buffers       { 4 };
+        int num_threads   { 2 };
         int extraHWframes { 32 };
         float gopSecs     { 1.5 };
         int idrInterval   {  0  };
@@ -101,9 +102,45 @@ class VideoStream
         void* pEco {nullptr};
         std::optional<Params> oParams;
     };
-    using imageque_t = std::deque<Image>;
 
+    using imageque_t = std::deque<Image>;
     using hw_frame_t = std::deque<FramePtr>;
+
+    struct CopyThread
+    {
+        std::thread cpy_thread;
+
+        // Protects both images and frames queues
+        std::mutex mtx;
+        // Notifies worker that an image is ready
+        std::condition_variable image_avail;
+        // Notifies encoder that a frame is ready
+        std::condition_variable frame_avail;
+        // Input queue (populated by Capture)
+        imageque_t images;
+        // Output queue (consumed by Encoder)
+        hw_frame_t frames;
+        std::atomic<bool> running{true};
+
+        // Default constructor
+        CopyThread() = default;
+
+        CopyThread(CopyThread&& rhs) noexcept
+        {
+            // std::mutex and std::condition_variable cannot be moved;
+            // they are default-constructed for the new location.
+            cpy_thread = std::move(rhs.cpy_thread);
+            images     = std::move(rhs.images);
+            frames     = std::move(rhs.frames);
+            running.store(rhs.running.load());
+        }
+
+        // Disable copying explicitly
+        CopyThread(const CopyThread&) = delete;
+        CopyThread& operator=(const CopyThread&) = delete;
+        CopyThread& operator=(CopyThread&&) = delete;
+    };
+    using copythdq_t = std::vector<CopyThread>;
 
     VideoStream(OutputTS& parent, int verbose_level, Args& args,
                 Params&& params, MagCallback image_buffer_avail,
@@ -118,7 +155,7 @@ class VideoStream
 
     void Shutdown(void);
 
-    int AddImage(Image&& image);
+    void AddImage(Image&& image);
 
     std::string ColorSpaceDesc(void) const
         { return m_params.color.description; }
@@ -132,9 +169,8 @@ class VideoStream
 
     void start_encoder(void);
     void stop_encoder(void);
-    bool encode_frames(void);
-    void prepare_frames(void);
-    int add_image_error_cleanup(Image&& image, FramePtr&& hw);
+    void encode_frames_loop(void);
+    void worker_thread_loop(CopyThread& worker);
 
     void set_light(const ColorSpace& color);
 
@@ -158,38 +194,19 @@ class VideoStream
 
     enum AVPixelFormat m_sw_pix_fmt {AV_PIX_FMT_NV12};
 
-    hw_frame_t m_empty_shells;   // Wiped containers waiting for GPU mapping
-    hw_frame_t m_preped_frames;
-    hw_frame_t m_active_frames;
-
     // HDR
     MasteringDisplayMetadataPtr m_display_primaries;
     ContentLightMetadataPtr m_content_light;
 
     MagCallback f_image_avail;
 
-    std::mutex m_empty_shell_mutex;
-    mutable std::mutex m_active_frame_mutex;
-    std::mutex m_preped_frame_mutex;
-
-    std::condition_variable m_shell_avail;
-    std::condition_variable m_preped_avail;
-    std::condition_variable m_active_avail;
-
-    mutable std::mutex      m_queue_mutex;  // Protects m_active_frames
-
-    // Thread management
-    std::mutex m_hwframe_mutex;    // Controls access to m_preped_frames
-
-    std::thread       m_prepare_thread;
     std::thread       m_encode_thread;
+
     std::atomic<bool> m_running      {false};
 
-#ifdef LOG_ELAPSED
-    uint64_t m_total_transfer_time_us = 0;
-    uint64_t m_total_buf_wait_time_us  = 0;
-    uint32_t m_frame_counter           = 0;
-#endif
+    size_t m_next_encode_worker  {0};
+    size_t m_next_capture_worker {0};
+    copythdq_t m_workers;
 };
 
 // Custom format specification for spdlog / libfmt

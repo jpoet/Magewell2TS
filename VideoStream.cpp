@@ -19,7 +19,6 @@ extern "C" {
 #include "OutputTS.h"
 
 using namespace std;
-// using namespace std::chrono_literals;
 
 VideoStream::VideoStream(OutputTS& parent, int verbose_level, Args& args,
                          Params&& params, MagCallback image_buffer_avail,
@@ -71,9 +70,6 @@ VideoStream::~VideoStream(void)
 void VideoStream::Shutdown(void)
 {
     m_running.store(false);
-    m_active_avail.notify_all();
-    m_preped_avail.notify_all();
-    m_shell_avail.notify_all();
 }
 
 void VideoStream::close_video(void)
@@ -115,50 +111,84 @@ void VideoStream::start_encoder(void)
 {
     if (m_running.load())
     {
-        m_log->warn("Encoder thread is already arunning.");
+        m_log->warn("Encoder thread is already running.");
         return;
     }
 
+    int num_threads = (m_args.num_threads > 0) ? m_args.num_threads : 1;
+    m_log->info("Initializing encoder with {} copy worker threads.",
+                num_threads);
+
     m_running.store(true);
 
-    for (int idx = 0; idx < m_args.buffers; ++idx)
+    // Configure workers before starting threads
+    m_workers.clear();
+    m_workers.resize(num_threads);
+
+    // Launch threads
+    for (int idx = 0; idx < num_threads; ++idx)
     {
-        FramePtr hw = make_frame();
-        m_empty_shells.push_back(std::move(hw));
+        CopyThread& worker = m_workers[idx];
+        worker.running.store(true);
+
+        worker.cpy_thread = std::thread(&VideoStream::worker_thread_loop,
+                                        this, std::ref(worker));
+
+        std::string thread_name = format("vdcpy{}", idx);
+        pthread_setname_np(worker.cpy_thread.native_handle(),
+                           thread_name.c_str());
     }
 
-    m_prepare_thread = std::thread(&VideoStream::prepare_frames, this);
-    pthread_setname_np(m_prepare_thread.native_handle(), "vidprep");
-    m_log->info("Started frame prepare thread.");
+    m_next_capture_worker = 0;
+    m_next_encode_worker  = 0;
 
-    m_encode_thread = std::thread(&VideoStream::encode_frames, this);
+    // Start encoder processing thread
+    m_encode_thread = std::thread(&VideoStream::encode_frames_loop, this);
     pthread_setname_np(m_encode_thread.native_handle(), "videnc");
     m_log->info("Started frame encoding thread.");
 }
 
 void VideoStream::stop_encoder(void)
 {
+    m_log->info("Shutting down encoder pipeline...");
+    m_running.store(false);
+
+    for (size_t idx = 0; idx < m_workers.size(); ++idx)
+    {
+        CopyThread& worker = m_workers[idx];
+        worker.running.store(false);
+        worker.image_avail.notify_all();
+        worker.frame_avail.notify_all();
+    }
+
     if (m_encode_thread.joinable())
     {
         m_log->info("Stopping encoder thread...");
-
-        m_running.store(false);
-        m_active_avail.notify_all();
         m_encode_thread.join();
     }
 
-    if (m_prepare_thread.joinable())
+    for (size_t idx = 0; idx < m_workers.size(); ++idx)
     {
-        m_log->info("Stopping prepare thread...");
+        m_log->info("Stopping vidcpy worker {}", idx);
 
-        m_shell_avail.notify_all();
-        m_prepare_thread.join();
+        CopyThread& worker = m_workers[idx];
+        if (worker.cpy_thread.joinable())
+        {
+            worker.cpy_thread.join();
+        }
+
+        std::scoped_lock lock(worker.mtx);
+        while (!worker.images.empty())
+        {
+            Image img = std::move(worker.images.front());
+            worker.images.pop_front();
+            f_image_avail(img.pImage, img.pEco);
+        }
+        worker.frames.clear();
     }
 
-    m_active_frames.clear();
-    m_preped_frames.clear();
-
-    m_log->info("Encoder and Prepare threads stopped and queue flushed.");
+    m_workers.clear();
+    m_log->info("Encoder pipeline stopped and worker resources cleared.");
 }
 
 /*
@@ -191,7 +221,6 @@ void VideoStream::set_light(const ColorSpace& color)
  */
 bool VideoStream::open_video(void)
 {
-    // Perform basic hardware parameter safety validation
     if (m_params.width <= 0 || m_params.height <= 0)
     {
         m_log->error("Invalid dimensions received: {}x{}",
@@ -222,7 +251,7 @@ bool VideoStream::open_video(void)
         return false;
     }
 
-    // Assign hardware metrics straight to the active encoder context
+    // Assign hardware metrics to the active encoder context
     m_encoder->codec_id = video_codec->id;
     m_encoder->width = m_params.width;
     m_encoder->height = m_params.height;
@@ -244,8 +273,7 @@ bool VideoStream::open_video(void)
                                  m_params.frame_duration.num
                              };
 
-    // Reduces the fraction while preserving accuracy within a safe
-    // limit
+    // Reduces the fraction while preserving accuracy within a safe limit
     av_reduce(&encoder_fps.num, &encoder_fps.den,
               m_params.frame_duration.den, m_params.frame_duration.num,
               INT_MAX);
@@ -266,7 +294,7 @@ bool VideoStream::open_video(void)
                         m_encoder->gop_size);
     }
 
-    // Assign color spaces using existing baseline tracking variables
+    // Assign color spaces using baseline tracking variables
     m_encoder->color_range     = m_params.color.range;
     m_encoder->color_primaries = m_params.color.primaries;
     m_encoder->color_trc       = m_params.color.trc;
@@ -332,10 +360,7 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
         av_dict_copy(&opt, *opt_arg, 0);
     }
 
-    // ---------------------------------------------------------------------
     // Configure NVENC private encoder options
-    // ---------------------------------------------------------------------
-
     av_dict_set(&opt, "rc", "constqp", 0);
     av_dict_set_int(&opt, "qp", m_args.quality, 0);
 
@@ -367,10 +392,7 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
         av_dict_set(&opt, "rc-lookahead", "0", 0);
     }
 
-    // ---------------------------------------------------------------------
     // Create the persistent CUDA device context
-    // ---------------------------------------------------------------------
-
     if (m_hw_device_ctx == nullptr)
     {
         AVBufferRef* raw_hw_ctx = nullptr;
@@ -399,16 +421,18 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
         m_log->trace("nVidia CUDA hardware runtime engine successfully bound.");
     }
 
-    // ---------------------------------------------------------------------
-    // Create the CUDA hardware-frame context.
-    //
-    // The encoder receives AV_PIX_FMT_CUDA frames, while sw_format
-    // describes the actual video pixels stored in those frames.
-    //
-    // m_sw_pix_fmt will be:
-    //     AV_PIX_FMT_NV12   for normal 8-bit video
-    //     AV_PIX_FMT_P010LE for HDR / forced P010
-    // ---------------------------------------------------------------------
+    /*
+     * ---------------------------------------------------------------------
+     * Create the CUDA hardware-frame context.
+     *
+     * The encoder receives AV_PIX_FMT_CUDA frames, while sw_format
+     * describes the actual video pixels stored in those frames.
+     *
+     * m_sw_pix_fmt will be:
+     *     AV_PIX_FMT_NV12   for normal 8-bit video
+     *     AV_PIX_FMT_P010LE for HDR / forced P010
+     * ---------------------------------------------------------------------
+    */
 
     AVBufferRef* raw_frames_ctx =
         av_hwframe_ctx_alloc(m_hw_device_ctx.get());
@@ -433,8 +457,7 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
 
     // Maintain a pool of reusable CUDA surfaces.  The extra surfaces give
     // NVENC room for asynchronous operation and lookahead.
-    frames_ctx->initial_pool_size =
-        m_args.buffers + m_args.lookahead + 16;
+    frames_ctx->initial_pool_size = m_args.lookahead + 16;
 
     ret = av_hwframe_ctx_init(raw_frames_ctx);
 
@@ -454,10 +477,7 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
     // Transfer ownership into our persistent hardware-frame context.
     m_hw_frames_ctx.reset(raw_frames_ctx);
 
-    // ---------------------------------------------------------------------
     // NVENC receives CUDA hardware frames.
-    // ---------------------------------------------------------------------
-
     m_encoder->pix_fmt = AV_PIX_FMT_CUDA;
 
     // The encoder needs access to the CUDA device.
@@ -500,10 +520,7 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
                 av_get_pix_fmt_name(frames_ctx->sw_format),
                 frames_ctx->initial_pool_size);
 
-    // ---------------------------------------------------------------------
     // Open the encoder
-    // ---------------------------------------------------------------------
-
     ret = avcodec_open2(m_encoder.get(), codec, &opt);
 
     if (opt)
@@ -520,10 +537,7 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
         return false;
     }
 
-    // ---------------------------------------------------------------------
     // Report the final encoder configuration
-    // ---------------------------------------------------------------------
-
     m_log->info("Nvidia NVENC pipeline fully active at resolution {}x{} "
                 "with CUDA frames, sw_format={}",
                 m_encoder->width,
@@ -558,8 +572,7 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
                                      m_params.frame_duration.num
                                  };
 
-        // Reduces the fraction while preserving accuracy within a safe
-        // limit
+        // Reduces the fraction while preserving accuracy within a safe limit
         av_reduce(&encoder_fps.num, &encoder_fps.den,
                   m_params.frame_duration.den, m_params.frame_duration.num,
                   INT_MAX);
@@ -623,7 +636,7 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
     AVHWFramesContext* frames_ctx =
         reinterpret_cast<AVHWFramesContext*>(m_hw_frames_ctx->data);
 
-    frames_ctx->initial_pool_size = m_args.extraHWframes + m_args.buffers;
+    frames_ctx->initial_pool_size = m_args.extraHWframes;
     frames_ctx->width = m_encoder->width;
     frames_ctx->height = m_encoder->height;
     frames_ctx->format = AV_PIX_FMT_VAAPI;
@@ -823,7 +836,7 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     frames_ctx->format = AV_PIX_FMT_QSV;
     frames_ctx->sw_format = m_sw_pix_fmt;
     frames_ctx->initial_pool_size = m_args.extraHWframes
-                                    + m_args.lookahead + m_args.buffers + 4;
+                                    + m_args.lookahead + 4;
 
 #if defined(HAS_MAGEWELL_QSV_SUPPORT) && (LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(58, 0, 0))
     // This code only compiles if the hardware/library dependencies exist system-wide
@@ -840,7 +853,7 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     {
         m_log->error("Intel Media Driver rejected fresh format surface "
                      "pool request: {}", AVerr2str(ret));
-        m_hw_frames_ctx.reset(); // Automatically unreferences cleanly
+        m_hw_frames_ctx.reset();
         return false;
     }
 
@@ -865,31 +878,66 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     return true;
 }
 
-bool VideoStream::encode_frames(void)
+void VideoStream::encode_frames_loop(void)
 {
-    while (m_running.load() == true)
+#ifdef LOG_ELAPSED
+    int      frame_counter = 0;
+    uint64_t total_work_time_us  = 0;
+#endif
+
+    while (m_running.load())
     {
-        FramePtr hw;
+        // Round-robin worker queue to guarantee chronologically
+        // correct indexing
+        CopyThread& worker = m_workers[m_next_encode_worker];
+        m_next_encode_worker = (m_next_encode_worker + 1) % m_workers.size();
+
+        FramePtr hw_frame;
+
+#ifdef LOG_ELAPSED
+        chrono::steady_clock::time_point work_start =
+            chrono::steady_clock::now();
+#endif
         {
-            std::unique_lock<std::mutex> cv_lock(m_active_frame_mutex);
-            m_active_avail.wait(cv_lock, [this] {
-                return !m_running || !m_active_frames.empty();
+            std::unique_lock lock(worker.mtx);
+            worker.frame_avail.wait(lock, [&worker, this] {
+                return !m_running || !worker.frames.empty();
             });
 
-            if (!m_running || m_active_frames.empty())
-                continue;
+            if (!m_running)
+                break;
 
-            hw = std::move(m_active_frames.front());
-            m_active_frames.pop_front();
+            hw_frame = std::move(worker.frames.front());
+            worker.frames.pop_front();
         }
 #ifdef LOG_ELAPSED
+        chrono::steady_clock::time_point work_end =
+            chrono::steady_clock::now();
+        auto work_dur =
+            chrono::duration_cast<chrono::microseconds>(work_end - work_start);
+
+        total_work_time_us += work_dur.count();
+        ++frame_counter;
+
+        if (frame_counter >= 1800) [[unlikely]]
+        {
+            uint64_t avg = total_work_time_us / frame_counter;
+
+            m_log->debug("Over past {} frames -> Avg wait for work: {}μs",
+                         frame_counter, avg);
+
+            total_work_time_us = 0;
+            frame_counter           = 0;
+        }
+
         chrono::steady_clock::time_point encode_start
             = chrono::steady_clock::now();
 #endif
 
         bool result = m_parent.EncodeFrame(OutputTS::VIDEO_STREAM_ID,
                                            m_version,
-                                           m_encoder.get(), hw.get());
+                                           m_encoder.get(),
+                                           hw_frame.get());
 
 #ifdef LOG_ELAPSED
         chrono::steady_clock::time_point encode_end
@@ -903,280 +951,121 @@ bool VideoStream::encode_frames(void)
             m_log->debug("Encode took {}μs", encode_dur.count());
         }
 #endif
-        av_frame_unref(hw.get());
-        {
-            std::unique_lock<std::mutex> lock(m_empty_shell_mutex);
-            m_empty_shells.push_back(std::move(hw));
-        }
-        m_shell_avail.notify_one();
+
+        av_frame_unref(hw_frame.get());
 
         if (!result)
         {
-            m_log->error("Video encode_frame pipeline step dropped out or failed.");
-            return false;
+            m_log->error("Video encode_frame pipeline failed.");
+            Shutdown();
         }
     }
-
-    return true;
 }
 
-void VideoStream::prepare_frames(void)
+void VideoStream::worker_thread_loop(CopyThread& worker)
 {
-    while (m_running.load())
+    while (worker.running.load() && m_running.load())
     {
-        FramePtr hw;
+        Image image;
         {
-            std::unique_lock<std::mutex> cv_lock(m_empty_shell_mutex);
-            m_shell_avail.wait(cv_lock, [this] {
-                return !m_running || !m_empty_shells.empty();
+            std::unique_lock lock(worker.mtx);
+            worker.image_avail.wait(lock, [&worker, this] {
+                return !worker.running || !m_running || !worker.images.empty();
             });
 
-            if (!m_running || m_empty_shells.empty())
+            if (!worker.running || !m_running || worker.images.empty())
                 continue;
 
-            hw = std::move(m_empty_shells.front());
-            m_empty_shells.pop_front();
+            image = std::move(worker.images.front());
+            worker.images.pop_front();
         }
 
-        size_t retries = 0;
-
-#ifdef LOG_ELAPSED
-        chrono::steady_clock::time_point get_start;
-        chrono::steady_clock::time_point get_end;
-#endif
-
-#ifdef LOG_ELAPSED
-        get_start = chrono::steady_clock::now();
-#endif
-
-        for (;;)
-        {
-            int ret = av_hwframe_get_buffer(m_hw_frames_ctx.get(),
-                                            hw.get(),
-                                            0);
-
-            if (ret == 0)
-                break;
-
-            if (ret != AVERROR(ENOMEM))
-            {
-                m_log->error("av_hwframe_get_buffer failed: {}",
-                             AVerr2str(ret));
-                return;
-            }
-
-            ++retries;
-
-            m_log->warn("av_hwframe_get_buffer ENOMEM retry {}",
-                        retries);
-
-            {
-                std::unique_lock<std::mutex> lock(m_empty_shell_mutex);
-
-                m_shell_avail.wait_for(lock,
-                                       std::chrono::milliseconds(3),
-                                       [this]() {
-                                           return !m_running.load();
-                                       });
-            }
-
-            if (!m_running.load())
-            {
-                m_log->info("Frame preparation loop aborted via "
-                            "shutdown signal.");
-                return;
-            }
-        }
-
-#ifdef LOG_ELAPSED
-        get_end = chrono::steady_clock::now();
-        auto get_dur =
-            chrono::duration_cast<chrono::microseconds>(get_end - get_start);
-        if (get_dur > 1ms)
-        {
-            m_log->debug("Prepare: get: {}μs", get_dur.count());
-        }
-#endif
-
-        if (retries)
-        {
-            m_log->warn("Prepared frame took {} retries",
-                        retries);
-        }
-
-        {
-            std::unique_lock<std::mutex> lock(m_preped_frame_mutex);
-            m_preped_frames.push_back(std::move(hw));
-        }
-
-        m_preped_avail.notify_one();
-    }
-}
-
-int VideoStream::add_image_error_cleanup(Image&& image, FramePtr&& hw)
-{
-    f_image_avail(image.pImage, image.pEco);
-
-    {
-        std::unique_lock<std::mutex> lock(m_empty_shell_mutex);
-        m_empty_shells.push_back(std::move(hw));
-    }
-    m_shell_avail.notify_one();
-    Shutdown();
-    return -1;
-}
-
-int VideoStream::AddImage(Image&& image)
-{
-    int size_bytes;
-    FramePtr hw;
-
-    /* Make sure encoder is open */
-    if (!m_encoder || !m_hw_frames_ctx)
-    {
-        m_log->warn("Video encoder is not initialized or open");
-        f_image_avail(image.pImage, image.pEco);
-        Shutdown();
-        return -1;
-    }
-
-    /* Get a prepared VRAM frame */
-#ifdef LOG_ELAPSED
-    chrono::steady_clock::time_point prep_start
-        = chrono::steady_clock::now();
-#endif
-    {
-        std::unique_lock<std::mutex> lock(m_preped_frame_mutex);
-
-        m_preped_avail.wait(lock, [this]() {
-            return !m_running.load() || !m_preped_frames.empty();
-        });
-
-        if (!m_running.load())
-        {
+        FramePtr hw = make_frame();
+        int ret = av_hwframe_get_buffer(m_hw_frames_ctx.get(), hw.get(), 0);
+        if (ret < 0) {
+            m_log->error("Worker failed to grab hardware pool surface: {}",
+                         AVerr2str(ret));
             f_image_avail(image.pImage, image.pEco);
-            return -1;
+            continue;
         }
 
-        hw = std::move(m_preped_frames.front());
-        m_preped_frames.pop_front();
-    }
-#ifdef LOG_ELAPSED
-    chrono::steady_clock::time_point prep_end
-        = chrono::steady_clock::now();
+        AVFrame cpu_frame{};
+        cpu_frame.format = m_sw_pix_fmt;
+        cpu_frame.width  = m_params.width;
+        cpu_frame.height = m_params.height;
 
-    chrono::steady_clock::time_point copy_start
-        = chrono::steady_clock::now();
-#endif
+        int size_bytes = av_image_fill_arrays(cpu_frame.data,
+                                              cpu_frame.linesize,
+                                              image.pImage, m_sw_pix_fmt,
+                                              m_params.width,
+                                              m_params.height, 1);
 
-    AVFrame cpu_frame{};
-
-    cpu_frame.format = m_sw_pix_fmt;
-    cpu_frame.width  = m_params.width;
-    cpu_frame.height = m_params.height;
-
-    size_bytes = av_image_fill_arrays(cpu_frame.data,
-                                      cpu_frame.linesize,
-                                      image.pImage,
-                                      m_sw_pix_fmt,
-                                      m_params.width,
-                                      m_params.height,
-                                      1);
-
-    if (size_bytes < 0)
-    {
-        m_log->error("av_image_fill_arrays failed: {}",
-                     AVerr2str(size_bytes));
-        return add_image_error_cleanup(std::move(image),
-                                       std::move(hw));
-    }
-
-    int ret = av_hwframe_transfer_data(hw.get(), &cpu_frame, 0);
-
-    if (ret < 0)
-    {
-        m_log->error("av_hwframe_transfer_data failed: {}",
-                     AVerr2str(ret));
-        return add_image_error_cleanup(std::move(image),
-                                       std::move(hw));
-    }
-
-#ifdef LOG_ELAPSED
-    chrono::steady_clock::time_point copy_end = chrono::steady_clock::now();
-
-    auto buf_dur = chrono::duration_cast<chrono::microseconds>(prep_end - prep_start);
-    auto transfer_dur = chrono::duration_cast<chrono::microseconds>(copy_end - copy_start);
-
-    m_total_transfer_time_us += transfer_dur.count();
-    m_total_buf_wait_time_us += buf_dur.count();
-    ++m_frame_counter;
-
-    if (m_frame_counter >= 3600) [[unlikely]]
-    {
-        uint64_t avg_transfer = m_total_transfer_time_us / m_frame_counter;
-        uint64_t avg_buf_wait  = m_total_buf_wait_time_us / m_frame_counter;
-
-        m_log->debug("Over past {} frames -> Avg Transfer: {}μs | "
-                     "Avg Buf Wait: {}μs",
-                     m_frame_counter, avg_transfer, avg_buf_wait);
-
-        m_total_transfer_time_us = 0;
-        m_total_buf_wait_time_us  = 0;
-        m_frame_counter           = 0;
-    }
-#endif
-
-    // Release Magewell frame buffer after copying is complete
-    f_image_avail(image.pImage, image.pEco);
-
-    // Metadata injection
-    hw->colorspace      = m_params.color.space;
-    hw->color_primaries = m_params.color.primaries;
-    hw->color_trc       = m_params.color.trc;
-    hw->color_range     = m_params.color.range;
-
-    // Set Presentation Timestamps
-    hw->pts = av_rescale_q(image.timestamp, TimeBase::Magewell,
-                                    m_encoder->time_base);
-
-    // Inject HDR metadata properties if present
-    if (m_params.color.is_HDR)
-    {
-        if (m_display_primaries)
+        if (size_bytes < 0)
         {
-            av_frame_remove_side_data(hw.get(),
-                                      AV_FRAME_DATA_MASTERING_DISPLAY_METADATA);
+            m_log->error("av_image_fill_arrays failed: {}",
+                         AVerr2str(size_bytes));
+            f_image_avail(image.pImage, image.pEco);
+            Shutdown();
+            break;
+        }
 
-            AVMasteringDisplayMetadata* primaries =
-                av_mastering_display_metadata_create_side_data(hw.get());
-            if (primaries)
+        ret = av_hwframe_transfer_data(hw.get(), &cpu_frame, 0);
+        f_image_avail(image.pImage, image.pEco);
+
+        if (ret < 0) {
+            m_log->error("av_hwframe_transfer_data failed inside worker: {}",
+                         AVerr2str(ret));
+            continue;
+        }
+
+        hw->colorspace      = m_params.color.space;
+        hw->color_primaries = m_params.color.primaries;
+        hw->color_trc       = m_params.color.trc;
+        hw->color_range     = m_params.color.range;
+        hw->pts = av_rescale_q(image.timestamp, TimeBase::Magewell,
+                               m_encoder->time_base);
+
+        // Handle HDR metadata attachments
+        if (m_params.color.is_HDR)
+        {
+            if (m_display_primaries)
             {
-                *primaries = *m_display_primaries;
+                av_frame_remove_side_data(hw.get(),
+                                     AV_FRAME_DATA_MASTERING_DISPLAY_METADATA);
+                AVMasteringDisplayMetadata* primaries =
+                    av_mastering_display_metadata_create_side_data(hw.get());
+                if (primaries)
+                    *primaries = *m_display_primaries;
+            }
+            if (m_content_light)
+            {
+                av_frame_remove_side_data(hw.get(),
+                                          AV_FRAME_DATA_CONTENT_LIGHT_LEVEL);
+                AVContentLightMetadata* light =
+                    av_content_light_metadata_create_side_data(hw.get());
+                if (light)
+                    *light = *m_content_light;
             }
         }
 
-        if (m_content_light)
         {
-            av_frame_remove_side_data(hw.get(),
-                                      AV_FRAME_DATA_CONTENT_LIGHT_LEVEL);
-
-            AVContentLightMetadata* light =
-                av_content_light_metadata_create_side_data(hw.get());
-            if (light)
-            {
-                *light = *m_content_light;
-            }
+            std::scoped_lock lock(worker.mtx);
+            worker.frames.push_back(std::move(hw));
         }
+        worker.frame_avail.notify_one();
     }
+}
 
-    // Push hw_frame into the queue for the encoder thread
+void VideoStream::AddImage(Image&& image)
+{
+    if (m_workers.empty()) return;
+
+    CopyThread& worker = m_workers[m_next_capture_worker];
+    m_next_capture_worker = (m_next_capture_worker + 1) % m_workers.size();
+
     {
-        std::scoped_lock<std::mutex> lock(m_active_frame_mutex);
-        m_active_frames.push_back(std::move(hw));
+        std::scoped_lock lock(worker.mtx);
+        worker.images.push_back(std::move(image));
     }
-    m_active_avail.notify_one();
-    {
-        std::scoped_lock lock(m_preped_frame_mutex);
-        return m_args.buffers - m_preped_frames.size();
-    }
+    worker.image_avail.notify_one();
 }

@@ -202,7 +202,7 @@ OutputTS::OutputTS(int verbose_level, bool isEco,
     pthread_setname_np(m_audio_thread.native_handle(), "audenc");
 
     m_video_thread = std::thread(&OutputTS::process_video, this);
-    pthread_setname_np(m_video_thread.native_handle(), "vidcpy");
+    pthread_setname_np(m_video_thread.native_handle(), "vidmgr");
 
     m_mux_thread = std::thread(&OutputTS::mux, this);
     pthread_setname_np(m_mux_thread.native_handle(), "mux");
@@ -906,131 +906,44 @@ void OutputTS::AddAudioSamples(AudioStream::Samples&& samples)
 // Thread entry
 void OutputTS::process_video(void)
 {
-    int vidpool_used_1m;
-    std::array<int, 5>  vidpool_used_5m  {};
-    std::array<int, 10> vidpool_used_10m {};
-    int                 vidpool_5m_idx   {0};
-    int                 vidpool_10m_idx  {0};
-
-    int vidpool_5m_max  {0};
-    int vidpool_10m_max {0};
-
-    std::chrono::seconds total_duration;
-    std::chrono::steady_clock::time_point start_tm   = std::chrono::steady_clock::now();
-    std::chrono::steady_clock::time_point vidpool_tm = start_tm;
-    std::chrono::steady_clock::time_point current_tm;
-    int duration;
-
-    for (;;)
+    while (m_running.load())
     {
         VideoStream::Image image;
 
-#ifdef LOG_ELAPSED
-        chrono::steady_clock::time_point start
-            = chrono::steady_clock::now();
-#endif
         {
-            // Wait for next image
             std::unique_lock<std::mutex> lock(m_imageQ_mutex);
 
             m_imageQ_ready.wait(lock, [this]() {
                 return !m_running.load() || !m_imageQ.empty();
             });
 
+            if (!m_running.load() && m_imageQ.empty())
+                break;
+
+            // Protect against spurious wakeup
             if (m_imageQ.empty())
-            {
-                if (!m_running.load())
-                    break;
                 continue;
-            }
 
             image = std::move(m_imageQ.front());
             m_imageQ.pop_front();
-        }
-#ifdef LOG_ELAPSED
-        chrono::steady_clock::time_point end
-            = chrono::steady_clock::now();
+        } // lock scope
 
-        auto dur = chrono::duration_cast<chrono::microseconds>
-                   (end - start);
-
-        if (dur > m_frame_ms)
-            m_log->debug("Wait for image {}μs(>{}ms) queue size {}",
-                         dur.count(), m_frame_ms.count(),
-                         m_imageQ.size());
-#endif
-        // Encoder reconfiguration request
         if (image.oParams.has_value())
         {
+            m_log->debug("Video pipeline reconfiguring ...");
             std::scoped_lock lock(m_videoStream_mutex);
-            m_videoStream = std::make_shared<VideoStream>
-                            (*this, m_verbose,
-                             m_video_args,
-                             std::move(*image.oParams),
-                             f_image_avail,
-                             image.timestamp);
+            m_videoStream = std::make_shared<VideoStream>(
+                *this, m_verbose, m_video_args,
+                std::move(*image.oParams), f_image_avail, image.timestamp
+            );
         }
 
-#ifdef LOG_ELAPSED
-        auto encode_start = chrono::steady_clock::now();
-#endif
-
-        int used = m_videoStream->AddImage(std::move(image));
-
-#ifdef LOG_ELAPSED
-        auto encode_end = chrono::steady_clock::now();
-        auto encode_dur = chrono::duration_cast<chrono::microseconds>
-                          (encode_end - encode_start);
-        if (m_imageQ.size() > 10)
+        if (m_videoStream)
         {
-            m_log->debug("Total AddImage {}us image q size {}",
-                         encode_dur.count(), m_imageQ.size());
-        }
-#endif
-        m_pktQ_ready.notify_one();
-
-        {
-            // Capture snapshots based on total high-water marks
-            if (vidpool_used_1m < used)
-                vidpool_used_1m = used;
-            if (vidpool_used_5m[vidpool_5m_idx] < used)
-                vidpool_used_5m[vidpool_5m_idx] = used;
-            if (vidpool_used_10m[vidpool_10m_idx] < used)
-                vidpool_used_10m[vidpool_10m_idx] = used;
-
-            current_tm = std::chrono::steady_clock::now();
-            duration = std::chrono::duration_cast<std::chrono::seconds>(current_tm - vidpool_tm).count();
-            total_duration = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start_tm);
-
-            if (duration >= 60)
-            {
-                vidpool_5m_max = std::ranges::max(vidpool_used_5m);
-                vidpool_10m_max = std::ranges::max(vidpool_used_10m);
-
-                m_log->debug(format
-                             ("GPU pool used 1m:{:<3} 5m:{:<3} 10m:{:<3} "
-                              "of {:<3d} ({:%T} elapsed)",
-                              vidpool_used_1m,
-                              vidpool_5m_max,
-                              vidpool_10m_max,
-                              m_video_args.buffers,
-                              total_duration));
-
-                // Reset windows to clean baseline structures
-                vidpool_used_1m = 0;
-
-                ++vidpool_5m_idx;
-                vidpool_5m_idx %= 5;
-                vidpool_used_5m[vidpool_5m_idx] = 0;
-
-                ++vidpool_10m_idx;
-                vidpool_10m_idx %= 10;
-                vidpool_used_10m[vidpool_10m_idx] = 0;
-
-                vidpool_tm = current_tm;
-            }
+            m_videoStream->AddImage(std::move(image));
         }
     }
+
     std::scoped_lock lock(m_videoStream_mutex);
     m_videoStream.reset();
     m_log->info("process_video thread exited.");
