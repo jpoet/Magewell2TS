@@ -377,7 +377,7 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
     }
 
     // B-frames
-    av_dict_set_int(&opt, "bf", 2, 0);
+    av_dict_set_int(&opt, "bf", 0, 0);
     // Adaptive B-frame decisions
     av_dict_set_int(&opt, "b_adapt", 1, 0);
     // Use B frames as references
@@ -564,9 +564,7 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
 
     m_encoder->global_quality = m_args.quality;
 
-    av_dict_set_int(&opt, "bf", 2, 0);
-    av_dict_set_int(&opt, "b_strategy", 1, 0);
-
+    av_dict_set_int(&opt, "bf", 0, 0);
     av_opt_set_int(m_encoder->priv_data, "async_depth", 4, 0);
 
     if (m_args.gopSecs > 0)
