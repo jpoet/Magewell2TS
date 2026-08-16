@@ -376,9 +376,16 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
         }
     }
 
-    // This is critical! Otherwise there will be muxing issues.
-    m_encoder->max_b_frames = 0;
-    av_dict_set_int(&opt, "bf", 0, 0);
+    // B-frames
+    av_dict_set_int(&opt, "bf", 2, 0);
+    // Adaptive B-frame decisions
+    av_dict_set_int(&opt, "b_adapt", 1, 0);
+    // Use B frames as references
+    av_dict_set(&opt, "b_ref_mode", "middle", 0);
+    // Spatial adaptive quantization
+    av_dict_set_int(&opt, "spatial_aq", 1, 0);
+    // Temporal AQ
+    av_dict_set_int(&opt, "temporal_aq", 1, 0);
 
 #if 0
     if (m_args.lookahead > 0)
@@ -557,10 +564,8 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
 
     m_encoder->global_quality = m_args.quality;
 
-    // Live capture: don't allow encoder frame reordering.
-    m_encoder->has_b_frames = 0;
-    m_encoder->max_b_frames = 0;
-    av_dict_set_int(&opt, "bf", 0, 0);
+    av_dict_set_int(&opt, "bf", 2, 0);
+    av_dict_set_int(&opt, "b_strategy", 1, 0);
 
     av_opt_set_int(m_encoder->priv_data, "async_depth", 4, 0);
 
@@ -743,16 +748,19 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     av_opt_set(m_encoder->priv_data, "skip_frame",
                "insert_dummy", 0);
 
-    // Live capture: don't allow encoder frame reordering.
-    m_encoder->has_b_frames = 0;
-    m_encoder->max_b_frames = 0;
-    av_dict_set_int(&opt, "bf", 0, 0);
+    /* b-frames */
+    m_encoder->max_b_frames = 2;
+    av_dict_set_int(&opt, "bf", 2, 0);
+
+    av_dict_set_int(&opt, "b_strategy", 1, 0);
+    av_dict_set_int(&opt, "extbrc", 1, 0);
 
     av_opt_set_int(m_encoder->priv_data, "async_depth", 4, 0);
 
     av_opt_set_int(m_encoder->priv_data, "extra_hw_frames",
                    m_args.extraHWframes + m_args.lookahead + 4, 0);
 
+    /* GOP */
     if (m_args.gopSecs > 0)
     {
         if (av_opt_set_int(m_encoder->priv_data,
