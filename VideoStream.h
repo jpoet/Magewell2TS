@@ -71,7 +71,7 @@ class VideoStream
         std::string preset { };
         int quality       { 25 };
         int lookahead     { 35 };
-        int buffers       { 8 };
+        int buffers       { 4 };
         int extraHWframes { 32 };
         float gopSecs     { 1.5 };
         int idrInterval   {  0  };

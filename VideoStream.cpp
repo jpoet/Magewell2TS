@@ -623,7 +623,7 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
     AVHWFramesContext* frames_ctx =
         reinterpret_cast<AVHWFramesContext*>(m_hw_frames_ctx->data);
 
-    frames_ctx->initial_pool_size = m_args.extraHWframes + 16;
+    frames_ctx->initial_pool_size = m_args.extraHWframes + m_args.buffers;
     frames_ctx->width = m_encoder->width;
     frames_ctx->height = m_encoder->height;
     frames_ctx->format = AV_PIX_FMT_VAAPI;
@@ -823,7 +823,7 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     frames_ctx->format = AV_PIX_FMT_QSV;
     frames_ctx->sw_format = m_sw_pix_fmt;
     frames_ctx->initial_pool_size = m_args.extraHWframes
-                                    + m_args.lookahead + 16;
+                                    + m_args.lookahead + m_args.buffers + 4;
 
 #if defined(HAS_MAGEWELL_QSV_SUPPORT) && (LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(58, 0, 0))
     // This code only compiles if the hardware/library dependencies exist system-wide
@@ -845,9 +845,8 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     }
 
     if (m_encoder->hw_frames_ctx)
-    {
         av_buffer_unref(&m_encoder->hw_frames_ctx);
-    }
+
     m_encoder->hw_frames_ctx = av_buffer_ref(m_hw_frames_ctx.get());
 
     // Intel kernel initialization codec activation
@@ -904,7 +903,7 @@ bool VideoStream::encode_frames(void)
             m_log->debug("Encode took {}μs", encode_dur.count());
         }
 #endif
-
+        av_frame_unref(hw.get());
         {
             std::unique_lock<std::mutex> lock(m_empty_shell_mutex);
             m_empty_shells.push_back(std::move(hw));
@@ -952,8 +951,6 @@ void VideoStream::prepare_frames(void)
 
         for (;;)
         {
-            av_frame_unref(hw.get());
-
             int ret = av_hwframe_get_buffer(m_hw_frames_ctx.get(),
                                             hw.get(),
                                             0);
@@ -1142,11 +1139,14 @@ int VideoStream::AddImage(Image&& image)
     hw->pts = av_rescale_q(image.timestamp, TimeBase::Magewell,
                                     m_encoder->time_base);
 
-    // Inject HDR metadata properties safely if present
+    // Inject HDR metadata properties if present
     if (m_params.color.is_HDR)
     {
         if (m_display_primaries)
         {
+            av_frame_remove_side_data(hw.get(),
+                                      AV_FRAME_DATA_MASTERING_DISPLAY_METADATA);
+
             AVMasteringDisplayMetadata* primaries =
                 av_mastering_display_metadata_create_side_data(hw.get());
             if (primaries)
@@ -1157,6 +1157,9 @@ int VideoStream::AddImage(Image&& image)
 
         if (m_content_light)
         {
+            av_frame_remove_side_data(hw.get(),
+                                      AV_FRAME_DATA_CONTENT_LIGHT_LEVEL);
+
             AVContentLightMetadata* light =
                 av_content_light_metadata_create_side_data(hw.get());
             if (light)
