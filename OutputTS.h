@@ -45,8 +45,7 @@ class OutputTS
 
     void Shutdown(void);
 
-    void log_packet(std::string where, const AVFormatContext* fmt_ctx,
-                    const AVPacket* pkt, int version);
+    void log_packet(std::string where, const AVPacket* pkt, int version);
 
     void setHaveAudio(void) { m_no_audio = false; }
 

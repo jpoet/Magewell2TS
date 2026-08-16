@@ -256,20 +256,25 @@ void OutputTS::Shutdown(void)
     m_pktQ_ready.notify_all();
 }
 
-void OutputTS::log_packet(string where, const AVFormatContext* fmt_ctx,
-                          const AVPacket* pkt, int version)
+void OutputTS::log_packet(string where,  const AVPacket* pkt, int version)
 {
-    AVRational* time_base = &fmt_ctx->streams[pkt->stream_index]->time_base;
+    if (m_formatContext == nullptr)
+    {
+        m_log->warn("{} log_packet invalid context", where);
+        return;
+    }
+
+    AVRational time_base = m_formatContext->streams[pkt->stream_index]->time_base;
 
     m_log->info("{} [id:{}, version:{}] pts: {} pts_time: {} "
                 "dts: {} dts_time: {} duration: {} "
                 "duration_time: {}",
                 where, pkt->stream_index, version, pkt->pts,
-                AV_ts2timestr(pkt->pts, time_base),
+                AV_ts2timestr(pkt->pts, &time_base),
                 AV_ts2str(pkt->dts),
-                AV_ts2timestr(pkt->dts, time_base),
+                AV_ts2timestr(pkt->dts, &time_base),
                 AV_ts2str(pkt->duration),
-                AV_ts2timestr(pkt->duration, time_base));
+                AV_ts2timestr(pkt->duration, &time_base));
 }
 
 
@@ -460,15 +465,8 @@ bool OutputTS::queue_packets(int stream_id, int version,
 #if 0
         if (stream_id == VIDEO_STREAM_ID)
         {
-            log_packet("queue_packets (after receive, before scale)", m_formatContext, pkt.get(), 0);
-            m_log->info(
-                        "ENCODER packet TB={}/{} pts={} ({:.6f}s) dts={} ({:.6f}s)",
-                        enc->time_base.num,
-                        enc->time_base.den,
-                        pkt->pts,
-                        pkt->pts * av_q2d(enc->time_base),
-                        pkt->dts,
-                        pkt->dts * av_q2d(enc->time_base));
+            log_packet("queue_packets (after receive, before scale)",
+                       pkt.get(), 0);
         }
 #endif
 
@@ -487,15 +485,8 @@ bool OutputTS::queue_packets(int stream_id, int version,
 #if 0
         if (stream_id == VIDEO_STREAM_ID)
         {
-            log_packet("queue_packets (after receive, after scale)", m_formatContext, pkt.get(), 0);
-            m_log->info(
-                        "STREAM packet TB={}/{} pts={} ({:.6f}s) dts={} ({:.6f}s)",
-                        TimeBase::MPEG_TS.num,
-                        TimeBase::MPEG_TS.den,
-                        pkt->pts,
-                        pkt->pts * av_q2d(TimeBase::MPEG_TS),
-                        pkt->dts,
-                        pkt->dts * av_q2d(TimeBase::MPEG_TS));
+            log_packet("queue_packets (after receive, after scale)",
+                       pkt.get(), 0);
         }
 #endif
 
@@ -539,24 +530,6 @@ bool OutputTS::EncodeFrame(int stream_id, int version,
 #ifdef LOG_ELAPSED
         chrono::steady_clock::time_point encode_start
             = chrono::steady_clock::now();
-#endif
-
-#if 0
-        if (stream_id == VIDEO_STREAM_ID)
-        {
-            m_log->info(
-                         "ENCODE SEND stream={} frame_pts={} duration={}",
-                         stream_id,
-                         frame->pts,
-                         frame->duration);
-            m_log->info(
-                        "ENCODER time_base={}/{} framerate={}/{} frame_pts={}",
-                        enc->time_base.num,
-                        enc->time_base.den,
-                        enc->framerate.num,
-                        enc->framerate.den,
-                        frame->pts);
-        }
 #endif
 
         // Try to submit the frame
