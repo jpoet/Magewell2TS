@@ -1998,6 +1998,7 @@ void Magewell::log_stats(size_t used)
     static array<size_t, 10>::iterator vidpool_10m_max {};
 
     static chrono::steady_clock::time_point vidpool_tm = chrono::steady_clock::now();
+    static bool tok {false};
 
     chrono::steady_clock::time_point current_tm;
     int duration;
@@ -2018,20 +2019,33 @@ void Magewell::log_stats(size_t used)
         vidpool_5m_max  = ranges::max_element(vidpool_used_5m);
         vidpool_10m_max = ranges::max_element(vidpool_used_10m);
 
-        uint temperature;
-        MWGetTemperature(m_channel, &temperature);
-        string extra = format("Temp {:.1f}ºC",
-                              static_cast<float>(temperature) / 10);
+        string extra;
+        if (tok)
+        {
+            chrono::seconds total_duration =
+                chrono::duration_cast<chrono::seconds>
+                (chrono::steady_clock::now() - m_start_tm);
+            extra = format("{:%T} elapsed", total_duration);
+            tok = false;
+        }
+        else
+        {
+            uint temperature;
+            MWGetTemperature(m_channel, &temperature);
+            extra = format("Temp {:.1f}ºC",
+                           static_cast<float>(temperature) / 10);
+            tok = true;
+        }
 
 #ifdef USEVIDSTATS
-        m_log->debug("Mag pool used 1m:{:<5d} "
+        m_log->debug("Vid buffers used 1m:{:<5d} "
                      "5m:{:<5d} 10m:{:<5d} of {:<3d} "
                      "({})",
                      vidpool_used_1m, *vidpool_5m_max,
                      *vidpool_10m_max, m_image_buffers_total,
                      extra);
 #else
-        m_log->debug("Mag pool used 1m:{:<3d} "
+        m_log->debug("Vid buffers used 1m:{:<3d} "
                      "5m:{:<3d} 10m:{:<3d} of {:<3d} "
                      "({})",
                      vidpool_used_1m, *vidpool_5m_max,
