@@ -130,13 +130,13 @@ void VideoStream::start_encoder(void)
     {
         CopyThread& worker = m_workers[idx];
         worker.running.store(true);
+        worker.name = format("vdcpy{}", idx);
 
         worker.cpy_thread = std::thread(&VideoStream::worker_thread_loop,
                                         this, std::ref(worker));
 
-        std::string thread_name = format("vdcpy{}", idx);
         pthread_setname_np(worker.cpy_thread.native_handle(),
-                           thread_name.c_str());
+                           worker.name.c_str());
     }
 
     m_next_capture_worker = 0;
@@ -970,6 +970,10 @@ void VideoStream::encode_frames_loop(void)
 
 void VideoStream::worker_thread_loop(CopyThread& worker)
 {
+    m_log->info("Starting {} worker thread.", worker.name);
+
+    auto* hw_ctx = reinterpret_cast<AVHWFramesContext*>(m_hw_frames_ctx->data);
+
     while (worker.running.load() && m_running.load())
     {
         Image image;
@@ -990,40 +994,48 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
         int ret = av_hwframe_get_buffer(m_hw_frames_ctx.get(), hw.get(), 0);
         if (ret < 0)
         {
-            m_log->warn("DAMAGED: Worker failed to grab hardware "
-                        "pool surface: {}", AVerr2str(ret));
+            m_log->warn("DAMAGED: {} worker failed to grab hardware "
+                        "pool surface: {}", worker.name, AVerr2str(ret));
             f_image_avail(image.pImage, image.pEco);
             this_thread::sleep_for(chrono::milliseconds(2));
             continue;
         }
 
-        AVFrame cpu_frame {};
-        cpu_frame.format = m_sw_pix_fmt;
-        cpu_frame.width  = m_params.width;
-        cpu_frame.height = m_params.height;
+        FramePtr cpu_frame = make_frame();
+        if (!cpu_frame)
+        {
+            m_log->warn("Failed to allocate local CPU frame wrapper.");
+            f_image_avail(image.pImage, image.pEco);
+            continue;
+        }
+        cpu_frame->format = m_sw_pix_fmt;
+        cpu_frame->width  = hw_ctx->width;
+        cpu_frame->height = hw_ctx->height;
 
-        int size_bytes = av_image_fill_arrays(cpu_frame.data,
-                                              cpu_frame.linesize,
+        int size_bytes = av_image_fill_arrays(cpu_frame->data,
+                                              cpu_frame->linesize,
                                               image.pImage, m_sw_pix_fmt,
                                               m_params.width,
                                               m_params.height, 1);
 
         if (size_bytes < 0)
         {
-            m_log->error("av_image_fill_arrays failed: {}",
-                         AVerr2str(size_bytes));
+            m_log->error("{} av_image_fill_arrays failed: {}",
+                         worker.name, AVerr2str(size_bytes));
             f_image_avail(image.pImage, image.pEco);
             Shutdown();
             break;
         }
 
-        ret = av_hwframe_transfer_data(hw.get(), &cpu_frame, 0);
+        cpu_frame->extended_data = cpu_frame->data;
+
+        ret = av_hwframe_transfer_data(hw.get(), cpu_frame.get(), 0);
         f_image_avail(image.pImage, image.pEco);
 
         if (ret < 0)
         {
-            m_log->warn("DAMAGED: av_hwframe_transfer_data failed "
-                        "inside worker: {}", AVerr2str(ret));
+            m_log->warn("DAMAGED: {} av_hwframe_transfer_data failed: {}",
+                        worker.name, AVerr2str(ret));
             this_thread::sleep_for(chrono::milliseconds(2));
             continue;
         }

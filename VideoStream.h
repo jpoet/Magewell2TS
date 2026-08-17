@@ -109,6 +109,7 @@ class VideoStream
     struct CopyThread
     {
         std::thread cpy_thread;
+        std::string name;
 
         // Protects both images and frames queues
         std::mutex mtx;
