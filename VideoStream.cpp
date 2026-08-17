@@ -47,7 +47,7 @@ VideoStream::VideoStream(OutputTS& parent, int verbose_level, Args& args,
     if (!open_video())
     {
         m_encoderType = EncoderType::UNKNOWN;
-        m_log->critical("Failed to open video encoder.");
+        m_log->error("Failed to open video encoder.");
         Shutdown();
     }
 
@@ -76,8 +76,6 @@ void VideoStream::close_video(void)
 {
     m_parent.FlushPackets(OutputTS::VIDEO_STREAM_ID, m_version,
                           m_encoder.get());
-
-    Shutdown();
 
     if (m_verbose > 1)
     {
@@ -150,7 +148,7 @@ void VideoStream::start_encoder(void)
 
 void VideoStream::stop_encoder(void)
 {
-    m_log->info("Shutting down encoder pipeline...");
+    m_log->debug("Shutting down encoder pipeline...");
     m_running.store(false);
 
     for (size_t idx = 0; idx < m_workers.size(); ++idx)
@@ -163,13 +161,13 @@ void VideoStream::stop_encoder(void)
 
     if (m_encode_thread.joinable())
     {
-        m_log->info("Stopping encoder thread...");
+        m_log->debug("Stopping encoder thread...");
         m_encode_thread.join();
     }
 
     for (size_t idx = 0; idx < m_workers.size(); ++idx)
     {
-        m_log->info("Stopping vidcpy worker {}", idx);
+        m_log->debug("Stopping vidcpy worker {}", idx);
 
         CopyThread& worker = m_workers[idx];
         if (worker.cpy_thread.joinable())
@@ -188,7 +186,8 @@ void VideoStream::stop_encoder(void)
     }
 
     m_workers.clear();
-    m_log->info("Encoder pipeline stopped and worker resources cleared.");
+    if (m_verbose > 1)
+        m_log->info("Encoder pipeline stopped and worker resources cleared.");
 }
 
 /*
@@ -229,10 +228,7 @@ bool VideoStream::open_video(void)
     }
 
     if (m_verbose > 1)
-    {
-        m_log->info("Opening {} encoder {}",
-                    m_args.codecName, m_params);
-    }
+        m_log->info("Opening {} encoder {}", m_args.codecName, m_params);
 
     // Codec allocation & context setup
     const AVCodec* video_codec =
@@ -290,8 +286,7 @@ bool VideoStream::open_video(void)
                              static_cast<double>(m_args.gopSecs) + 0.5);
         m_encoder->keyint_min = 1;
         if (m_verbose > 2)
-            m_log->info("GOP size {} frames.",
-                        m_encoder->gop_size);
+            m_log->info("GOP size {} frames.", m_encoder->gop_size);
     }
 
     // Assign color spaces using baseline tracking variables
@@ -304,19 +299,13 @@ bool VideoStream::open_video(void)
     if (m_encoder->codec->capabilities & AV_CODEC_CAP_SLICE_THREADS)
     {
         m_encoder->thread_type = FF_THREAD_SLICE;
-        if (m_verbose > 1)
-        {
-            m_log->info(" Video Encoder Strategy = THREAD SLICE");
-        }
+        m_log->debug("Video Encoder Strategy = THREAD SLICE");
     }
     else if (m_encoder->codec->capabilities &
              AV_CODEC_CAP_FRAME_THREADS)
     {
         m_encoder->thread_type = FF_THREAD_FRAME;
-        if (m_verbose > 1)
-        {
-            m_log->info(" Video Encoder Strategy = THREAD FRAME");
-        }
+        m_log->debug("Video Encoder Strategy = THREAD FRAME");
     }
 
     // Setup GPU
@@ -343,9 +332,7 @@ bool VideoStream::open_video(void)
     CodecContextPtr vid_encoder = make_codec_context();
 
     if (local_opt != nullptr)
-    {
         av_dict_free(&local_opt);
-    }
 
     return success;
 }
@@ -356,9 +343,7 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
     AVDictionary* opt = nullptr;
 
     if (opt_arg && *opt_arg)
-    {
         av_dict_copy(&opt, *opt_arg, 0);
-    }
 
     // Configure NVENC private encoder options
     av_dict_set(&opt, "rc", "constqp", 0);
@@ -520,12 +505,15 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
         return false;
     }
 
-    m_log->info("Nvidia CUDA frames: {}x{}, software format={}, "
-                "hardware format=CUDA, pool={}",
-                frames_ctx->width,
-                frames_ctx->height,
-                av_get_pix_fmt_name(frames_ctx->sw_format),
-                frames_ctx->initial_pool_size);
+    if (m_verbose > 1)
+    {
+        m_log->info("Nvidia CUDA frames: {}x{}, software format={}, "
+                    "hardware format=CUDA, pool={}",
+                    frames_ctx->width,
+                    frames_ctx->height,
+                    av_get_pix_fmt_name(frames_ctx->sw_format),
+                    frames_ctx->initial_pool_size);
+    }
 
     // Open the encoder
     ret = avcodec_open2(m_encoder.get(), codec, &opt);
@@ -537,19 +525,22 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
 
     if (ret < 0)
     {
-        m_log->critical("Fatal Error: Nvidia NVENC codec activation "
-                        "rejected: {}",
-                        AVerr2str(ret));
+        m_log->error("Fatal Error: Nvidia NVENC codec activation "
+                     "rejected: {}",
+                     AVerr2str(ret));
 
         return false;
     }
 
     // Report the final encoder configuration
-    m_log->info("Nvidia NVENC pipeline fully active at resolution {}x{} "
-                "with CUDA frames, sw_format={}",
-                m_encoder->width,
-                m_encoder->height,
-                av_get_pix_fmt_name(m_sw_pix_fmt));
+    if (m_verbose > 1)
+    {
+        m_log->info("Nvidia NVENC pipeline active at resolution {}x{} "
+                    "with CUDA frames, sw_format={}",
+                    m_encoder->width,
+                    m_encoder->height,
+                    av_get_pix_fmt_name(m_sw_pix_fmt));
+    }
 
     return true;
 }
@@ -670,8 +661,8 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
 
     if (ret < 0)
     {
-        m_log->critical("Fatal Error: VAAPI codec activation failed: {}",
-                        AVerr2str(ret));
+        m_log->error("Fatal Error: VAAPI codec activation failed: {}",
+                     AVerr2str(ret));
 
         if (opt)
             av_dict_free(&opt);
@@ -720,7 +711,7 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
         av_opt_set(m_encoder->priv_data, "preset",
                    m_args.preset.c_str(), 0);
 
-        if (m_verbose > 0)
+        if (m_verbose > 1)
         {
             m_log->info("QSV Engine: Applied preset '{}' for {}",
                         m_args.preset, m_args.codecName);
@@ -872,8 +863,8 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     ret = avcodec_open2(m_encoder.get(), codec, nullptr);
     if (ret < 0)
     {
-        m_log->critical("Fatal Error: Intel QSV codec activation failed: ",
-                        AVerr2str(ret));
+        m_log->error("Fatal Error: Intel QSV codec activation failed: ",
+                     AVerr2str(ret));
         Shutdown();
         return false;
     }
@@ -1008,7 +999,7 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
             double average_backlog = static_cast<double>(backlog_sum)
                                      / sample_count;
 
-            if (average_backlog > 2.0)
+            if (average_backlog > 2.5)
             {
                 m_log->info("{} worker average backlog {:.2f} over "
                             "the past 60s. Consider increasing '--threads'",
@@ -1107,6 +1098,9 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
         }
         worker.frame_avail.notify_one();
     }
+
+    if (m_verbose > 1)
+        m_log->info("Stopped {} worker thread.", worker.name);
 }
 
 void VideoStream::AddImage(Image&& image)

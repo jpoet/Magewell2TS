@@ -932,6 +932,7 @@ void OutputTS::process_video(void)
         {
             m_log->debug("Video pipeline reconfiguring ...");
             std::scoped_lock lock(m_videoStream_mutex);
+            m_videoStream.reset();
             m_videoStream = std::make_shared<VideoStream>(
                 *this, m_verbose, m_video_args,
                 std::move(*image.oParams), f_image_avail, image.timestamp
