@@ -464,7 +464,7 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
 
     // Maintain a pool of reusable CUDA surfaces.  The extra surfaces give
     // NVENC room for asynchronous operation and lookahead.
-    frames_ctx->initial_pool_size = m_args.lookahead + 16;
+    frames_ctx->initial_pool_size = m_args.lookahead + m_args.num_threads + 16;
 
     ret = av_hwframe_ctx_init(raw_frames_ctx);
 
@@ -569,11 +569,10 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
 
     if (m_args.gopSecs > 0)
     {
-        AVRational encoder_fps = AVRational
-                                 {
-                                     m_params.frame_duration.den,
-                                     m_params.frame_duration.num
-                                 };
+        AVRational encoder_fps = AVRational {
+            m_params.frame_duration.den,
+            m_params.frame_duration.num
+        };
 
         // Reduces the fraction while preserving accuracy within a safe limit
         av_reduce(&encoder_fps.num, &encoder_fps.den,
@@ -639,7 +638,7 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
     AVHWFramesContext* frames_ctx =
         reinterpret_cast<AVHWFramesContext*>(m_hw_frames_ctx->data);
 
-    frames_ctx->initial_pool_size = m_args.extraHWframes;
+    frames_ctx->initial_pool_size = m_args.num_threads + m_args.extraHWframes;
     frames_ctx->width = m_encoder->width;
     frames_ctx->height = m_encoder->height;
     frames_ctx->format = AV_PIX_FMT_VAAPI;
@@ -841,7 +840,8 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     frames_ctx->height = INTEL_ALIGN(m_encoder->height);
     frames_ctx->format = AV_PIX_FMT_QSV;
     frames_ctx->sw_format = m_sw_pix_fmt;
-    frames_ctx->initial_pool_size = m_args.extraHWframes
+    frames_ctx->initial_pool_size = m_args.num_threads
+                                    + m_args.extraHWframes
                                     + m_args.lookahead + 4;
 
 #if defined(HAS_MAGEWELL_QSV_SUPPORT) && (LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(58, 0, 0))
@@ -988,14 +988,16 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
 
         FramePtr hw = make_frame();
         int ret = av_hwframe_get_buffer(m_hw_frames_ctx.get(), hw.get(), 0);
-        if (ret < 0) {
-            m_log->error("Worker failed to grab hardware pool surface: {}",
-                         AVerr2str(ret));
+        if (ret < 0)
+        {
+            m_log->warn("DAMAGED: Worker failed to grab hardware "
+                        "pool surface: {}", AVerr2str(ret));
             f_image_avail(image.pImage, image.pEco);
+            this_thread::sleep_for(chrono::milliseconds(2));
             continue;
         }
 
-        AVFrame cpu_frame{};
+        AVFrame cpu_frame {};
         cpu_frame.format = m_sw_pix_fmt;
         cpu_frame.width  = m_params.width;
         cpu_frame.height = m_params.height;
@@ -1018,9 +1020,11 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
         ret = av_hwframe_transfer_data(hw.get(), &cpu_frame, 0);
         f_image_avail(image.pImage, image.pEco);
 
-        if (ret < 0) {
-            m_log->error("av_hwframe_transfer_data failed inside worker: {}",
-                         AVerr2str(ret));
+        if (ret < 0)
+        {
+            m_log->warn("DAMAGED: av_hwframe_transfer_data failed "
+                        "inside worker: {}", AVerr2str(ret));
+            this_thread::sleep_for(chrono::milliseconds(2));
             continue;
         }
 
