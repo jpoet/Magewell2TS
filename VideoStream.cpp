@@ -971,12 +971,18 @@ void VideoStream::encode_frames_loop(void)
 void VideoStream::worker_thread_loop(CopyThread& worker)
 {
     m_log->info("Started {} worker thread.", worker.name);
-
     auto* hw_ctx = reinterpret_cast<AVHWFramesContext*>(m_hw_frames_ctx->data);
+
+    // Track time and accumulation variables
+    auto last_report_time = std::chrono::steady_clock::now();
+    uint64_t backlog_sum = 0;
+    uint64_t sample_count = 0;
 
     while (worker.running.load() && m_running.load())
     {
         Image image;
+        size_t current_backlog = 0;
+
         {
             std::unique_lock lock(worker.mtx);
             worker.image_avail.wait(lock, [&worker, this] {
@@ -988,6 +994,31 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
 
             image = std::move(worker.images.front());
             worker.images.pop_front();
+
+            current_backlog = worker.images.size();
+        }
+
+        backlog_sum += current_backlog;
+        ++sample_count;
+
+        // Check if 60 seconds have passed
+        auto now = std::chrono::steady_clock::now();
+        if (now - last_report_time >= std::chrono::seconds(60))
+        {
+            double average_backlog = static_cast<double>(backlog_sum)
+                                     / sample_count;
+
+            if (average_backlog > 2.0)
+            {
+                m_log->info("{} worker average backlog {:.2f} over "
+                            "the past 60s. Consider increasing '--threads'",
+                            worker.name, average_backlog);
+            }
+
+            // Reset trackers
+            backlog_sum = 0;
+            sample_count = 0;
+            last_report_time = now;
         }
 
         FramePtr hw = make_frame();
