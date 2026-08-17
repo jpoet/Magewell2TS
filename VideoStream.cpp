@@ -116,8 +116,8 @@ void VideoStream::start_encoder(void)
     }
 
     int num_threads = (m_args.num_threads > 0) ? m_args.num_threads : 1;
-    m_log->info("Initializing encoder with {} copy worker threads.",
-                num_threads);
+    m_log->debug("Initializing encoder with {} copy worker threads.",
+                 num_threads);
 
     m_running.store(true);
 
@@ -747,7 +747,7 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
 
     /* b-frames */
     m_encoder->max_b_frames = 2;
-    av_dict_set_int(&opt, "bf", 2, 0);
+    av_dict_set_int(&opt, "bf", 0, 0);
 
     av_dict_set_int(&opt, "b_strategy", 1, 0);
     av_dict_set_int(&opt, "extbrc", 1, 0);
@@ -970,7 +970,7 @@ void VideoStream::encode_frames_loop(void)
 
 void VideoStream::worker_thread_loop(CopyThread& worker)
 {
-    m_log->info("Starting {} worker thread.", worker.name);
+    m_log->info("Started {} worker thread.", worker.name);
 
     auto* hw_ctx = reinterpret_cast<AVHWFramesContext*>(m_hw_frames_ctx->data);
 
