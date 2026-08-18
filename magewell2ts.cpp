@@ -92,7 +92,7 @@ void show_help(string_view app)
          << "--read-edid (-r)   : Read EDID info for input to file\n"
          << "--logfile          : Also log messages to the given file\n"
          << "--color (-o)       : Use color when logging to the console\n"
-         << "---show-threads (-s) : Show thread name\n"
+         << "--show-threads (-s) : Show thread name in logging\n"
          << "--verbose (-v)     : message verbose level. 0=completely quiet [1]\n"
          << "--video-codec (-c) : Video codec name (e.g. hevc_qsv, h264_nvenc) [hevc_qsv]\n"
          << "--lookahead (-a)   : How many frames to 'look ahead' [35]\n"
