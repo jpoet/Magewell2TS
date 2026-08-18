@@ -320,17 +320,25 @@ If you want to update the firmware on the Arc itself, this guide may help: <http
 
 Normally, no system optimizations are required for smooth usage of this program. If you are trying to run it on a lower end system, though, you may want to try some of the following tricks:
 
-## Adjust buffers
+## Adjust buffers and threads
 
-There are two command line options which control how many video frame buffers are allocated: `--video-buffers` and `--gpu-buffers`.
+The `--video-buffers` option determines how many images can be queued in system RAM while waiting for the GPU to accept them.
 
-The "video" buffers are used to smooth out the transfer of data from the magewell card into the encoder threads. The "gpu" buffers are used to smooth out the transfer of data to the GPU. It is generally more important to have enough "video" buffers. The "gpu" buffers become important depending how how fast your RAM and video card are.
+the `--copy-threads` option designates how many threads are create to handle copying data from the RAM buffers to the GPU. This is an "expensive" operation. On a higher-end system with fast CPU and RAM, a single thread is usually enough. On lower-end systems two threads can significantly help up with the data flow. More than two threads typically provide diminishing returns.
 
 Run with verbose level 4:
 ```
 magewell2ts -b 1 -i 1 -m -v 4
 ```
 to have it log buffer usage every minute. Note that it is normal for most of the buffers to show as in-use on initial start up as the pipeline is primed. Give it a couple of minutes to settle to see how many buffers are actually being used.
+
+NOTE: if your setup is struggling to keep up and not drop frames the problem might not be with your CPU/RAM/GPU but with whatever program is consumeing the output from magewell2ts. If the resulting transport stream is not consumed fast enough that can also cause to encoding process to stall. A simple test of:
+
+```
+magewell2ts -b 1 -i 1 -m -v 4 > /tmp/tst.ts
+```
+
+will demonstrait what your hardware is able to keep up with.
 
 ## Real-Time Threads
 
@@ -353,9 +361,11 @@ Optionally, you can promote all of the `magewell2ts` threads to a higher priorit
 nice -n -10 ./magewell2ts -i 1 -m
 ```
 
+NOTE: running the threads at a higher priority is usually not necessary unless your system is heavily loaded with other tasks.
+
 ## CPU Cores
 
-If you are capturing multiple streams at the same time, it might be beneficial to ensure the load is well-balanced across the CPU cores. This is typically unnecessary (even harmful) for 1080p, but can help with 4K streams.
+If you are capturing multiple streams at the same time, it might be beneficial to ensure the load is well-balanced across the CPU cores. This is typically unnecessary (even harmful) for 1080p, but might help with 4K streams on lower end machines.
 
 Experiment with allowing all cores to handle hardware interrupts:
 

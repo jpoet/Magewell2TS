@@ -37,4 +37,5 @@
 * HDR color parameters are now handled more correctly.
 * Instead of using FFmpeg to detect the incoming audio stream, a custom IEC61937 and E/AC3 parser is used, allowing for much faster start-up times.
 * More threads are utilized to optimize CPU load balance. ECO capture cards running on lower-end hardware are now more likely to maintain pace with 4Kp60 HDR.
+* The --gpu-buffers option has been replaced with --copy-threads
 * Using the `-v 4` flag will log buffer usage statistics.
