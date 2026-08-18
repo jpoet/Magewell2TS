@@ -70,13 +70,14 @@ class VideoStream
         std::string device { "renderD128" };
         std::string codecName { "hevc_qsv" };
         std::string preset { };
-        int quality       { 25 };
-        int lookahead     { 35 };
-        int num_threads   { 2 };
-        int extraHWframes { 32 };
-        float gopSecs     { 1.5 };
-        int idrInterval   {  0  };
-        bool p010         { false };
+        int   quality       { 25 };
+        int   lookahead     { 35 };
+        int   bframes       { 0 };
+        int   num_threads   { 2 };
+        int   extraHWframes { 32 };
+        float gopSecs       { 1.5 };
+        int   idrInterval   {  0  };
+        bool  p010          { false };
     };
 
     struct Params

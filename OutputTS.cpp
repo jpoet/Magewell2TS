@@ -747,22 +747,18 @@ void OutputTS::mux(void)
 
         if (prev.dts != AV_NOPTS_VALUE && pkt->dts <= prev.dts)
         {
-#if 1
             m_log->debug("MUX [{}] DTS delta {} non-monotonic: "
                          "Fix: {} -> {}",
                          stream_id,
                          pkt->dts - prev.dts,
                          pkt->dts,
                          prev.dts + 1);
-#endif
             pkt->dts = prev.dts + 1;
         }
         if (pkt->pts < pkt->dts)
         {
-#if 0
             m_log->debug("MUX [{}] PTS {} < {} DTS. Fix: Set pts = dts.",
                         stream_id, pkt->pts, pkt->dts);
-#endif
             pkt->pts = pkt->dts;
         }
 

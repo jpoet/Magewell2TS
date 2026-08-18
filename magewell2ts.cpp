@@ -98,7 +98,8 @@ void show_help(string_view app)
          << "--lookahead (-a)   : How many frames to 'look ahead' [35]\n"
          << "--quality (-q)     : quality setting [25]\n"
          << "--preset (-p)      : encoder preset\n"
-         << "--p010             : Force p010 (10bit) video format.\n"
+         << "--p010             : Force p010 (10bit) video format\n"
+         << "--b-frames         : Use B-Frames [0]\n"
          << "--gop_secs (-g)    : GOP size in seconds [1.5] (0 to disable)\n"
          << "--idr-interval     : Frequency that keyframe will be IDR [0]\n"
          << "--copy-threads (-t) : Number of GPU copy threads [2]\n"
@@ -352,6 +353,12 @@ int main(int argc, char* argv[])
         else if (*iter == "-g" || *iter == "--gop-secs")
         {
             if (!string_to_float(*(++iter), video_args.gopSecs, "gop-secs"))
+                exit(1);
+        }
+        else if (*iter == "--b-frames")
+        {
+            if (!string_to_int(*(++iter), video_args.bframes,
+                               "b-frames"))
                 exit(1);
         }
         else if (*iter == "--idr-interval")
