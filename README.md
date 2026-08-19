@@ -324,7 +324,7 @@ Normally, no system optimizations are required for smooth usage of this program.
 
 The `--video-buffers` option determines how many images can be queued in system RAM while waiting for the GPU to accept them.
 
-the `--copy-threads` option designates how many threads are create to handle copying data from the RAM buffers to the GPU. This is an "expensive" operation. On a higher-end system with fast CPU and RAM, a single thread is usually enough. On lower-end systems two threads can significantly help up with the data flow. More than two threads typically provide diminishing returns.
+the `--copy-threads` option designates how many threads are create to handle copying data from the RAM buffers to the GPU. This is an "expensive" operation. On a higher-end system with fast CPU and RAM, a single thread is usually enough. On lower-end systems more threads can significantly help up with the data flow.
 
 Run with verbose level 4:
 ```

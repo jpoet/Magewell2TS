@@ -449,7 +449,8 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
 
     // Maintain a pool of reusable CUDA surfaces.  The extra surfaces give
     // NVENC room for asynchronous operation and lookahead.
-    frames_ctx->initial_pool_size = m_args.lookahead + m_args.num_threads + 16;
+    frames_ctx->initial_pool_size = m_args.lookahead
+                                    + (m_args.num_threads * 3) + 16;
 
     ret = av_hwframe_ctx_init(raw_frames_ctx);
 
@@ -629,7 +630,8 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
     AVHWFramesContext* frames_ctx =
         reinterpret_cast<AVHWFramesContext*>(m_hw_frames_ctx->data);
 
-    frames_ctx->initial_pool_size = m_args.num_threads + m_args.extraHWframes;
+    frames_ctx->initial_pool_size = (m_args.num_threads * 3)
+                                    + m_args.extraHWframes;
     frames_ctx->width = m_encoder->width;
     frames_ctx->height = m_encoder->height;
     frames_ctx->format = AV_PIX_FMT_VAAPI;
@@ -829,7 +831,7 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     frames_ctx->height = INTEL_ALIGN(m_encoder->height);
     frames_ctx->format = AV_PIX_FMT_QSV;
     frames_ctx->sw_format = m_sw_pix_fmt;
-    frames_ctx->initial_pool_size = m_args.num_threads
+    frames_ctx->initial_pool_size = (m_args.num_threads * 3)
                                     + m_args.extraHWframes
                                     + m_args.lookahead + 4;
 
@@ -959,8 +961,10 @@ void VideoStream::encode_frames_loop(void)
 
 void VideoStream::worker_thread_loop(CopyThread& worker)
 {
-    m_log->info("Started {} worker thread.", worker.name);
     auto* hw_ctx = reinterpret_cast<AVHWFramesContext*>(m_hw_frames_ctx->data);
+
+    m_log->info("Started {} worker thread with {}x{}", worker.name,
+                hw_ctx->width, hw_ctx->height);
 
     // Track time and accumulation variables
     auto last_report_time = std::chrono::steady_clock::now();
@@ -1010,15 +1014,27 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
             last_report_time = now;
         }
 
+        int ret;
         FramePtr hw = make_frame();
-        int ret = av_hwframe_get_buffer(m_hw_frames_ctx.get(), hw.get(), 0);
-        if (ret < 0)
+        while (worker.running.load())
         {
-            m_log->warn("DAMAGED: {} worker failed to grab hardware "
-                        "pool surface: {}", worker.name, AVerr2str(ret));
-            f_image_avail(image.pImage, image.pEco);
-            this_thread::sleep_for(chrono::milliseconds(2));
-            continue;
+            ret = av_hwframe_get_buffer(m_hw_frames_ctx.get(), hw.get(), 0);
+            if (ret == 0)
+                break;
+
+            if (ret != AVERROR(ENOMEM))
+            {
+                m_log->error("{} worker failed to grab hardware "
+                             "pool surface: {}", worker.name, AVerr2str(ret));
+                Shutdown();
+            }
+            else
+            {
+                m_log->warn("{} worker failed to grab hardware "
+                            "pool surface: {}. Will retry.",
+                            worker.name, AVerr2str(ret));
+            }
+            this_thread::sleep_for(chrono::milliseconds(3));
         }
 
         FramePtr cpu_frame = make_frame();
