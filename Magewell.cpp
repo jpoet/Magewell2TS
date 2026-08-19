@@ -2062,7 +2062,7 @@ void Magewell::log_stats(size_t used)
         vidpool_10m_idx %= 10;
         vidpool_used_10m[vidpool_10m_idx] = 0;
 
-        vidpool_tm = current_tm;
+        vidpool_tm += 60s;
     }
 }
 
@@ -2185,7 +2185,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                 float frames = static_cast<float>(m_expected_ts - timestamp)
                                / static_cast<float>(eco_params.llFrameDuration);
                 if (m_verbose > 3)
-                    m_log->info("Timestamp is {:.0f} frame less than "
+                    m_log->debug("Timestamp is {:.0f} frame less than "
                                 "expected.    ({}) [Adjusting]",
                                 frames, m_frame_cnt);
                 short_frame = m_frame_cnt;
@@ -2205,7 +2205,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                         if (short_frame > 0 && skipped < 2)
                         {
                             if (m_verbose > 3)
-                                m_log->info("Timestamp is {:.0f} frame greater "
+                                m_log->debug("Timestamp is {:.0f} frame greater "
                                             "than expected. ({}) "
                                             "[Adjustment cleared]",
                                             skipped, m_frame_cnt);

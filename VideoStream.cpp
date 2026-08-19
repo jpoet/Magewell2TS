@@ -450,7 +450,7 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
     // Maintain a pool of reusable CUDA surfaces.  The extra surfaces give
     // NVENC room for asynchronous operation and lookahead.
     frames_ctx->initial_pool_size = m_args.lookahead
-                                    + (m_args.num_threads * 3) + 16;
+                                    + (m_args.num_threads * 2) + 16;
 
     ret = av_hwframe_ctx_init(raw_frames_ctx);
 
@@ -630,7 +630,7 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
     AVHWFramesContext* frames_ctx =
         reinterpret_cast<AVHWFramesContext*>(m_hw_frames_ctx->data);
 
-    frames_ctx->initial_pool_size = (m_args.num_threads * 3)
+    frames_ctx->initial_pool_size = (m_args.num_threads * 2)
                                     + m_args.extraHWframes;
     frames_ctx->width = m_encoder->width;
     frames_ctx->height = m_encoder->height;
@@ -831,7 +831,7 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     frames_ctx->height = INTEL_ALIGN(m_encoder->height);
     frames_ctx->format = AV_PIX_FMT_QSV;
     frames_ctx->sw_format = m_sw_pix_fmt;
-    frames_ctx->initial_pool_size = (m_args.num_threads * 3)
+    frames_ctx->initial_pool_size = (m_args.num_threads * 2)
                                     + m_args.extraHWframes
                                     + m_args.lookahead + 4;
 
@@ -963,8 +963,7 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
 {
     auto* hw_ctx = reinterpret_cast<AVHWFramesContext*>(m_hw_frames_ctx->data);
 
-    m_log->info("Started {} worker thread with {}x{}", worker.name,
-                hw_ctx->width, hw_ctx->height);
+    m_log->info("Started {} worker thread", worker.name);
 
     // Track time and accumulation variables
     auto last_report_time = std::chrono::steady_clock::now();
@@ -1034,7 +1033,7 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
                             "pool surface: {}. Will retry.",
                             worker.name, AVerr2str(ret));
             }
-            this_thread::sleep_for(chrono::milliseconds(3));
+            this_thread::sleep_for(chrono::milliseconds(5));
         }
 
         FramePtr cpu_frame = make_frame();
