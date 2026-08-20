@@ -44,7 +44,7 @@ VideoStream::VideoStream(OutputTS& parent, int verbose_level, Args& args,
     set_light(m_params.color);
 
     // Open replacement encoder
-    if (!open_video())
+    if (!open_encoder())
     {
         m_encoderType = EncoderType::UNKNOWN;
         m_log->error("Failed to open video encoder.");
@@ -61,18 +61,19 @@ VideoStream::VideoStream(OutputTS& parent, int verbose_level, Args& args,
     m_version = m_parent.AddMarker(std::move(marker), timestamp);
 }
 
-VideoStream::~VideoStream(void)
+VideoStream::~VideoStream()
 {
-    stop_encoder();
-    close_video();
+    Shutdown();
+    stop_work();
+    close_encoder();
 }
 
-void VideoStream::Shutdown(void)
+void VideoStream::Shutdown()
 {
-    m_running.store(false);
+    m_running.store(false, std::memory_order_release);
 }
 
-void VideoStream::close_video(void)
+void VideoStream::close_encoder(void)
 {
     m_parent.FlushPackets(OutputTS::VIDEO_STREAM_ID, m_version,
                           m_encoder.get());
@@ -105,87 +106,110 @@ void VideoStream::close_video(void)
     m_log->info("VideoStream:Close {}", m_params);
 }
 
-void VideoStream::start_encoder(void)
+void VideoStream::start_work(void)
 {
+    std::scoped_lock lock(m_workers_mutex);
+
     if (m_running.load())
     {
         m_log->warn("Encoder thread is already running.");
         return;
     }
 
-    int num_threads = (m_args.num_threads > 0) ? m_args.num_threads : 1;
+    int num_threads = (m_args.num_threads > 0)
+                      ? m_args.num_threads
+                      : 1;
+
     m_log->debug("Initializing encoder with {} copy worker threads.",
                  num_threads);
 
-    m_running.store(true);
-
-    // Configure workers before starting threads
+    // Configure workers before starting threads.
     m_workers.clear();
     m_workers.resize(num_threads);
 
-    // Launch threads
+    m_next_capture_worker = 0;
+    m_next_encode_worker  = 0;
+
+    m_running.store(true, std::memory_order_release);
     for (int idx = 0; idx < num_threads; ++idx)
     {
         CopyThread& worker = m_workers[idx];
+
         worker.running.store(true);
         worker.name = format("vdcpy{}", idx);
 
-        worker.cpy_thread = std::thread(&VideoStream::worker_thread_loop,
-                                        this, std::ref(worker));
+        worker.cpy_thread =
+            std::thread(&VideoStream::worker_thread_loop,
+                        this,
+                        std::ref(worker));
 
         pthread_setname_np(worker.cpy_thread.native_handle(),
                            worker.name.c_str());
     }
 
-    m_next_capture_worker = 0;
-    m_next_encode_worker  = 0;
+    // The pipeline is now ready to accept images.
 
-    // Start encoder processing thread
-    m_encode_thread = std::thread(&VideoStream::encode_frames_loop, this);
+    // Start encoder processing thread.
+    m_encode_thread =
+        std::thread(&VideoStream::encode_frames_loop, this);
+
     pthread_setname_np(m_encode_thread.native_handle(), "videnc");
+
     m_log->info("Started frame encoding thread.");
 }
 
-void VideoStream::stop_encoder(void)
+void VideoStream::stop_work(void)
 {
     m_log->debug("Shutting down encoder pipeline...");
-    m_running.store(false);
 
-    for (size_t idx = 0; idx < m_workers.size(); ++idx)
+    m_running.store(false, std::memory_order_release);
+
     {
-        CopyThread& worker = m_workers[idx];
-        worker.running.store(false);
-        worker.image_avail.notify_all();
-        worker.frame_avail.notify_all();
+        std::scoped_lock workers_lock(m_workers_mutex);
+
+        // Wake everybody.
+        for (auto& worker : m_workers)
+        {
+            worker.running.store(false);
+            worker.image_avail.notify_all();
+            worker.frame_avail.notify_all();
+        }
     }
 
+    // Stop the encoder first. It accesses m_workers.
     if (m_encode_thread.joinable())
     {
-        m_log->debug("Stopping encoder thread...");
+        m_log->debug("Stopping video encoder worker");
         m_encode_thread.join();
     }
 
+    // Now the encoder cannot access m_workers anymore.
     for (size_t idx = 0; idx < m_workers.size(); ++idx)
     {
         m_log->debug("Stopping vidcpy worker {}", idx);
 
         CopyThread& worker = m_workers[idx];
+
         if (worker.cpy_thread.joinable())
-        {
             worker.cpy_thread.join();
-        }
 
         std::scoped_lock lock(worker.mtx);
+
         while (!worker.images.empty())
         {
             Image img = std::move(worker.images.front());
             worker.images.pop_front();
             f_image_avail(img.pImage, img.pEco);
         }
+
         worker.frames.clear();
     }
 
-    m_workers.clear();
+    {
+        std::scoped_lock workers_lock(m_workers_mutex);
+        m_workers.clear();
+    }
+
     if (m_verbose > 1)
         m_log->info("Encoder pipeline stopped and worker resources cleared.");
 }
@@ -214,11 +238,10 @@ void VideoStream::set_light(const ColorSpace& color)
     m_content_light->MaxFALL = color.MaxFALL;
 }
 
-
 /**
  * Open video encoder for output
  */
-bool VideoStream::open_video(void)
+bool VideoStream::open_encoder(void)
 {
     if (m_params.width <= 0 || m_params.height <= 0)
     {
@@ -328,14 +351,14 @@ bool VideoStream::open_video(void)
           break;
     }
 
-    start_encoder();
-    CodecContextPtr vid_encoder = make_codec_context();
+    start_work();
 
     if (local_opt != nullptr)
         av_dict_free(&local_opt);
 
     return success;
 }
+
 
 bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
 {
@@ -826,9 +849,8 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     AVHWFramesContext* frames_ctx =
         reinterpret_cast<AVHWFramesContext*>(m_hw_frames_ctx->data);
 
-#define INTEL_ALIGN(x) (((x) + 31) & ~31)
-    frames_ctx->width = INTEL_ALIGN(m_encoder->width);
-    frames_ctx->height = INTEL_ALIGN(m_encoder->height);
+    frames_ctx->width = m_encoder->width;
+    frames_ctx->height = m_encoder->height;
     frames_ctx->format = AV_PIX_FMT_QSV;
     frames_ctx->sw_format = m_sw_pix_fmt;
     frames_ctx->initial_pool_size = (m_args.num_threads * 2)
@@ -898,10 +920,10 @@ void VideoStream::encode_frames_loop(void)
         {
             std::unique_lock lock(worker.mtx);
             worker.frame_avail.wait(lock, [&worker, this] {
-                return !m_running || !worker.frames.empty();
+                return !m_running.load() || !worker.frames.empty();
             });
 
-            if (!m_running)
+            if (!m_running.load())
                 break;
 
             hw_frame = std::move(worker.frames.front());
@@ -978,10 +1000,11 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
         {
             std::unique_lock lock(worker.mtx);
             worker.image_avail.wait(lock, [&worker, this] {
-                return !worker.running || !m_running || !worker.images.empty();
+                return !worker.running || !m_running.load() ||
+                    !worker.images.empty();
             });
 
-            if (!worker.running || !m_running || worker.images.empty())
+            if (!worker.running || !m_running.load() || worker.images.empty())
                 continue;
 
             image = std::move(worker.images.front());
@@ -1015,7 +1038,7 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
 
         int ret;
         FramePtr hw = make_frame();
-        while (worker.running.load())
+        while (worker.running.load() && m_running.load())
         {
             ret = av_hwframe_get_buffer(m_hw_frames_ctx.get(), hw.get(), 0);
             if (ret == 0)
@@ -1118,14 +1141,23 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
 
 void VideoStream::AddImage(Image&& image)
 {
-    if (m_workers.empty()) return;
+    std::scoped_lock workers_lock(m_workers_mutex);
+
+    if (!m_running.load())
+    {
+        f_image_avail(image.pImage, image.pEco);
+        return;
+    }
 
     CopyThread& worker = m_workers[m_next_capture_worker];
-    m_next_capture_worker = (m_next_capture_worker + 1) % m_workers.size();
+
+    m_next_capture_worker =
+        (m_next_capture_worker + 1) % m_workers.size();
 
     {
-        std::scoped_lock lock(worker.mtx);
+        std::scoped_lock worker_lock(worker.mtx);
         worker.images.push_back(std::move(image));
     }
+
     worker.image_avail.notify_one();
 }

@@ -163,14 +163,14 @@ class VideoStream
         { return m_params.color.description; }
 
   private:
-    bool open_video(void);
-    void close_video(void);
+    bool open_encoder(void);
+    void close_encoder(void);
     bool open_nvidia(const AVCodec* codec, AVDictionary** opt_arg);
     bool open_vaapi(const AVCodec* codec, AVDictionary** opt_arg);
     bool open_qsv(const AVCodec* codec, AVDictionary** opt_arg);
 
-    void start_encoder(void);
-    void stop_encoder(void);
+    void start_work(void);
+    void stop_work(void);
     void encode_frames_loop(void);
     void worker_thread_loop(CopyThread& worker);
 
@@ -209,6 +209,8 @@ class VideoStream
     size_t m_next_encode_worker  {0};
     size_t m_next_capture_worker {0};
     copythdq_t m_workers;
+
+    std::mutex m_workers_mutex;
 };
 
 // Custom format specification for spdlog / libfmt
