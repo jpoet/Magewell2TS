@@ -472,8 +472,8 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
 
     // Maintain a pool of reusable CUDA surfaces.  The extra surfaces give
     // NVENC room for asynchronous operation and lookahead.
-    frames_ctx->initial_pool_size = m_args.lookahead
-                                    + (m_args.num_threads * 2) + 16;
+    frames_ctx->initial_pool_size = m_args.lookahead +
+                                    (m_args.num_threads * m_args.buffers) + 16;
 
     ret = av_hwframe_ctx_init(raw_frames_ctx);
 
@@ -653,7 +653,7 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
     AVHWFramesContext* frames_ctx =
         reinterpret_cast<AVHWFramesContext*>(m_hw_frames_ctx->data);
 
-    frames_ctx->initial_pool_size = (m_args.num_threads * 2)
+    frames_ctx->initial_pool_size = (m_args.num_threads * m_args.buffers)
                                     + m_args.extraHWframes;
     frames_ctx->width = m_encoder->width;
     frames_ctx->height = m_encoder->height;
@@ -853,7 +853,7 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     frames_ctx->height = m_encoder->height;
     frames_ctx->format = AV_PIX_FMT_QSV;
     frames_ctx->sw_format = m_sw_pix_fmt;
-    frames_ctx->initial_pool_size = (m_args.num_threads * 2)
+    frames_ctx->initial_pool_size = (m_args.num_threads * m_args.buffers)
                                     + m_args.extraHWframes
                                     + m_args.lookahead + 4;
 
@@ -1132,7 +1132,7 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
             std::scoped_lock lock(worker.mtx);
             worker.frames.push_back(std::move(hw));
         }
-        worker.frame_avail.notify_one();
+        worker.frame_avail.notify_all();
     }
 
     if (m_verbose > 1)
@@ -1141,21 +1141,25 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
 
 void VideoStream::AddImage(Image&& image)
 {
-    std::scoped_lock workers_lock(m_workers_mutex);
-
-    if (!m_running.load())
+    CopyThread* worker_ptr = nullptr;
+    const size_t num_buffers = m_args.buffers;
     {
-        f_image_avail(image.pImage, image.pEco);
-        return;
+        std::scoped_lock workers_lock(m_workers_mutex);
+        worker_ptr = &m_workers[m_next_capture_worker];
+        m_next_capture_worker = (m_next_capture_worker + 1) % m_workers.size();
     }
 
-    CopyThread& worker = m_workers[m_next_capture_worker];
-
-    m_next_capture_worker =
-        (m_next_capture_worker + 1) % m_workers.size();
-
+    CopyThread& worker = *worker_ptr;
     {
-        std::scoped_lock worker_lock(worker.mtx);
+        std::unique_lock worker_lock(worker.mtx);
+        worker.WaitForSpace(worker_lock, m_running, num_buffers);
+
+        if (!m_running.load())
+        {
+            f_image_avail(image.pImage, image.pEco);
+            return;
+        }
+
         worker.images.push_back(std::move(image));
     }
 

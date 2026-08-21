@@ -74,6 +74,7 @@ class VideoStream
         int   lookahead     { 35 };
         int   bframes       { 0 };
         int   num_threads   { 2 };
+        int   buffers       { 3 };
         int   extraHWframes { 32 };
         float gopSecs       { 1.5 };
         int   idrInterval   {  0  };
@@ -135,6 +136,14 @@ class VideoStream
             images     = std::move(rhs.images);
             frames     = std::move(rhs.frames);
             running.store(rhs.running.load());
+        }
+
+        void WaitForSpace(std::unique_lock<std::mutex>& lock,
+                          const std::atomic<bool>& running,
+                          size_t max_buffers) {
+            frame_avail.wait(lock, [this, &running, max_buffers]() {
+                return !running.load() || images.size() < max_buffers;
+            });
         }
 
         // Disable copying explicitly
