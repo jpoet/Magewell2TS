@@ -1073,8 +1073,8 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
         int size_bytes = av_image_fill_arrays(cpu_frame->data,
                                               cpu_frame->linesize,
                                               image.pImage, m_sw_pix_fmt,
-                                              m_params.width,
-                                              m_params.height, 1);
+                                              cpu_frame->width,
+                                              cpu_frame->height, 1);
 
         if (size_bytes < 0)
         {
@@ -1094,6 +1094,19 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
         {
             m_log->warn("DAMAGED: {} av_hwframe_transfer_data failed: {}",
                         worker.name, AVerr2str(ret));
+
+            m_log->warn("{} transfer failed:"
+                        " hw=%dx%d fmt=%s"
+                        " cpu=%dx%d fmt=%s"
+                        " cpu_ls=%d/%d hw_ls=%d/%d",
+                        worker.name,
+                        hw->width, hw->height,
+        av_get_pix_fmt_name(static_cast<AVPixelFormat>(hw->format)),
+                        cpu_frame->width, cpu_frame->height,
+        av_get_pix_fmt_name(static_cast<AVPixelFormat>(cpu_frame->format)),
+                        cpu_frame->linesize[0], cpu_frame->linesize[1],
+                        hw->linesize[0], hw->linesize[1]);
+
             this_thread::sleep_for(chrono::milliseconds(2));
             continue;
         }
