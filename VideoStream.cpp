@@ -1,4 +1,5 @@
 #include <iostream>
+#include <ranges>
 
 extern "C" {
 #include <libavutil/opt.h>
@@ -863,7 +864,7 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     {
         AVQSVFramesContext* qsv_hwctx =
             reinterpret_cast<AVQSVFramesContext*>(frames_ctx->hwctx);
-        qsv_hwctx->frame_type = MFX_MEMTYPE_VIDEO_MEMORY_DECODER_TARGET;
+        qsv_hwctx->frame_type = MFX_MEMTYPE_VIDEO_MEMORY_PROCESSOR_TARGET;
     }
 #endif
 
@@ -989,8 +990,9 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
 
     // Track time and accumulation variables
     auto last_report_time = std::chrono::steady_clock::now();
-    uint64_t backlog_sum = 0;
+    uint64_t backlog_sum  = 0;
     uint64_t sample_count = 0;
+    uint64_t frame_cnt    = 0;
 
     while (worker.running.load() && m_running.load())
     {
@@ -1070,7 +1072,6 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
         cpu_frame->format = hw_ctx->sw_format;
         cpu_frame->width  = hw_ctx->width;
         cpu_frame->height = hw_ctx->height;
-
         int size_bytes = av_image_fill_arrays(cpu_frame->data,
                                               cpu_frame->linesize,
                                               image.pImage,
@@ -1091,14 +1092,29 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
         cpu_frame->extended_data = cpu_frame->data;
 
         ret = av_hwframe_transfer_data(hw.get(), cpu_frame.get(), 0);
+        if (++frame_cnt == 1 && ret == AVERROR(EINVAL))
+        {
+            // Intel oneVPL may require a delay for surface initialization
+            for (int idx : std::views::iota(0, 10))
+            {
+                this_thread::sleep_for(chrono::milliseconds(1));
+                ret = av_hwframe_transfer_data(hw.get(), cpu_frame.get(), 0);
+                if (ret == 0)
+                {
+                    if (m_verbose > 1)
+                        m_log->info("{} Delayed {}ms for GPU surface init.",
+                                    worker.name, idx);
+                    break;
+                }
+            }
+        }
+
         f_image_avail(image.pImage, image.pEco);
 
         if (ret < 0)
         {
-            m_log->warn("DAMAGED: {} av_hwframe_transfer_data failed: {}",
-                        worker.name, AVerr2str(ret));
-
-            auto *ctx = reinterpret_cast<AVHWFramesContext *>(m_hw_frames_ctx->data);
+            m_log->warn("DAMAGED: {} av_hwframe_transfer_data failed: "
+                        "{} (frame:{})", worker.name, AVerr2str(ret), frame_cnt);
 
             m_log->warn("{} transfer failed: "
                         "ctx={}x{} sw={} | "
@@ -1106,8 +1122,8 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
                         "cpu={}x{} fmt={} ls={}/{} | "
                         "params={}x{} m_sw={}",
                         worker.name,
-                        ctx->width, ctx->height,
-                        av_get_pix_fmt_name(static_cast<AVPixelFormat>(ctx->sw_format)),
+                        hw_ctx->width, hw_ctx->height,
+                        av_get_pix_fmt_name(static_cast<AVPixelFormat>(hw_ctx->sw_format)),
                         hw->width, hw->height,
                         cpu_frame->width, cpu_frame->height,
                         av_get_pix_fmt_name(static_cast<AVPixelFormat>(cpu_frame->format)),
@@ -1115,7 +1131,7 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
                         m_params.width, m_params.height,
                         av_get_pix_fmt_name(m_sw_pix_fmt));
 
-            this_thread::sleep_for(chrono::milliseconds(2));
+            this_thread::sleep_for(chrono::milliseconds(3));
             continue;
         }
 
