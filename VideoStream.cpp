@@ -1066,15 +1066,18 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
             f_image_avail(image.pImage, image.pEco);
             continue;
         }
-        cpu_frame->format = m_sw_pix_fmt;
+
+        cpu_frame->format = hw_ctx->sw_format;
         cpu_frame->width  = hw_ctx->width;
         cpu_frame->height = hw_ctx->height;
 
         int size_bytes = av_image_fill_arrays(cpu_frame->data,
                                               cpu_frame->linesize,
-                                              image.pImage, m_sw_pix_fmt,
+                                              image.pImage,
+                                              static_cast<AVPixelFormat>(hw_ctx->sw_format),
                                               cpu_frame->width,
-                                              cpu_frame->height, 1);
+                                              cpu_frame->height,
+                                              1);
 
         if (size_bytes < 0)
         {
@@ -1095,17 +1098,22 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
             m_log->warn("DAMAGED: {} av_hwframe_transfer_data failed: {}",
                         worker.name, AVerr2str(ret));
 
-            m_log->warn("{} transfer failed:"
-                        " hw=%dx%d fmt=%s"
-                        " cpu=%dx%d fmt=%s"
-                        " cpu_ls=%d/%d hw_ls=%d/%d",
+            auto *ctx = reinterpret_cast<AVHWFramesContext *>(m_hw_frames_ctx->data);
+
+            m_log->warn("{} transfer failed: "
+                        "ctx={}x{} sw={} | "
+                        "hw={}x{} | "
+                        "cpu={}x{} fmt={} ls={}/{} | "
+                        "params={}x{} m_sw={}",
                         worker.name,
+                        ctx->width, ctx->height,
+                        av_get_pix_fmt_name(static_cast<AVPixelFormat>(ctx->sw_format)),
                         hw->width, hw->height,
-        av_get_pix_fmt_name(static_cast<AVPixelFormat>(hw->format)),
                         cpu_frame->width, cpu_frame->height,
-        av_get_pix_fmt_name(static_cast<AVPixelFormat>(cpu_frame->format)),
+                        av_get_pix_fmt_name(static_cast<AVPixelFormat>(cpu_frame->format)),
                         cpu_frame->linesize[0], cpu_frame->linesize[1],
-                        hw->linesize[0], hw->linesize[1]);
+                        m_params.width, m_params.height,
+                        av_get_pix_fmt_name(m_sw_pix_fmt));
 
             this_thread::sleep_for(chrono::milliseconds(2));
             continue;
