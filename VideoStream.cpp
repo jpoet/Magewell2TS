@@ -985,19 +985,13 @@ void VideoStream::encode_frames_loop(void)
 void VideoStream::worker_thread_loop(CopyThread& worker)
 {
     auto* hw_ctx = reinterpret_cast<AVHWFramesContext*>(m_hw_frames_ctx->data);
+    bool     first = true;
 
     m_log->info("Started {} worker thread", worker.name);
-
-    // Track time and accumulation variables
-    auto last_report_time = std::chrono::steady_clock::now();
-    uint64_t backlog_sum  = 0;
-    uint64_t sample_count = 0;
-    uint64_t frame_cnt    = 0;
 
     while (worker.running.load() && m_running.load())
     {
         Image image;
-        size_t current_backlog = 0;
 
         {
             std::unique_lock lock(worker.mtx);
@@ -1011,31 +1005,6 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
 
             image = std::move(worker.images.front());
             worker.images.pop_front();
-
-            current_backlog = worker.images.size();
-        }
-
-        backlog_sum += current_backlog;
-        ++sample_count;
-
-        // Check if 60 seconds have passed
-        auto now = std::chrono::steady_clock::now();
-        if (now - last_report_time >= std::chrono::seconds(60))
-        {
-            double average_backlog = static_cast<double>(backlog_sum)
-                                     / sample_count;
-
-            if (average_backlog > 2.5)
-            {
-                m_log->info("{} worker average backlog {:.2f} over "
-                            "the past 60s. Consider increasing '--threads'",
-                            worker.name, average_backlog);
-            }
-
-            // Reset trackers
-            backlog_sum = 0;
-            sample_count = 0;
-            last_report_time = now;
         }
 
         int ret;
@@ -1075,7 +1044,7 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
         int size_bytes = av_image_fill_arrays(cpu_frame->data,
                                               cpu_frame->linesize,
                                               image.pImage,
-                                              static_cast<AVPixelFormat>(hw_ctx->sw_format),
+                                static_cast<AVPixelFormat>(hw_ctx->sw_format),
                                               cpu_frame->width,
                                               cpu_frame->height,
                                               1);
@@ -1092,8 +1061,10 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
         cpu_frame->extended_data = cpu_frame->data;
 
         ret = av_hwframe_transfer_data(hw.get(), cpu_frame.get(), 0);
-        if (++frame_cnt == 1 && ret == AVERROR(EINVAL))
+        if (first && ret == AVERROR(EINVAL)) [[unlikely]]
         {
+            first = false;
+
             // Intel oneVPL may require a delay for surface initialization
             for (int idx : std::views::iota(0, 10))
             {
@@ -1111,10 +1082,10 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
 
         f_image_avail(image.pImage, image.pEco);
 
-        if (ret < 0)
+        if (ret < 0) [[unlikely]]
         {
             m_log->warn("DAMAGED: {} av_hwframe_transfer_data failed: "
-                        "{} (frame:{})", worker.name, AVerr2str(ret), frame_cnt);
+                        "{}", worker.name, AVerr2str(ret));
 
             m_log->warn("{} transfer failed: "
                         "ctx={}x{} sw={} | "

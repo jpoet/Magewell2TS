@@ -2014,7 +2014,7 @@ void Magewell::log_stats(size_t used)
     duration = chrono::duration_cast<chrono::seconds>
                (current_tm - vidpool_tm).count();
 
-    if (duration >= 60)
+    if (duration >= 60) [[unlikely]]
     {
         vidpool_5m_max  = ranges::max_element(vidpool_used_5m);
         vidpool_10m_max = ranges::max_element(vidpool_used_10m);
