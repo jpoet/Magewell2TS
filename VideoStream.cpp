@@ -1066,7 +1066,7 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
             first = false;
 
             // Intel oneVPL may require a delay for surface initialization
-            for (int idx : std::views::iota(0, 10))
+            for (int idx : std::views::iota(1, 10))
             {
                 this_thread::sleep_for(chrono::milliseconds(1));
                 ret = av_hwframe_transfer_data(hw.get(), cpu_frame.get(), 0);
