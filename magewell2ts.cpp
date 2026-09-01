@@ -85,7 +85,7 @@ void show_help(string_view app)
     clog << "--board (-b)       : board id, if you have more than one [0]\n"
          << "--device (-d)      : vaapi/qsv device (e.g. renderD129) [renderD128]\n"
          << "--input (-i)       : input idx, *required*. Starts at 1\n"
-         << "--settle-time      : How long to wait for signal changes to 'settle' [99(ms)]\n"
+         << "--settle           : How long to wait for signal changes to 'settle' [66(ms)]\n"
          << "--list (-l)        : List capture card inputs\n"
          << "--mux (-m)         : capture audio and video and mux into TS [false]\n"
          << "--no-audio (-n)    : Only capture video. [false]\n"
@@ -269,7 +269,7 @@ int main(int argc, char* argv[])
     int    ret = 0;
     int    boardId  = -1;
     int    devIndex = -1;
-    chrono::milliseconds settle_time {99};
+    chrono::milliseconds settle_time {66};
 
     string      logpath;
     int         verbose_level = 1;
@@ -407,7 +407,7 @@ int main(int argc, char* argv[])
         {
             video_args.device = *(++iter);
         }
-        else if (*iter == "--settle-time")
+        else if (*iter == "--settle")
         {
             int ms;
             if (!string_to_int(*(++iter), ms, "Settle time"))

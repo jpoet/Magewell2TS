@@ -1018,17 +1018,25 @@ void Magewell::capture_audio_loop(void)
     }
 
     // Main audio capture loop
-    AudioStream::Params active_params;
+    std::optional<AudioStream::Params> active_params = std::nullopt;
     std::optional<AudioStream::Params> oParams = std::nullopt;
 
     while (m_running.load() == true)
     {
         m_log->info("Detecting audio parameters");
 
-        chrono::steady_clock::time_point stable_start
-            = chrono::steady_clock::now();
+        chrono::steady_clock::time_point stable_start =
+            chrono::steady_clock::now();
+
+        // Track when we entered this discovery phase to enforce the
+        // 5x fallback timeout
+        chrono::steady_clock::time_point discovery_start = stable_start;
+
         std::chrono::milliseconds duration;
+        std::chrono::milliseconds discovery_duration;
         AudioStream::Params params;
+
+        std::optional<AudioStream::Params> last_params = std::nullopt;
 
         while (m_running.load() == true)
         {
@@ -1090,7 +1098,7 @@ void Magewell::capture_audio_loop(void)
                 continue;
             }
 
-            params.samples_per_channel = MWCAP_AUDIO_SAMPLES_PER_FRAME;  // 768
+            params.samples_per_channel = MWCAP_AUDIO_SAMPLES_PER_FRAME; // 768
             int interleaved_values     = params.samples_per_channel *
                                          params.num_channels; // 1536 for 2 channel PCM
             params.buffer_bytes        = interleaved_values *
@@ -1104,35 +1112,71 @@ void Magewell::capture_audio_loop(void)
             channel_pairs = params.num_channels / 2;
             shift = audio_signal_status.cBitsPerSample > 16 ? 0 : 16;
 
-            if (active_params == params)
+            // On initial startup use whatever is available.
+            if (!active_params)
                 break;
 
-            duration = chrono::duration_cast<chrono::milliseconds>
-                       (chrono::steady_clock::now() - stable_start);
-            if (duration > m_settle_time)
-                break;
+            // Max timeout ceiling
+            discovery_duration =
+                chrono::duration_cast<chrono::milliseconds>
+                (chrono::steady_clock::now() - discovery_start);
 
-            std::this_thread::sleep_for
-                (std::chrono::milliseconds(1));
-        }
-
-        if (active_params != params)
-        {
-            if (m_verbose > 1)
+            if (discovery_duration >= (m_settle_time * 5))
             {
-                if (active_params.num_channels == 0)
-                    m_log->info(" SETTING:\n   {}", params);
-                else if (active_params != params)
-                    m_log->info(" CHANGED:\n   {}\n-> {}",
-                                active_params, params);
+                if (m_verbose > 0)
+                {
+                    m_log->warn("Audio parameters failed to stabilize "
+                                "after {}ms. Forcing fall-through evaluation.",
+                                discovery_duration.count());
+                }
+                break; // Upper limit timeout reached
             }
 
-            active_params = params;
-            oParams = active_params;
+            if (!last_params || *last_params != params)
+            {
+                // Params changed or this is the first iteration;
+                // reset stability timer
+                last_params = params;
+                stable_start = chrono::steady_clock::now();
+            }
+            else
+            {
+                // Params match last seen; check if settled
+                duration = chrono::duration_cast<chrono::milliseconds>
+                           (chrono::steady_clock::now() - stable_start);
+
+                if (duration > m_settle_time)
+                    break;
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        else if (m_verbose > 1)
+
+        if (m_running.load() == true)
         {
-            m_log->info(" KEEPING:\n   {}", params);
+            if (!active_params)
+            {
+                if (m_verbose > 1)
+                {
+                    m_log->info(" SETTING:\n   {}", params);
+                }
+                active_params = params;
+                oParams = params;
+            }
+            else if (*active_params != params)
+            {
+                if (m_verbose > 1)
+                {
+                    m_log->info(" CHANGED:\n   {}\n-> {}",
+                                *active_params, params);
+                }
+                active_params = params;
+                oParams = params;
+            }
+            else if (m_verbose > 1)
+            {
+                m_log->info(" KEEPING:\n   {}", params);
+            }
         }
 
         err_cnt = 0;
@@ -1227,7 +1271,7 @@ void Magewell::capture_audio_loop(void)
                 */
 
                 AudioStream::samples_t samples;
-                samples.resize(active_params.buffer_bytes);
+                samples.resize(active_params->buffer_bytes);
                 uint8_t* output_ptr = samples.data();
 
                 const bool swap_bytes = !params.is_lpcm;
@@ -1339,15 +1383,6 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
 
     HDMI_INFOFRAME_PACKET info_packet;
     HDMI_HDR_INFOFRAME_PAYLOAD& hdr_info = info_packet.hdrInfoFramePayload;
-
-#if 0
-    color.is_HDR    = false;
-    color.has_primaries = false;
-    color.range     = AVCOL_RANGE_MPEG;
-    color.space     = AVCOL_SPC_BT709;
-    color.primaries = AVCOL_PRI_BT709;
-    color.trc       = AVCOL_TRC_BT709;
-#endif
 
     // CHOOSE COLOR RANGE QUANTIZATION SPECTRUM
     if (signal_status.quantRange == MWCAP_VIDEO_QUANTIZATION_FULL)
@@ -2602,17 +2637,7 @@ bool Magewell::capture_video(void)
         }
     }
 
-#if 0
-    MWCAP_VIDEO_CAPTURE_SETTING captureSettings;
-
-// Force the Magewell FPGA to automatically scale full-range inputs
-// down to limited-range P010 buffers before DMA copying to RAM
-    captureSettings.quantizationRange = MWCAP_VIDEO_QUANTIZATION_RANGE_LIMITED;
-
-    MWSetVideoFormat(m_channel, &captureSettings);
-#endif
-
-    VideoStream::Params active_params;
+    std::optional<VideoStream::Params> active_params = std::nullopt;
     std::optional<VideoStream::Params> oParams = std::nullopt;
 
     while (m_running.load() == true)
@@ -2620,7 +2645,9 @@ bool Magewell::capture_video(void)
         MWCAP_VIDEO_SIGNAL_STATUS videoSignalStatus;
         chrono::steady_clock::time_point stable_start =
             chrono::steady_clock::now();
+        chrono::steady_clock::time_point discovery_start = stable_start;
         std::chrono::milliseconds duration;
+        std::chrono::milliseconds discovery_duration;
 
         int         prev_image_size = m_image_size;
 
@@ -2639,7 +2666,16 @@ bool Magewell::capture_video(void)
                     m_log->warn("Input video signal status: Unsupported");
                 locked = false;
                 state = videoSignalStatus.state;
+                stable_start = chrono::steady_clock::now();
                 this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
+                continue;
+            }
+
+            if (videoSignalStatus.dwFrameDuration == 0)
+            {
+                state = videoSignalStatus.state;
+                stable_start = chrono::steady_clock::now();
+                this_thread::sleep_for(chrono::milliseconds(1));
                 continue;
             }
 
@@ -2654,22 +2690,27 @@ bool Magewell::capture_video(void)
                   if (state != videoSignalStatus.state && m_verbose > 0)
                       m_log->warn("Input video signal status: NONE");
                   locked = false;
-                  state = videoSignalStatus.state;
-                  this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
-                  continue;
+                  break;
                 case MWCAP_VIDEO_SIGNAL_LOCKING:
                   if (state != videoSignalStatus.state && m_verbose > 0)
                       m_log->warn("Input video signal status: Locking");
                   locked = false;
-                  state = videoSignalStatus.state;
-                  this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
-                  continue;
+                  break;
                 default:
                   if (m_verbose > 0)
                       m_log->warn("Video signal status: lost locked.");
                   locked = false;
-                  this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
-                  continue;
+                  break;
+            }
+
+            // Always keep track of the last processed Magewell state flag
+            state = videoSignalStatus.state;
+
+            if (!locked)
+            {
+                stable_start = chrono::steady_clock::now();
+                this_thread::sleep_for(chrono::milliseconds(m_frame_ms));
+                continue;
             }
 
             if (videoSignalStatus.bInterlaced)
@@ -2677,15 +2718,17 @@ bool Magewell::capture_video(void)
                 if (!rejected && m_verbose > 0)
                     m_log->info("REJECTING interlaced video.");
                 rejected = true;
+                stable_start = chrono::steady_clock::now();
                 this_thread::sleep_for(chrono::milliseconds(m_frame_half_ms));
                 continue;
             }
-            if (videoSignalStatus.cx < 640 ||
-                videoSignalStatus.cy < 480)
+
+            if (videoSignalStatus.cx < 640 || videoSignalStatus.cy < 480)
             {
                 if (!rejected && m_verbose > 0)
                     m_log->info("REJECTING invalid video dimensions.");
                 rejected = true;
+                stable_start = chrono::steady_clock::now();
                 this_thread::sleep_for(chrono::milliseconds(m_frame_half_ms));
                 continue;
             }
@@ -2719,41 +2762,58 @@ bool Magewell::capture_video(void)
             m_image_size = FOURCC_CalcImageSize(eco_params.dwFOURCC,
                                                 eco_params.cx,
                                                 eco_params.cy,
-                                                m_min_stride); /* * 3 / 2; */
+                                                m_min_stride);
             params.num_pixels = m_min_stride * eco_params.cy;
 
             params.time_base = time_base;
+
             eco_params.llFrameDuration = videoSignalStatus.dwFrameDuration;
             params.frame_duration = {
-                static_cast<int>(eco_params.llFrameDuration),
-                10000000LL
+                static_cast<int>(eco_params.llFrameDuration), 10000000LL
             };
 
-            if (params == active_params)
+            if (!active_params)
                 break;
 
+            // Max timeout ceiling
+            discovery_duration =
+                chrono::duration_cast<chrono::milliseconds>
+                (chrono::steady_clock::now() - discovery_start);
+
+            if (discovery_duration >= (m_settle_time * 5))
+            {
+                if (m_verbose > 0)
+                {
+                    m_log->warn("Audio parameters failed to stabilize "
+                                "after {}ms. Forcing fall-through evaluation.",
+                                discovery_duration.count());
+                }
+                break; // Upper limit timeout reached
+            }
+
+            // Measure how long the signal parameters have been
+            // perfectly locked and unvarying
             duration = chrono::duration_cast<chrono::milliseconds>
                        (chrono::steady_clock::now() - stable_start);
             if (duration > m_settle_time)
                 break;
 
-            std::this_thread::sleep_for
-                (std::chrono::milliseconds(1));
+            std::this_thread::sleep_for(std::chrono::milliseconds(3));
         }
 
-        if (params != active_params)
+        if (params != *active_params)
         {
             if (m_verbose > 1)
             {
-                if (active_params.width == 0)
+                if (active_params->width == 0)
                     m_log->info(" SETTING:\n   {}", params);
-                else if (active_params != params)
+                else if (*active_params != params)
                     m_log->info(" CHANGED:\n   {}\n-> {}",
-                                active_params, params);
+                                *active_params, params);
             }
 
-            active_params = params;
-            oParams = active_params;
+            *active_params = params;
+            oParams = *active_params;
 
             m_frame_ms = eco_params.llFrameDuration / 10000;
             m_frame_ms2 = m_frame_ms * 2;
@@ -2835,7 +2895,7 @@ bool Magewell::capture_video(void)
             if (!capture_eco_video(eco_params, std::move(oParams),
                                    eco_event, video_notify,
                                    ullStatusBits))
-                active_params = {};
+                *active_params = {};
         }
         else
         {
@@ -2843,7 +2903,7 @@ bool Magewell::capture_video(void)
                                    video_notify, notify_event,
                                    capture_event, frame_wrap_idx,
                                    event_mask, ullStatusBits))
-                active_params = {};
+                *active_params = {};
         }
     }
 
