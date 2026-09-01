@@ -75,11 +75,11 @@ template <>
                   FormatContext& ctx) const -> decltype(ctx.out())
     {
         return fmt::format_to(ctx.out(),
-                              "Audio[Channels:{}, LPCM:{}, "
+                              "Audio[Channels:{}, {}, "
                               "SampleRate:{}Hz, Bits/Sample:{}, "
                               "SamplesSize:{}]",
                               params.num_channels,
-                              params.is_lpcm ? "Y" : "N",
+                              params.is_lpcm ? "LPCM" : "Bitstream",
                               params.sample_rate,
                               params.bits_per_sample,
                               params.buffer_bytes

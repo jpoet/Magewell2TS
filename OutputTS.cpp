@@ -747,7 +747,7 @@ void OutputTS::mux(void)
 
         if (prev.dts != AV_NOPTS_VALUE && pkt->dts <= prev.dts)
         {
-            m_log->debug("MUX [{}] DTS delta {} non-monotonic: "
+            m_log->trace("MUX [{}] DTS delta {} non-monotonic: "
                          "Fix: {} -> {}",
                          stream_id,
                          pkt->dts - prev.dts,
@@ -757,14 +757,15 @@ void OutputTS::mux(void)
         }
         if (pkt->pts < pkt->dts)
         {
-            m_log->debug("MUX [{}] PTS {} < {} DTS. Fix: Set pts = dts.",
-                        stream_id, pkt->pts, pkt->dts);
+            m_log->trace("MUX [{}] PTS {} < {} DTS. Fix: Set pts = dts.",
+                         (stream_id ? "Audio" : "Video"), pkt->pts, pkt->dts);
             pkt->pts = pkt->dts;
         }
 
-        m_log->trace("MUX [id{:<2d} version:{}] pts:{:#018x} dts:{:#018x} "
+        m_log->trace("MUX [{}] version:{}] pts:{:#018x} dts:{:#018x} "
                      "duration:{} size:{}",
-                     stream_id, outPkt->version, pkt->pts, pkt->dts,
+                     (stream_id ? "Audio" : "Video"),
+                     outPkt->version, pkt->pts, pkt->dts,
                      pkt->duration, pkt->size);
 
         StreamState state = StreamState {

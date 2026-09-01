@@ -1130,8 +1130,10 @@ void Magewell::capture_audio_loop(void)
             active_params = params;
             oParams = active_params;
         }
-        else
+        else if (m_verbose > 1)
+        {
             m_log->info(" KEEPING:\n   {}", params);
+        }
 
         err_cnt = 0;
         buffered_frame_idx = 512;
