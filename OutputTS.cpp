@@ -827,6 +827,8 @@ int OutputTS::AddMarker(Marker&& marker, int64_t timestamp)
                   m_video_latest_version.fetch_add(1, std::memory_order_relaxed) + 1;
         m_videoPktQ.Push(std::move(packet));
     }
+    else
+        version = -1;
     m_pktQ_ready.notify_one();
     return version;
 }

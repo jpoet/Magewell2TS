@@ -1063,9 +1063,9 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
         ret = av_hwframe_transfer_data(hw.get(), cpu_frame.get(), 0);
         if (first && ret == AVERROR(EINVAL)) [[unlikely]]
         {
-            first = false;
-
-            // Intel oneVPL may require a delay for surface initialization
+            // The Intel oneVPL/QSV backend can occasionally reject
+            // the first CPU->GPU transfer with EINVAL while the
+            // surface/runtime is initializing.
             for (int idx : std::views::iota(1, 10))
             {
                 this_thread::sleep_for(chrono::milliseconds(1));
@@ -1079,6 +1079,7 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
                 }
             }
         }
+        first = false;
 
         f_image_avail(image.pImage, image.pEco);
 
