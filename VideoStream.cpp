@@ -351,12 +351,20 @@ bool VideoStream::open_encoder(void)
           break;
     }
 
+    if (!success)
+    {
+        if (local_opt != nullptr)
+            av_dict_free(&local_opt);
+
+        return false;
+    }
+
     start_work();
 
     if (local_opt != nullptr)
         av_dict_free(&local_opt);
 
-    return success;
+    return true;
 }
 
 
@@ -983,8 +991,17 @@ void VideoStream::encode_frames_loop(void)
 
 void VideoStream::worker_thread_loop(CopyThread& worker)
 {
-    auto* hw_ctx = reinterpret_cast<AVHWFramesContext*>(m_hw_frames_ctx->data);
-    bool     first = true;
+    BufferRefPtr hw_frames_ctx(av_buffer_ref(m_hw_frames_ctx.get()));
+
+    if (!hw_frames_ctx)
+    {
+        m_log->error("{} failed to reference QSV frame context.",
+                     worker.name);
+        return;
+    }
+
+    auto* hw_ctx = reinterpret_cast<AVHWFramesContext*>(hw_frames_ctx->data);
+    bool  first = true;
 
     m_log->info("Started {} worker thread", worker.name);
 
@@ -1006,27 +1023,43 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
             worker.images.pop_front();
         }
 
-        int ret;
         FramePtr hw = make_frame();
+
+        if (!hw)
+        {
+            m_log->error("{} failed to allocate hardware frame wrapper.",
+                         worker.name);
+            f_image_avail(image.pImage, image.pEco);
+            continue;
+        }
+
+        int ret = AVERROR(ENOMEM);
+
         while (worker.running.load() && m_running.load())
         {
-            ret = av_hwframe_get_buffer(m_hw_frames_ctx.get(), hw.get(), 0);
+            ret = av_hwframe_get_buffer(hw_frames_ctx.get(), hw.get(), 0);
             if (ret == 0)
                 break;
 
             if (ret != AVERROR(ENOMEM))
             {
-                m_log->error("{} worker failed to grab hardware "
-                             "pool surface: {}", worker.name, AVerr2str(ret));
+                m_log->error("{} worker failed to grab hardware pool surface: {}",
+                             worker.name, AVerr2str(ret));
                 Shutdown();
+                break;
             }
-            else
-            {
-                m_log->warn("{} worker failed to grab hardware "
-                            "pool surface: {}. Will retry.",
-                            worker.name, AVerr2str(ret));
-            }
-            this_thread::sleep_for(chrono::milliseconds(5));
+
+            m_log->warn("{} worker failed to grab hardware pool surface: {}. "
+                        "Will retry.",
+                        worker.name, AVerr2str(ret));
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+
+        if (ret < 0)
+        {
+            f_image_avail(image.pImage, image.pEco);
+            continue;
         }
 
         FramePtr cpu_frame = make_frame();
@@ -1037,48 +1070,65 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
             continue;
         }
 
-        cpu_frame->format = hw_ctx->sw_format;
+        cpu_frame->format = m_params.pix_fmt;
         cpu_frame->width  = hw_ctx->width;
         cpu_frame->height = hw_ctx->height;
-        int size_bytes = av_image_fill_arrays(cpu_frame->data,
-                                              cpu_frame->linesize,
-                                              image.pImage,
-                                static_cast<AVPixelFormat>(hw_ctx->sw_format),
-                                              cpu_frame->width,
-                                              cpu_frame->height,
-                                              1);
 
-        if (size_bytes < 0)
+        ret = av_image_fill_arrays(cpu_frame->data,
+                                   cpu_frame->linesize,
+                                   image.pImage,
+                                   m_params.pix_fmt,
+                                   cpu_frame->width,
+                                   cpu_frame->height,
+                                   1);
+
+        if (ret < 0)
         {
-            m_log->error("{} av_image_fill_arrays failed: {}",
-                         worker.name, AVerr2str(size_bytes));
+            m_log->error("{} failed to setup CPU frame: {}",
+                         worker.name, AVerr2str(ret));
             f_image_avail(image.pImage, image.pEco);
-            Shutdown();
-            break;
+            continue;
+        }
+
+        if (cpu_frame->format == AV_PIX_FMT_P010LE ||
+            cpu_frame->format == AV_PIX_FMT_NV12)
+        {
+            cpu_frame->linesize[0] = m_params.stride;
+            cpu_frame->linesize[1] = m_params.stride;
+
+            cpu_frame->data[1] = cpu_frame->data[0] +
+                                 cpu_frame->linesize[0] * cpu_frame->height;
+        }
+        else
+        {
+            m_log->error("{} unsupported capture pixel format: {}",
+                         worker.name,
+                         av_get_pix_fmt_name(static_cast<AVPixelFormat>
+                                             (cpu_frame->format)));
+            f_image_avail(image.pImage, image.pEco);
+            continue;
         }
 
         cpu_frame->extended_data = cpu_frame->data;
 
-        ret = av_hwframe_transfer_data(hw.get(), cpu_frame.get(), 0);
-        if (first && ret == AVERROR(EINVAL)) [[unlikely]]
+        if (first)
         {
-            // The Intel oneVPL/QSV backend can occasionally reject
-            // the first CPU->GPU transfer with EINVAL while the
-            // surface/runtime is initializing.
-            for (int idx : std::views::iota(1, 10))
+            // QSV's first frame transfer performs shared initialization which
+            // must not be performed concurrently by multiple copy workers.
+            std::lock_guard lock(m_transfer_mutex);
+            ret = av_hwframe_transfer_data(hw.get(), cpu_frame.get(), 0);
+
+            if (ret < 0)
             {
-                this_thread::sleep_for(chrono::milliseconds(1));
-                ret = av_hwframe_transfer_data(hw.get(), cpu_frame.get(), 0);
-                if (ret == 0)
-                {
-                    if (m_verbose > 1)
-                        m_log->info("{} Delayed {}ms for GPU surface init.",
-                                    worker.name, idx);
-                    break;
-                }
+                f_image_avail(image.pImage, image.pEco);
+                continue;
             }
+            first = false;
         }
-        first = false;
+        else
+        {
+            ret = av_hwframe_transfer_data(hw.get(), cpu_frame.get(), 0);
+        }
 
         f_image_avail(image.pImage, image.pEco);
 
@@ -1149,27 +1199,38 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
 
 void VideoStream::AddImage(Image&& image)
 {
-    CopyThread* worker_ptr = nullptr;
     const size_t num_buffers = m_args.buffers;
+
+    std::unique_lock workers_lock(m_workers_mutex);
+
+    if (!m_running.load() || m_workers.empty())
     {
-        std::scoped_lock workers_lock(m_workers_mutex);
-        worker_ptr = &m_workers[m_next_capture_worker];
-        m_next_capture_worker = (m_next_capture_worker + 1) % m_workers.size();
+        workers_lock.unlock();
+        f_image_avail(image.pImage, image.pEco);
+        return;
     }
 
-    CopyThread& worker = *worker_ptr;
+    CopyThread& worker = m_workers[m_next_capture_worker];
+
+    m_next_capture_worker =
+        (m_next_capture_worker + 1) % m_workers.size();
+
+    // Acquire this before releasing workers_lock so stop_work()
+    // cannot clear m_workers while we are using this worker.
+    std::unique_lock worker_lock(worker.mtx);
+
+    workers_lock.unlock();
+
+    worker.WaitForSpace(worker_lock, m_running, num_buffers);
+
+    if (!m_running.load())
     {
-        std::unique_lock worker_lock(worker.mtx);
-        worker.WaitForSpace(worker_lock, m_running, num_buffers);
-
-        if (!m_running.load())
-        {
-            f_image_avail(image.pImage, image.pEco);
-            return;
-        }
-
-        worker.images.push_back(std::move(image));
+        f_image_avail(image.pImage, image.pEco);
+        return;
     }
+
+    worker.images.push_back(std::move(image));
+    worker_lock.unlock();
 
     worker.image_avail.notify_one();
 }

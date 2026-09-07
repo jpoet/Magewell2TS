@@ -219,6 +219,7 @@ class VideoStream
     copythdq_t m_workers;
 
     std::mutex m_workers_mutex;
+    std::mutex m_transfer_mutex;
 };
 
 // Custom format specification for spdlog / libfmt

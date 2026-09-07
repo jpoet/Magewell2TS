@@ -95,10 +95,7 @@ struct AVBufferRefDeleter
 {
     void operator()(AVBufferRef* ref) const noexcept
     {
-        if (ref)
-        {
-            av_buffer_unref(&ref);
-        }
+        av_buffer_unref(&ref);
     }
 };
 
