@@ -1170,7 +1170,7 @@ void Magewell::capture_audio_loop(void)
                     m_log->info(" CHANGED:\n   {}\n-> {}",
                                 *active_params, params);
                 }
-                active_params = params;
+                active_params.emplace(params);
                 oParams = params;
             }
             else if (m_verbose > 1)
@@ -2765,6 +2765,7 @@ bool Magewell::capture_video(void)
                                                 m_min_stride);
             params.num_pixels = m_min_stride * eco_params.cy;
 
+            params.stride    = m_min_stride;
             params.time_base = time_base;
 
             eco_params.llFrameDuration = videoSignalStatus.dwFrameDuration;
@@ -2801,18 +2802,18 @@ bool Magewell::capture_video(void)
             std::this_thread::sleep_for(std::chrono::milliseconds(3));
         }
 
-        if (params != *active_params)
+        if (!active_params || params != *active_params)
         {
             if (m_verbose > 1)
             {
-                if (active_params->width == 0)
+                if (!active_params)
                     m_log->info(" SETTING:\n   {}", params);
                 else if (*active_params != params)
                     m_log->info(" CHANGED:\n   {}\n-> {}",
                                 *active_params, params);
             }
 
-            *active_params = params;
+            active_params.emplace(params);
             oParams = *active_params;
 
             m_frame_ms = eco_params.llFrameDuration / 10000;

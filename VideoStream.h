@@ -92,6 +92,7 @@ class VideoStream
         int width {0};
         int height {0};
         int num_pixels {0};
+        int stride {0};
 
         bool operator==(const Params&) const = default;
     };
@@ -202,8 +203,6 @@ class VideoStream
 
     Args m_args;
     Params m_params;
-
-    enum AVPixelFormat m_sw_pix_fmt {AV_PIX_FMT_NV12};
 
     // HDR
     MasteringDisplayMetadataPtr m_display_primaries;

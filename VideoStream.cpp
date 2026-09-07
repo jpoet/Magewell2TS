@@ -275,13 +275,12 @@ bool VideoStream::open_encoder(void)
     m_encoder->codec_id = video_codec->id;
     m_encoder->width = m_params.width;
     m_encoder->height = m_params.height;
-    m_sw_pix_fmt = m_params.pix_fmt;
 
-    if (m_sw_pix_fmt != AV_PIX_FMT_NV12 &&
-        m_sw_pix_fmt != AV_PIX_FMT_P010LE)
+    if (m_params.pix_fmt != AV_PIX_FMT_NV12 &&
+        m_params.pix_fmt != AV_PIX_FMT_P010LE)
     {
         m_log->error("Unsupported input pixel format: {}",
-                     av_get_pix_fmt_name(m_sw_pix_fmt));
+                     av_get_pix_fmt_name(m_params.pix_fmt));
         return false;
     }
 
@@ -444,7 +443,7 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
      * The encoder receives AV_PIX_FMT_CUDA frames, while sw_format
      * describes the actual video pixels stored in those frames.
      *
-     * m_sw_pix_fmt will be:
+     * m_params.pix_fmt will be:
      *     AV_PIX_FMT_NV12   for normal 8-bit video
      *     AV_PIX_FMT_P010LE for HDR / forced P010
      * ---------------------------------------------------------------------
@@ -467,7 +466,7 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
         reinterpret_cast<AVHWFramesContext*>(raw_frames_ctx->data);
 
     frames_ctx->format = AV_PIX_FMT_CUDA;
-    frames_ctx->sw_format = m_sw_pix_fmt;
+    frames_ctx->sw_format = m_params.pix_fmt;
     frames_ctx->width = m_params.width;
     frames_ctx->height = m_params.height;
 
@@ -564,7 +563,7 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
                     "with CUDA frames, sw_format={}",
                     m_encoder->width,
                     m_encoder->height,
-                    av_get_pix_fmt_name(m_sw_pix_fmt));
+                    av_get_pix_fmt_name(m_params.pix_fmt));
     }
 
     return true;
@@ -659,7 +658,7 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
     frames_ctx->width = m_encoder->width;
     frames_ctx->height = m_encoder->height;
     frames_ctx->format = AV_PIX_FMT_VAAPI;
-    frames_ctx->sw_format = m_sw_pix_fmt;
+    frames_ctx->sw_format = m_params.pix_fmt;
 
     ret = av_hwframe_ctx_init(m_hw_frames_ctx.get());
 
@@ -853,7 +852,7 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     frames_ctx->width = m_encoder->width;
     frames_ctx->height = m_encoder->height;
     frames_ctx->format = AV_PIX_FMT_QSV;
-    frames_ctx->sw_format = m_sw_pix_fmt;
+    frames_ctx->sw_format = m_params.pix_fmt;
     frames_ctx->initial_pool_size = (m_args.num_threads * m_args.buffers)
                                     + m_args.extraHWframes
                                     + m_args.lookahead + 4;
@@ -1101,7 +1100,7 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
                         av_get_pix_fmt_name(static_cast<AVPixelFormat>(cpu_frame->format)),
                         cpu_frame->linesize[0], cpu_frame->linesize[1],
                         m_params.width, m_params.height,
-                        av_get_pix_fmt_name(m_sw_pix_fmt));
+                        av_get_pix_fmt_name(m_params.pix_fmt));
 
             this_thread::sleep_for(chrono::milliseconds(3));
             continue;
