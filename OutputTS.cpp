@@ -927,7 +927,7 @@ void OutputTS::process_video(void)
             m_imageQ.pop_front();
         } // lock scope
 
-        if (image.oParams.has_value())
+        if (image.oParams.has_value()) [[unlikely]]
         {
             m_log->debug("Video pipeline reconfiguring ...");
             std::scoped_lock lock(m_videoStream_mutex);

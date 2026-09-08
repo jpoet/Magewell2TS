@@ -1111,7 +1111,7 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
 
         cpu_frame->extended_data = cpu_frame->data;
 
-        if (first)
+        if (first) [[unlikely]]
         {
             // QSV's first frame transfer performs shared initialization which
             // must not be performed concurrently by multiple copy workers.
@@ -1203,7 +1203,7 @@ void VideoStream::AddImage(Image&& image)
 
     std::unique_lock workers_lock(m_workers_mutex);
 
-    if (!m_running.load() || m_workers.empty())
+    if (!m_running.load() || m_workers.empty()) [[unlikely]]
     {
         workers_lock.unlock();
         f_image_avail(image.pImage, image.pEco);
