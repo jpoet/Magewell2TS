@@ -2074,21 +2074,25 @@ void Magewell::log_stats(size_t used)
             tok = true;
         }
 
+        if (m_verbose > 2)
+        {
 #ifdef USEVIDSTATS
-        m_log->debug("Vid buffers used 1m:{:<5d} "
-                     "5m:{:<5d} 10m:{:<5d} of {:<3d} "
-                     "({})",
-                     vidpool_used_1m, *vidpool_5m_max,
-                     *vidpool_10m_max, m_image_buffers_total,
-                     extra);
+            m_log->info("Vid buffers used 1m:{:<5d} "
+                        "5m:{:<5d} 10m:{:<5d} of {:<3d} "
+                        "({})",
+                        vidpool_used_1m, *vidpool_5m_max,
+                        *vidpool_10m_max, m_image_buffers_total,
+                        extra);
 #else
-        m_log->debug("Vid buffers used 1m:{:<3d} "
-                     "5m:{:<3d} 10m:{:<3d} of {:<3d} "
-                     "({})",
-                     vidpool_used_1m, *vidpool_5m_max,
-                     *vidpool_10m_max, m_image_buffers_total,
-                     extra);
+            m_log->info("Vid buffers used 1m:{:<3d} "
+                        "5m:{:<3d} 10m:{:<3d} of {:<3d} "
+                        "({})",
+                        vidpool_used_1m, *vidpool_5m_max,
+                        *vidpool_10m_max, m_image_buffers_total,
+                        extra);
 #endif
+        }
+
         vidpool_used_1m = 0;
 
         ++vidpool_5m_idx;
