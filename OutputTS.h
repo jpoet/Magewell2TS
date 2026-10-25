@@ -88,6 +88,7 @@ class OutputTS
     std::optional<Packet> m_audio_marker;
 
     AVFormatContext* m_formatContext {nullptr};
+    AVIOContext*     m_avio          {nullptr};
 
     int64_t          m_last_dts      {0};
 
@@ -97,7 +98,7 @@ class OutputTS
     VideoStream::imageque_t m_imageQ;
     AudioStream::audioque_t m_audioQ;
 
-    bool                    m_no_audio     {true};
+    std::atomic<bool>       m_no_audio    {true};
     VideoStream::Args       m_video_args;
 
     ShutdownCallback        f_shutdown;

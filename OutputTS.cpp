@@ -217,15 +217,6 @@ OutputTS::~OutputTS(void)
     m_running.store(false);
     Shutdown();
 
-    while (!m_audioPktQ.IsEmpty())
-    {
-        auto entry = m_audioPktQ.PopValue();
-    }
-    m_audioPktQ.Shutdown();
-
-    if (m_verbose > 2)
-        m_log->info("Waiting for threads to exit.");
-
     if (m_audio_thread.joinable())
         m_audio_thread.join();
 
@@ -235,9 +226,25 @@ OutputTS::~OutputTS(void)
     if (m_mux_thread.joinable())
         m_mux_thread.join();
 
+    while (!m_audioPktQ.IsEmpty())
+    {
+        auto entry = m_audioPktQ.PopValue();
+    }
+    while (!m_videoPktQ.IsEmpty())
+    {
+        auto entry = m_videoPktQ.PopValue();
+    }
+
+    if (m_verbose > 2)
+        m_log->info("Waiting for threads to exit.");
+
     m_log->info("Releasing core resource footprints...");
 
     close_container();
+    if (m_avio != nullptr)
+    {
+        avio_closep(&m_avio);
+    }
 
     if (m_verbose > 2)
         m_log->info("Transport Stream shutdown");
@@ -251,6 +258,8 @@ void OutputTS::Shutdown(void)
 {
     if (m_running.exchange(false))
         f_shutdown();
+
+    std::unique_lock<std::mutex> cv_lock(m_pktQ_mutex);
     m_imageQ_ready.notify_all();
     m_audioQ_ready.notify_all();
     m_pktQ_ready.notify_all();
@@ -345,13 +354,18 @@ bool OutputTS::open_container(void)
 
     // Physical stream commit
     // Bind FFmpeg's I/O handle back to the active stdout stream descriptor
-    ret = avio_open(&m_formatContext->pb, "pipe:1", AVIO_FLAG_WRITE);
-    if (ret < 0)
+    // Open the stdout AVIO handle once and reuse it across container resets
+    if (m_avio == nullptr)
     {
-        m_log->error("Failed to bind physical stdout descriptor pipe: {}",
-                     AVerr2str(ret));
-        return false;
+        ret = avio_open(&m_avio, "pipe:1", AVIO_FLAG_WRITE);
+        if (ret < 0)
+        {
+            m_log->error("Failed to bind physical stdout descriptor pipe: {}",
+                         AVerr2str(ret));
+            return false;
+        }
     }
+    m_formatContext->pb = m_avio;
 
     if (m_verbose > 0)
     {
@@ -393,31 +407,16 @@ void OutputTS::close_container(void)
 {
     if (m_formatContext != nullptr)
     {
-        // If headers were written successfully, write the final
-        // MPEG-TS trailer block.  This transmits crucial trailing PSI
-        // data tables down the stdout pipe.
+        // Write final MPEG-TS trailer block
         av_write_trailer(m_formatContext);
 
         if (m_formatContext->pb != nullptr)
         {
-            // Flush any remaining buffered bytes out to the Linux
-            // kernel pipe.
             avio_flush(m_formatContext->pb);
-
-            // CRITICAL FOR STDOUT: Explicitly free the private AVIO
-            // context buffer without closing the underlying system
-            // File Descriptor 1 (stdout).
-            av_freep(&m_formatContext->pb->buffer);
-            av_free(m_formatContext->pb);
-
-            // Set the pointer to nullptr so FFmpeg's structural
-            // clean-up code knows it doesn't need to try and close a
-            // file handle.
+            // Detach m_avio so we can reuse it on the next open_container()
             m_formatContext->pb = nullptr;
         }
 
-        // Safely free the root context, structural streams, and
-        // parameters.
         avformat_free_context(m_formatContext);
         m_formatContext = nullptr;
     }
@@ -548,7 +547,7 @@ bool OutputTS::EncodeFrame(int stream_id, int version,
 #endif
         if (ret == 0)
         {
-            ret = queue_packets(stream_id, version,
+            bool ok = queue_packets(stream_id, version,
                                 enc, pktQ, false);
 #ifdef LOG_ELAPSED
             chrono::steady_clock::time_point queue_end
@@ -566,8 +565,9 @@ bool OutputTS::EncodeFrame(int stream_id, int version,
                              encode_dur.count(), queue_dur.count());
             }
 #endif
+            std::unique_lock<std::mutex> cv_lock(m_pktQ_mutex);
             m_pktQ_ready.notify_all();
-            return ret;
+            return ok;
         }
 
         if (ret == AVERROR(EAGAIN))
@@ -719,6 +719,7 @@ void OutputTS::mux(void)
         if (targetQ->PeekMarker())
         {
             sync_markers();
+            prev_state = {};
             continue;
         }
 
@@ -822,24 +823,29 @@ int OutputTS::AddMarker(Marker&& marker, int64_t timestamp)
     {
         m_log->trace("AddMarker: Audio");
         version = packet.version =
-                  m_audio_latest_version.fetch_add(1, std::memory_order_relaxed) + 1;
+                  m_audio_latest_version.fetch_add(1, std::memory_order_relaxed)
+                  + 1;
         m_audioPktQ.Push(std::move(packet));
     }
     else if (stream_id == VIDEO_STREAM_ID)
     {
         m_log->trace("AddMarker: Video");
         version = packet.version =
-                  m_video_latest_version.fetch_add(1, std::memory_order_relaxed) + 1;
+                  m_video_latest_version.fetch_add(1, std::memory_order_relaxed)
+                  + 1;
         m_videoPktQ.Push(std::move(packet));
     }
     else
         version = -1;
+
+    std::unique_lock<std::mutex> cv_lock(m_pktQ_mutex);
     m_pktQ_ready.notify_one();
     return version;
 }
 
 void OutputTS::AddAudioPkt(Packet&& pkt)
 {
+    std::unique_lock<std::mutex> cv_lock(m_pktQ_mutex);
     m_audioPktQ.Push(std::move(pkt));
     m_pktQ_ready.notify_one();
 }
@@ -947,7 +953,15 @@ void OutputTS::process_video(void)
             m_videoStream->AddImage(std::move(image));
     }
 
-    std::scoped_lock lock(m_videoStream_mutex);
+    std::scoped_lock imlock(m_imageQ_mutex);
+    while (!m_imageQ.empty())
+    {
+        auto img = std::move(m_imageQ.front());
+        m_imageQ.pop_front();
+        f_image_avail(img.pImage, img.pEco);
+    }
+
+    std::scoped_lock vslock(m_videoStream_mutex);
     m_videoStream.reset();
     m_log->info("process_video thread exited.");
 }
