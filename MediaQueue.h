@@ -3,15 +3,11 @@
 
 #include <queue>
 #include <deque>
-#include <vector>
-#include <algorithm>
 
 #include <mutex>
 #include <optional>
 #include <utility>
 #include <cstdint>
-#include <condition_variable>
-#include <concepts>
 
 #include "ffmpeg_types.h"
 
@@ -56,7 +52,7 @@ class MediaQueue
 
     std::optional<Packet> PopValue()
     {
-        std::unique_lock<std::mutex> lock(m_mutex);
+        std::scoped_lock lock(m_mutex);
 
         if (m_queue.empty())
         {
@@ -68,16 +64,10 @@ class MediaQueue
         return value;
     }
 
-    bool IsEmpty()
+    bool IsEmpty() const
     {
         std::scoped_lock lock(m_mutex);
-
-        // A bit of a hack, but it works.
-        if (m_queue.empty())
-        {
-            return true;
-        }
-        return false;
+        return m_queue.empty();
     }
 
     size_t GetSize() const
@@ -89,7 +79,7 @@ class MediaQueue
     int64_t PeekDts() const
     {
         std::scoped_lock lock(m_mutex);
-        if (m_queue.empty())
+        if (m_queue.empty() || !m_queue.front().pkt)
             return AV_NOPTS_VALUE;
 
         return m_queue.front().pkt->dts;
@@ -98,7 +88,7 @@ class MediaQueue
     int64_t PeekPts() const
     {
         std::scoped_lock lock(m_mutex);
-        if (m_queue.empty())
+        if (m_queue.empty() || !m_queue.front().pkt)
             return AV_NOPTS_VALUE;
 
         return m_queue.front().pkt->pts;
@@ -122,25 +112,16 @@ class MediaQueue
         return m_queue.front().marker.has_value();
     }
 
-    void Shutdown()
-    {
-        std::scoped_lock lock(m_mutex);
-        m_isShutdown = true;
-    }
-
     void Reset()
     {
-        std::scoped_lock lock(m_mutex);
-
-        // This clean pattern works for swapping out BOTH types of containers
         decltype(m_queue) emptyQueue;
-        std::swap(m_queue, emptyQueue);
-
-        m_isShutdown = false;
+        {
+            std::scoped_lock lock(m_mutex);
+            std::swap(m_queue, emptyQueue);
+        }
     }
 
   private:
     std::queue<Packet> m_queue;
     mutable std::mutex m_mutex;
-    bool m_isShutdown{ false };
 };

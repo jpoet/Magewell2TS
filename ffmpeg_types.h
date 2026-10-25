@@ -26,17 +26,17 @@ extern "C" {
 
 inline std::string AV_ts2str(int64_t ts)
 {
-    char buf[AV_ERROR_MAX_STRING_SIZE] {};
+    char buf[AV_TS_MAX_STRING_SIZE] {};
     av_ts_make_string(buf, ts);
     return buf;
 }
 
 inline std::string AV_ts2timestr(int64_t ts, const AVRational* tb)
 {
-    if (!tb || tb->num == 0)
-    {
+    if (ts == AV_NOPTS_VALUE)
+        return "NOPTS";
+    if (!tb || tb->num == 0 || tb->den == 0)
         return "0.00";
-    }
 
     return format("{:.2f}", av_q2d(*tb) * ts);
 }
@@ -91,41 +91,6 @@ template<auto FreeFn>
     }
 };
 
-struct AVBufferRefDeleter
-{
-    void operator()(AVBufferRef* ref) const noexcept
-    {
-        av_buffer_unref(&ref);
-    }
-};
-
-struct AVAudioFifoDeleter
-{
-    void operator()(AVAudioFifo* fifo) const noexcept
-    {
-        if (fifo)
-        {
-            av_audio_fifo_free(fifo);
-        }
-    }
-};
-
-struct MasteringDisplayMetadataDeleter
-{
-    void operator()(AVMasteringDisplayMetadata* p) const noexcept
-    {
-        av_free(p);
-    }
-};
-
-struct ContentLightMetadataDeleter
-{
-    void operator()(AVContentLightMetadata* p) const noexcept
-    {
-        av_free(p);
-    }
-};
-
 using InputFormatContextPtr =
     std::unique_ptr<
         AVFormatContext,
@@ -171,25 +136,17 @@ using SwrContextPtr =
         SwrContext,
         FFmpegDoublePtrDeleter<swr_free>>;
 
-using AudioFifoPtr =
-    std::unique_ptr<
-        AVAudioFifo,
-        AVAudioFifoDeleter>;
+using AudioFifoPtr = std::unique_ptr<AVAudioFifo,
+                                     FFmpegPtrDeleter<av_audio_fifo_free>>;
 
-using BufferRefPtr =
-    std::unique_ptr<
-        AVBufferRef,
-        AVBufferRefDeleter>;
+using BufferRefPtr = std::unique_ptr<AVBufferRef,
+                                     FFmpegDoublePtrDeleter<av_buffer_unref>>;
 
-using MasteringDisplayMetadataPtr =
-    std::unique_ptr<
-        AVMasteringDisplayMetadata,
-        MasteringDisplayMetadataDeleter>;
+using MasteringDisplayMetadataPtr = std::unique_ptr<AVMasteringDisplayMetadata,
+                                                    FFmpegPtrDeleter<av_free>>;
 
-using ContentLightMetadataPtr =
-    std::unique_ptr<
-        AVContentLightMetadata,
-        ContentLightMetadataDeleter>;
+using ContentLightMetadataPtr = std::unique_ptr<AVContentLightMetadata,
+                                                FFmpegPtrDeleter<av_free>>;
 
 inline CodecParamsPtr make_codec_params()
 {
@@ -254,20 +211,6 @@ inline ContentLightMetadataPtr
     return ContentLightMetadataPtr(av_content_light_metadata_alloc(nullptr));
 }
 
-
-/*
-  Shared version of AVCodecContext
-*/
-struct AVCodecContextSharedDeleter
-{
-    void operator()(AVCodecContext* ctx) const noexcept
-    {
-        if (ctx)
-            avcodec_free_context(&ctx);
-    }
-};
-
-
 using SharedCodecContextPtr = std::shared_ptr<AVCodecContext>;
 
 // helper to instantiate a shared context variant
@@ -275,5 +218,5 @@ inline SharedCodecContextPtr make_shared_codec_context
   (const AVCodec* codec = nullptr)
 {
     return SharedCodecContextPtr(avcodec_alloc_context3(codec),
-                                 AVCodecContextSharedDeleter{});
+                                 FFmpegDoublePtrDeleter<avcodec_free_context>{});
 }
