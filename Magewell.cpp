@@ -545,6 +545,7 @@ void Magewell::ListInputs(void)
         if (MW_SUCCEEDED != MWGetChannelInfo(hChannel, &channelInfo))
         {
             m_log->error("failed to get channel info for input {}", idx);
+            MWCloseChannel(hChannel);
             continue;
         }
 
@@ -596,7 +597,7 @@ void Magewell::ListInputs(void)
  * @param cnt Number of channels to wait for
  * @return true if channels are available, false otherwise
  */
-bool Magewell::WaitForInputs(int cnt) const
+bool Magewell::WaitForInputs(int cnt)
 {
     int idx = 10;
 
@@ -649,7 +650,7 @@ bool Magewell::OpenChannel(int devIndex, double boardId)
     else
     {
         // Check if requested index is valid
-        if (channel_cnt < devIndex)
+        if (devIndex >= channel_cnt || devIndex < 0)
         {
             m_log->error("Only {} input channels detected. "
                          "Cannot open input {}",
@@ -668,6 +669,7 @@ bool Magewell::OpenChannel(int devIndex, double boardId)
     {
         m_log->error("Failed to open input channel {}:{}",
                      boardId, devIndex + 1);
+        return false;
     }
 
     m_channel_idx = devIndex;
@@ -932,7 +934,7 @@ void Magewell::capture_audio_loop(void)
     int       even_bytes_per_sample = 0;
     WORD      valid_channels = 0;
     MWCAP_PTR notify_event = 0;
-    int       eco_event = 0;
+    int       eco_event = -1;
     HNOTIFY   notify_audio = 0;
     DWORD     input_count = 0;
 
@@ -1053,8 +1055,23 @@ void Magewell::capture_audio_loop(void)
                 continue;
             }
 
+            valid_channels = audio_signal_status.wChannelValid;
+
+            params.is_lpcm          = audio_signal_status.bLPCM;
+            params.sample_rate      = audio_signal_status.dwSampleRate;
+            params.bits_per_sample  = audio_signal_status.cBitsPerSample;
+
+            bool maybe_MAT = (valid_channels == 0x0F &&
+                              params.sample_rate == 192000);
+
+            if (maybe_MAT)
+            {
+                m_log->warn("Might be MAT audio");
+                params.is_lpcm = false;
+            }
+
             // Check if audio signal is valid
-            if (!audio_signal_status.bChannelStatusValid)
+            if (!audio_signal_status.bChannelStatusValid && !maybe_MAT)
             {
                 if (good_signal && m_verbose > 0 && ++err_cnt % 100 == 0)
                 {
@@ -1067,14 +1084,9 @@ void Magewell::capture_audio_loop(void)
             good_signal = true;
 
             // Handle parameter changes
-            valid_channels = audio_signal_status.wChannelValid;
             even_bytes_per_sample = audio_signal_status.cBitsPerSample / 8;
             if (even_bytes_per_sample > 2)
                 even_bytes_per_sample = 4;
-
-            params.is_lpcm          = audio_signal_status.bLPCM;
-            params.sample_rate      = audio_signal_status.dwSampleRate;
-            params.bits_per_sample  = audio_signal_status.cBitsPerSample;
             params.bytes_per_sample = even_bytes_per_sample;
 
             params.num_channels = 0;
@@ -1336,7 +1348,7 @@ void Magewell::capture_audio_loop(void)
         notify_audio = 0;
     }
 
-    if (eco_event)
+    if (eco_event >= 0)
     {
         eventfd_write(eco_event, 1);
         close(eco_event);
@@ -1366,25 +1378,11 @@ void Magewell::capture_audio(void)
 bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
                               VideoStream::ColorSpace& color)
 {
-    unsigned int uiValidFlag = 0;
-    if (MW_SUCCEEDED != MWGetHDMIInfoFrameValidFlag(m_channel, &uiValidFlag))
-    {
-        if (m_verbose > 2)
-            m_log->info("Not a HDMI info frame");
-        return false;
-    }
+    color.is_HDR        = false;
+    color.has_primaries = false;
+    color.has_luminance = false;
 
-    if (0 == uiValidFlag)
-    {
-        if (m_verbose > 2)
-            m_log->info("No HDMI InfoFrame!");
-        return false;
-    }
-
-    HDMI_INFOFRAME_PACKET info_packet;
-    HDMI_HDR_INFOFRAME_PAYLOAD& hdr_info = info_packet.hdrInfoFramePayload;
-
-    // CHOOSE COLOR RANGE QUANTIZATION SPECTRUM
+    // 1. Choose color range quantization spectrum
     if (signal_status.quantRange == MWCAP_VIDEO_QUANTIZATION_FULL)
     {
         color.range = AVCOL_RANGE_JPEG; // Full 0-255 range mapping
@@ -1393,6 +1391,29 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
     {
         // Default fallback (MWCAP_VIDEO_QUANTIZATION_LIMITED or UNKNOWN)
         color.range = AVCOL_RANGE_MPEG; // Limited broadcast range
+    }
+
+    unsigned int uiValidFlag = 0;
+    bool has_infoframe = (MW_SUCCEEDED == MWGetHDMIInfoFrameValidFlag(m_channel, &uiValidFlag))
+                         && (uiValidFlag != 0);
+
+    if (!has_infoframe && m_verbose > 2)
+    {
+        m_log->info("No valid HDMI InfoFrame!");
+    }
+
+    HDMI_INFOFRAME_PACKET info_packet{};
+    HDMI_HDR_INFOFRAME_PAYLOAD& hdr_info = info_packet.hdrInfoFramePayload;
+
+    bool has_hdr_packet = false;
+    if (has_infoframe && (uiValidFlag & MWCAP_HDMI_INFOFRAME_MASK_HDR))
+    {
+        if (MW_SUCCEEDED == MWGetHDMIInfoFramePacket(m_channel,
+                                                     MWCAP_HDMI_INFOFRAME_ID_HDR,
+                                                     &info_packet))
+        {
+            has_hdr_packet = true;
+        }
     }
 
     // DISPATCH SUB-COLOR METADATA SPACES
@@ -1408,27 +1429,32 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
         color.primaries = AVCOL_PRI_BT709;
         color.trc       = AVCOL_TRC_BT709;
     }
-    else if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV2020)
+    else if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV2020 ||
+             signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV2020C)
     {
-        // Get HDR info frame
-        if (MW_SUCCEEDED != MWGetHDMIInfoFramePacket(m_channel,
-                                                     MWCAP_HDMI_INFOFRAME_ID_HDR,
-                                                     &info_packet))
-            return false;
-
-        color.space     = AVCOL_SPC_BT2020_NCL;
+        color.space = (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV2020C)
+                      ? AVCOL_SPC_BT2020_CL
+                      : AVCOL_SPC_BT2020_NCL;
         color.primaries = AVCOL_PRI_BT2020;
-        switch (static_cast<int>(hdr_info.byEOTF))
+
+        if (has_hdr_packet)
         {
-            case 2: // HDR10 / PQ
-              color.trc = AVCOL_TRC_SMPTE2084;
-              break;
-            case 3: // HLG
-              color.trc = AVCOL_TRC_ARIB_STD_B67;
-              break;
-            default: // Standard Dynamic Range BT.2020
-              color.trc = AVCOL_TRC_BT2020_10;
-              break;
+            switch (hdr_info.byEOTF)
+            {
+                case HDMI_EOTF_ST2084_PQ: // 2: HDR10 / PQ
+                    color.trc = AVCOL_TRC_SMPTE2084;
+                    break;
+                case HDMI_EOTF_HLG:       // 3: HLG
+                    color.trc = AVCOL_TRC_ARIB_STD_B67;
+                    break;
+                default:                  // SDR BT.2020
+                    color.trc = AVCOL_TRC_BT2020_10;
+                    break;
+            }
+        }
+        else
+        {
+            color.trc = AVCOL_TRC_BT2020_10;
         }
     }
     else if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_RGB)
@@ -1438,30 +1464,33 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
         color.trc       = AVCOL_TRC_IEC61966_2_1;
         color.range     = AVCOL_RANGE_JPEG;
     }
+    else
+    {
+        color.space = AVCOL_SPC_UNSPECIFIED;
+        color.primaries = AVCOL_PRI_UNSPECIFIED;
+        color.trc = AVCOL_TRC_UNSPECIFIED;
+    }
 
     const char* range_name = av_color_range_name(color.range);
     const char* space_name = av_color_space_name(color.space);
     const char* trc_name   = av_color_transfer_name(color.trc);
 
     std::string r_str = (range_name && color.range != AVCOL_RANGE_UNSPECIFIED)
-                        ? range_name
-                        : "unk";
+                        ? range_name : "unk";
     std::string s_str = (space_name && color.space != AVCOL_SPC_UNSPECIFIED)
-                        ? space_name
-                        : "unk";
+                        ? space_name : "unk";
     std::string t_str = (trc_name   && color.trc   != AVCOL_TRC_UNSPECIFIED)
-                        ? trc_name
-                        : "unk";
+                        ? trc_name   : "unk";
 
-    // Example output: "SDR | Space:bt709 | TRC:bt709 | Rng:tv"
+    // Default SDR description before checking HDR Mastering InfoFrame
     color.description = format("SDR | Space:{} | TRC:{} | Rng:{}",
                                s_str, t_str, r_str);
 
-    if (0 == (uiValidFlag & MWCAP_HDMI_INFOFRAME_MASK_HDR))
+    // 4. Verify we actually have an HDR10 or HLG InfoFrame packet
+    if (!has_hdr_packet)
     {
         return false;
     }
-
 
     if (hdr_info.byEOTF != HDMI_EOTF_ST2084_PQ &&
         hdr_info.byEOTF != HDMI_EOTF_HLG)
@@ -1710,7 +1739,6 @@ void Magewell::eco_image_buffer_available(uint8_t* pbImage, void* buf)
     {
         m_log->error("buffer_avail: Failed to Q the Eco frame. avail {}",
                      m_image_buffers_avail);
-        delete pEco;
         pEco = nullptr;
     }
 
@@ -1892,6 +1920,7 @@ bool Magewell::register_eco_image_buffers(void)
         ++idx;
     }
 
+    std::scoped_lock lock(m_image_buffer_mutex);
     m_image_buffers_avail = m_image_buffers_total = m_image_buffers;
     return true;
 }
@@ -1935,6 +1964,7 @@ bool Magewell::create_pro_image_buffers(void)
         }
     }
 
+    std::scoped_lock lock(m_image_buffer_mutex);
     m_image_buffers_avail = m_image_buffers_total = m_image_buffers;
     return true;
 }
@@ -2202,8 +2232,11 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         pbImage = reinterpret_cast<uint8_t *>(eco_status.pvFrame);
         timestamp = eco_status.llTimestamp;
         ++m_frame_cnt;
-        --m_image_buffers_avail;
-        used = m_image_buffers_total - m_image_buffers_avail;
+        {
+            std::scoped_lock lock(m_image_buffer_mutex);
+            --m_image_buffers_avail;
+            used = m_image_buffers_total - m_image_buffers_avail;
+        }
 
         if (m_expected_ts == -1 && timestamp < 0)
         {
@@ -2522,7 +2555,10 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                   eco_params.cy);
 
         ++m_frame_cnt;
-        --m_image_buffers_avail;
+        {
+            std::scoped_lock lock(m_image_buffer_mutex);
+            --m_image_buffers_avail;
+        }
 
         if (result != MW_SUCCEEDED)
         {
@@ -2789,7 +2825,7 @@ bool Magewell::capture_video(void)
             {
                 if (m_verbose > 0)
                 {
-                    m_log->warn("Audio parameters failed to stabilize "
+                    m_log->warn("Video parameters failed to stabilize "
                                 "after {}ms. Forcing fall-through evaluation.",
                                 discovery_duration.count());
                 }
@@ -2917,7 +2953,7 @@ bool Magewell::capture_video(void)
     if (m_isEco)
     {
         close_eco_video();
-        if (eco_event)
+        if (eco_event >= 0)
         {
             eventfd_write(eco_event, 1);
             close(eco_event);
@@ -3019,21 +3055,24 @@ bool Magewell::Capture(VideoStream::Args&& video_args,
 
     if (realtime)
     {
-        struct sched_param audio_param;
-        audio_param.sched_priority = 20;
-        int a_result = pthread_setschedparam(m_audio_thread.native_handle(),
-                                             SCHED_RR, &audio_param);
-        if (a_result != 0)
+        if (!no_audio)
         {
-            m_log->warn("Failed to set Audio real-time priority. "
-                        "Error: {} Code: {}",
-                        std::strerror(a_result),
-                        a_result);
-        }
-        else
-        {
-            m_log->info("Audio thread isolated at SCHED_RR priority {}.",
-                        audio_param.sched_priority);
+            struct sched_param audio_param;
+            audio_param.sched_priority = 20;
+            int a_result = pthread_setschedparam(m_audio_thread.native_handle(),
+                                                 SCHED_RR, &audio_param);
+            if (a_result != 0)
+            {
+                m_log->warn("Failed to set Audio real-time priority. "
+                            "Error: {} Code: {}",
+                            std::strerror(a_result),
+                            a_result);
+            }
+            else
+            {
+                m_log->info("Audio thread isolated at SCHED_RR priority {}.",
+                            audio_param.sched_priority);
+            }
         }
 
         struct sched_param video_param;
@@ -3083,6 +3122,7 @@ void Magewell::Shutdown(void)
             const char* msg = "Magewell::Shutdown\n";
             write(STDERR_FILENO, msg, strlen(msg));
         }
-        m_out2ts->Shutdown();
+        if (m_out2ts)
+            m_out2ts->Shutdown();
     }
 }

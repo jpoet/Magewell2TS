@@ -100,7 +100,7 @@ void show_help(string_view app)
          << "--preset (-p)      : encoder preset\n"
          << "--p010             : Force p010 (10bit) video format\n"
          << "--b-frames         : Use B-Frames [0]\n"
-         << "--gop_secs (-g)    : GOP size in seconds [1.5] (0 to disable)\n"
+         << "--gop-secs (-g)    : GOP size in seconds [1.5] (0 to disable)\n"
          << "--idr-interval     : Frequency that keyframe will be IDR [0]\n"
          << "--copy-threads (-t) : Number of GPU copy threads [2]\n"
          << "--video-buffers    : Video buffers count (RAM) [20]\n"
@@ -289,17 +289,16 @@ int main(int argc, char* argv[])
     int         video_buffers = 20;
     VideoStream::Args  video_args;
 
-
     // Attempt to set output PIPE to 1 Megabyte
+    constexpr size_t BUFFER_SIZE = 100 * 1024 * 1024;
+    std::vector<char> buffer(BUFFER_SIZE);
+
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     int max_pipe_size = 1048576;
     // Force the STDOUT file descriptor pipe buffer to expand
     if (fcntl(STDOUT_FILENO, F_SETPIPE_SZ, max_pipe_size) < 0)
     {
         // Could not set pipe size, so must be file mode.
-        constexpr size_t BUFFER_SIZE = 100 * 1024 * 1024;
-        std::vector<char> buffer(BUFFER_SIZE);
-
         // Set stdout to use this buffer (fully buffered)
         if (std::setvbuf(stdout, buffer.data(), _IOFBF, BUFFER_SIZE) != 0)
         {
@@ -414,7 +413,7 @@ int main(int argc, char* argv[])
                 exit(1);
             settle_time = chrono::milliseconds(ms);
         }
-        else if (*iter == "-t" || *iter == "--copy_threads")
+        else if (*iter == "-t" || *iter == "--copy-threads")
         {
             if (!string_to_int(*(++iter), video_args.num_threads,
                                "Copy threads"))
@@ -485,7 +484,7 @@ int main(int argc, char* argv[])
     logger->critical(argstr);
 
     g_mw = new Magewell;
-    if (!g_mw)
+    if (!(*g_mw))
         return -1;
     g_mw->Verbose(verbose_level);
 

@@ -76,7 +76,7 @@ class Magewell
      * @param cnt Number of channels to wait for
      * @return true if channels are available, false otherwise
      */
-    bool WaitForInputs(int cnt) const;
+    static bool WaitForInputs(int cnt);
 
     /**
      * @brief Read EDID information from the device
