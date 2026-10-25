@@ -249,7 +249,11 @@ template <>
               color = "YUV709";
               break;
             case AVCOL_SPC_BT2020_NCL:
+            case AVCOL_SPC_BT2020_CL:
               color = "YUV2020";
+              break;
+            case AVCOL_SPC_RGB:
+              color = "RGB";
               break;
             default:
               break;

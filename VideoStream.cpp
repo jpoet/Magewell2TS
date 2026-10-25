@@ -50,6 +50,7 @@ VideoStream::VideoStream(OutputTS& parent, int verbose_level, Args& args,
         m_encoderType = EncoderType::UNKNOWN;
         m_log->error("Failed to open video encoder.");
         Shutdown();
+        return;
     }
 
     Marker marker {
@@ -221,12 +222,32 @@ void VideoStream::stop_work(void)
  */
 void VideoStream::set_light(const ColorSpace& color)
 {
-    m_display_primaries->has_primaries = false;
-    m_display_primaries->has_luminance = false;
+    m_display_primaries->has_primaries = color.has_primaries ? 1 : 0;
+    m_display_primaries->has_luminance = color.has_luminance ? 1 : 0;
 
-    std::copy(&color.display_primaries[0][0],
-              &color.display_primaries[0][0] + (3 * 2),
-              &m_display_primaries->display_primaries[0][0]);
+    // Magewell CTA-861 order: 0 = Green, 1 = Blue, 2 = Red
+    constexpr size_t MW_G = 0, MW_B = 1, MW_R = 2;
+    // FFmpeg order:           0 = Red,   1 = Green, 2 = Blue
+    constexpr size_t FF_R = 0, FF_G = 1, FF_B = 2;
+    constexpr size_t X = 0, Y = 1;
+
+    // Red (FFmpeg 0 <- Magewell 2)
+    m_display_primaries->display_primaries[FF_R][X] =
+        color.display_primaries[MW_R][X];
+    m_display_primaries->display_primaries[FF_R][Y] =
+        color.display_primaries[MW_R][Y];
+
+    // Green (FFmpeg 1 <- Magewell 0)
+    m_display_primaries->display_primaries[FF_G][X] =
+        color.display_primaries[MW_G][X];
+    m_display_primaries->display_primaries[FF_G][Y] =
+        color.display_primaries[MW_G][Y];
+
+    // Blue (FFmpeg 2 <- Magewell 1)
+    m_display_primaries->display_primaries[FF_B][X] =
+        color.display_primaries[MW_B][X];
+    m_display_primaries->display_primaries[FF_B][Y] =
+        color.display_primaries[MW_B][Y];
 
     std::copy(std::begin(color.white_point),
               std::end(color.white_point),
@@ -235,7 +256,7 @@ void VideoStream::set_light(const ColorSpace& color)
     m_display_primaries->max_luminance = color.max_luminance;
     m_display_primaries->min_luminance = color.min_luminance;
 
-    m_content_light->MaxCLL = color.MaxCLL;
+    m_content_light->MaxCLL  = color.MaxCLL;
     m_content_light->MaxFALL = color.MaxFALL;
 }
 
@@ -264,7 +285,7 @@ bool VideoStream::open_encoder(void)
         return false;
     }
 
-    m_encoder = make_codec_context(video_codec);
+    m_encoder = make_shared_codec_context(video_codec);
     if (!m_encoder)
     {
         m_log->error("Failed to allocate unique video encoding context.");
@@ -286,11 +307,10 @@ bool VideoStream::open_encoder(void)
 
     m_encoder->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 
-    AVRational encoder_fps = AVRational
-                             {
-                                 m_params.frame_duration.den,
-                                 m_params.frame_duration.num
-                             };
+    AVRational encoder_fps = AVRational {
+        m_params.frame_duration.den,
+        m_params.frame_duration.num
+    };
 
     // Reduces the fraction while preserving accuracy within a safe limit
     av_reduce(&encoder_fps.num, &encoder_fps.den,
@@ -420,9 +440,15 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
     {
         AVBufferRef* raw_hw_ctx = nullptr;
 
+        std::string device;
+        if (m_args.device.empty() || m_args.device.starts_with("renderD"))
+            device = "0";
+        else
+            device = m_args.device;
+
         ret = av_hwdevice_ctx_create(&raw_hw_ctx,
                                      AV_HWDEVICE_TYPE_CUDA,
-                                     m_args.device.c_str(),
+                                     device.c_str(),
                                      nullptr,
                                      0);
 
@@ -589,24 +615,6 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
 
     av_dict_set_int(&opt, "bf", m_args.bframes, 0);
     av_opt_set_int(m_encoder->priv_data, "async_depth", 4, 0);
-
-    if (m_args.gopSecs > 0)
-    {
-        AVRational encoder_fps = AVRational {
-            m_params.frame_duration.den,
-            m_params.frame_duration.num
-        };
-
-        // Reduces the fraction while preserving accuracy within a safe limit
-        av_reduce(&encoder_fps.num, &encoder_fps.den,
-                  m_params.frame_duration.den, m_params.frame_duration.num,
-                  INT_MAX);
-
-        m_encoder->gop_size =
-            static_cast<int>((static_cast<double>(encoder_fps.num) /
-                              static_cast<double>(encoder_fps.den)) *
-                             static_cast<double>(m_args.gopSecs) + 0.5);
-    }
 
     string child_device = "/dev/dri/" + m_args.device;
 
@@ -893,7 +901,7 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     ret = avcodec_open2(m_encoder.get(), codec, nullptr);
     if (ret < 0)
     {
-        m_log->error("Fatal Error: Intel QSV codec activation failed: ",
+        m_log->error("Fatal Error: Intel QSV codec activation failed: {}",
                      AVerr2str(ret));
         Shutdown();
         return false;
@@ -936,6 +944,8 @@ void VideoStream::encode_frames_loop(void)
 
             hw_frame = std::move(worker.frames.front());
             worker.frames.pop_front();
+            if (hw_frame == nullptr)
+                continue;
         }
 #ifdef LOG_ELAPSED
         chrono::steady_clock::time_point work_end =
@@ -1023,13 +1033,22 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
             worker.images.pop_front();
         }
 
-        FramePtr hw = make_frame();
+        // Helper lambda: ONLY runs when called inside an error 'if' block below
+        auto drop_image = [&]() {
+            f_image_avail(image.pImage, image.pEco);
+            {
+                std::scoped_lock lock(worker.mtx);
+                worker.frames.push_back(nullptr);
+            }
+            worker.frame_avail.notify_all();
+        };
 
+        FramePtr hw = make_frame();
         if (!hw)
         {
             m_log->error("{} failed to allocate hardware frame wrapper.",
                          worker.name);
-            f_image_avail(image.pImage, image.pEco);
+            drop_image();
             continue;
         }
 
@@ -1058,7 +1077,7 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
 
         if (ret < 0)
         {
-            f_image_avail(image.pImage, image.pEco);
+            drop_image();
             continue;
         }
 
@@ -1066,7 +1085,7 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
         if (!cpu_frame)
         {
             m_log->warn("Failed to allocate local CPU frame wrapper.");
-            f_image_avail(image.pImage, image.pEco);
+            drop_image();
             continue;
         }
 
@@ -1086,7 +1105,7 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
         {
             m_log->error("{} failed to setup CPU frame: {}",
                          worker.name, AVerr2str(ret));
-            f_image_avail(image.pImage, image.pEco);
+            drop_image();
             continue;
         }
 
@@ -1105,7 +1124,7 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
                          worker.name,
                          av_get_pix_fmt_name(static_cast<AVPixelFormat>
                                              (cpu_frame->format)));
-            f_image_avail(image.pImage, image.pEco);
+            drop_image();
             continue;
         }
 
@@ -1117,17 +1136,37 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
             // must not be performed concurrently by multiple copy workers.
             std::lock_guard lock(m_transfer_mutex);
             ret = av_hwframe_transfer_data(hw.get(), cpu_frame.get(), 0);
-
-            if (ret < 0)
-            {
-                f_image_avail(image.pImage, image.pEco);
-                continue;
-            }
-            first = false;
+            if (ret == 0)
+                first = false;
         }
         else
         {
             ret = av_hwframe_transfer_data(hw.get(), cpu_frame.get(), 0);
+        }
+
+        if (ret < 0) [[unlikely]]
+        {
+            m_log->warn("DAMAGED: {} av_hwframe_transfer_data failed: "
+                        "{}", worker.name, AVerr2str(ret));
+
+            m_log->warn("{} transfer failed: "
+                        "ctx={}x{} sw={} | "
+                        "hw={}x{} | "
+                        "cpu={}x{} fmt={} ls={}/{} | "
+                        "params={}x{} m_sw={}",
+                        worker.name,
+                        hw_ctx->width, hw_ctx->height,
+                        av_get_pix_fmt_name(static_cast<AVPixelFormat>(hw_ctx->sw_format)),
+                        hw->width, hw->height,
+                        cpu_frame->width, cpu_frame->height,
+                        av_get_pix_fmt_name(static_cast<AVPixelFormat>(cpu_frame->format)),
+                        cpu_frame->linesize[0], cpu_frame->linesize[1],
+                        m_params.width, m_params.height,
+                        av_get_pix_fmt_name(m_params.pix_fmt));
+
+            this_thread::sleep_for(chrono::milliseconds(3));
+            drop_image();
+            continue;
         }
 
         f_image_avail(image.pImage, image.pEco);
