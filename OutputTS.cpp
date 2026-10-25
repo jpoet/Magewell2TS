@@ -293,6 +293,10 @@ bool OutputTS::open_container(void)
 {
     close_container();
 
+    // Protect against slight chance of a race condition.
+    if (!m_video_marker.has_value())
+        return false;
+
     if (m_verbose > 1)
         m_log->info("================ open container begin ================");
 
@@ -692,15 +696,12 @@ void OutputTS::mux(void)
         {
             std::unique_lock<std::mutex> cv_lock(m_pktQ_mutex);
             m_pktQ_ready.wait(cv_lock, [this] {
-                return !m_running || !m_videoPktQ.IsEmpty();
+                return !m_running.load() ||
+                    (!m_videoPktQ.IsEmpty() && (m_no_audio ||
+                                                !m_audioPktQ.IsEmpty()));
             });
-        }
-
-        if (m_videoPktQ.IsEmpty() || (!m_no_audio && m_audioPktQ.IsEmpty()))
-        {
             if (!m_running.load())
-                break; // shutdown
-            continue; // Catch spurious wakeups
+                break;
         }
 
         auto* targetQ = &m_videoPktQ;
@@ -720,6 +721,9 @@ void OutputTS::mux(void)
             sync_markers();
             continue;
         }
+
+        if (m_formatContext == nullptr)
+            continue;
 
         std::optional<Packet> outPkt = targetQ->PopValue();
         if (!outPkt || !outPkt->pkt)
@@ -805,6 +809,7 @@ int OutputTS::AddMarker(Marker&& marker, int64_t timestamp)
                                           TimeBase::Magewell,
                                           TimeBase::MPEG_TS);
 
+    int stream_id = marker.stream_id;
     packet.marker = std::move(marker);
     packet.pkt = make_packet();
     packet.pkt->pts = marker_dts_pts;
@@ -813,14 +818,14 @@ int OutputTS::AddMarker(Marker&& marker, int64_t timestamp)
     int version;
 
     // Note: fetch_add returns the previous value, so incr it.
-    if (marker.stream_id == AUDIO_STREAM_ID)
+    if (stream_id == AUDIO_STREAM_ID)
     {
         m_log->trace("AddMarker: Audio");
         version = packet.version =
                   m_audio_latest_version.fetch_add(1, std::memory_order_relaxed) + 1;
         m_audioPktQ.Push(std::move(packet));
     }
-    else if (marker.stream_id == VIDEO_STREAM_ID)
+    else if (stream_id == VIDEO_STREAM_ID)
     {
         m_log->trace("AddMarker: Video");
         version = packet.version =
