@@ -188,7 +188,7 @@ inline PacketPtr make_packet(int size)
 
 inline ParserPtr make_parser(int codec_id)
 {
-    return ParserPtr(av_parser_init(codec_id));
+    return ParserPtr(av_parser_init((AVCodecID)codec_id));
 }
 
 inline BufferRefPtr make_buffer_ref(int size)
