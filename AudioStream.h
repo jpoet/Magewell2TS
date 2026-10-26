@@ -55,7 +55,7 @@ class AudioStream
     std::shared_ptr<spdlog::logger> m_log;
 
     OutputTS& m_parent;
-    int       m_version;
+    int       m_version   {-1);
     int       m_verbose;
     Params    m_params;
     int64_t   m_pts       {-1};

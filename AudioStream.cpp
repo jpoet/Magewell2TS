@@ -7,7 +7,7 @@ AudioStream::AudioStream(OutputTS& parent, int verbose_level,
                          Params&& params, int64_t timestamp)
     : m_parent(parent)
     , m_verbose(verbose_level)
-    , m_params(params)
+    , m_params(std::move(params))
     , m_pts(timestamp)
 {
     m_log = spdlog::get("app_logger");
