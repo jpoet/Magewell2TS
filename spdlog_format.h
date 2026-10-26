@@ -1,47 +1,38 @@
 #pragma once
 
-#include "spdlog/spdlog.h"
-#include "spdlog/pattern_formatter.h"
-#include <pthread.h>
-#include <thread>
 #include <array>
-
-#include "spdlog/spdlog.h"
-#include "spdlog/pattern_formatter.h"
-#include "spdlog/sinks/stdout_color_sinks.h"
-#include "spdlog/sinks/stdout_sinks.h"
-#include "spdlog/sinks/rotating_file_sink.h"
-#include <pthread.h>
-#include <array>
-#include <iostream>
-#include <filesystem>
-#include <vector>
-
-#include "spdlog/spdlog.h"
-#include "spdlog/pattern_formatter.h"
-#include <pthread.h>
-#include <array>
-#include <string>
 #include <cstring>
+#include <memory>
+#include <string_view>
+#include <pthread.h>
+
+#include "spdlog/spdlog.h"
+#include "spdlog/pattern_formatter.h"
 
 class linux_thread_name_flag : public spdlog::custom_flag_formatter
 {
   private:
-    std::string format_centered(const std::string& str, size_t width) const
+    static constexpr size_t WIDTH = 6;
+
+    static void append_centered(std::string_view str,
+                                spdlog::memory_buf_t& dest)
     {
-        if (str.length() >= width)
+        if (str.length() >= WIDTH)
         {
-            // Truncate if the thread name exceeds the maximum allowed
-            // characters
-            return str.substr(0, width);
+            dest.append(str.data(), str.data() + WIDTH);
+            return;
         }
 
-        size_t total_padding = width - str.length();
-        size_t left_padding = total_padding / 2;
+        size_t total_padding = WIDTH - str.length();
+        size_t left_padding  = total_padding / 2;
         size_t right_padding = total_padding - left_padding;
 
-        return std::string(left_padding, ' ') + str +
-            std::string(right_padding, ' ');
+        std::array<char, WIDTH> buf{};
+        buf.fill(' ');
+        std::memcpy(buf.data() + left_padding, str.data(), str.length());
+        (void)right_padding; // already filled with spaces
+
+        dest.append(buf.data(), buf.data() + WIDTH);
     }
 
   public:
@@ -49,19 +40,17 @@ class linux_thread_name_flag : public spdlog::custom_flag_formatter
                 spdlog::memory_buf_t& dest) override
     {
         std::array<char, 16> name_buffer{};
-        std::string raw_name = "unnamed";
+        std::string_view raw_name = "unnamed";
 
         // Pull the native OS thread name
         if (pthread_getname_np(pthread_self(), name_buffer.data(),
-                               name_buffer.size()) == 0 && name_buffer[0] != '\0')
+                               name_buffer.size()) == 0 &&
+            name_buffer.front() != '\0')
         {
             raw_name = name_buffer.data();
         }
 
-        // Center-align or truncate the string to 6 characters
-        std::string aligned_name = format_centered(raw_name, 6);
-        dest.append(aligned_name.data(), aligned_name.data() +
-                    aligned_name.size());
+        append_centered(raw_name, dest);
     }
 
     std::unique_ptr<custom_flag_formatter> clone() const override

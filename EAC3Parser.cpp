@@ -180,6 +180,22 @@ EAC3Parser::processFrame(std::span<const uint8_t> iec_buffer,
             return std::nullopt;
         }
 
+        // Advance past bsid, dialnorm, and compre to reach chanmape (ATSC A/52 E.1.2.1)
+        [[maybe_unused]] uint8_t bsid = br.getBits(5);
+        br.skipBits(5); // dialnorm
+        if (br.getBit()) // compre
+        {
+            br.skipBits(8); // compr
+        }
+        if (acmod == 0) // 1+1 dual-mono mode
+        {
+            br.skipBits(5); // dialnorm2
+            if (br.getBit()) // compr2e
+            {
+                br.skipBits(8); // compr2
+            }
+        }
+
         out.substreamid = substreamid;
         out.strmtyp = strmtyp;
         out.payload_size_bytes = (frmsiz + 1) * 2;

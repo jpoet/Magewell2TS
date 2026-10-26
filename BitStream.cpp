@@ -54,6 +54,8 @@ void BitStream::AddSamples(AudioStream::Samples&& samples)
             m_log->trace("Audio pause burst");
             continue;
         }
+        if (m_version < 0)
+            continue;
 
 #ifdef DUMP_RAW
         fraw.write(reinterpret_cast<char*>(frame->payload.data()),
@@ -69,23 +71,15 @@ void BitStream::AddSamples(AudioStream::Samples&& samples)
         pkt->pts = pkt->dts = frame->timestamp;
 
         // Codec frame durations
-#if 0
-        if (frame->codec_id == AV_CODEC_ID_AC3 ||
-            frame->codec_id == AV_CODEC_ID_EAC3)
-        {
-            pkt->duration = av_rescale_q(1536,
-                                         AVRational{1, 48000},
-                                         TimeBase::Magewell);
-        }
-#else
         // Note: It is possible to have 44100 PCM streams.
         if (frame->codec_id == AV_CODEC_ID_AC3 ||
             frame->codec_id == AV_CODEC_ID_EAC3)
+        {
             pkt->duration =
-                av_rescale_q(m_params.buffer_bytes,
+                av_rescale_q(1536,
                              AVRational {1, m_params.sample_rate},
                              TimeBase::Magewell);
-#endif
+        }
         else
             pkt->duration = 0;
 

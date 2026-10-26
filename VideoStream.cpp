@@ -1171,30 +1171,6 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
 
         f_image_avail(image.pImage, image.pEco);
 
-        if (ret < 0) [[unlikely]]
-        {
-            m_log->warn("DAMAGED: {} av_hwframe_transfer_data failed: "
-                        "{}", worker.name, AVerr2str(ret));
-
-            m_log->warn("{} transfer failed: "
-                        "ctx={}x{} sw={} | "
-                        "hw={}x{} | "
-                        "cpu={}x{} fmt={} ls={}/{} | "
-                        "params={}x{} m_sw={}",
-                        worker.name,
-                        hw_ctx->width, hw_ctx->height,
-                        av_get_pix_fmt_name(static_cast<AVPixelFormat>(hw_ctx->sw_format)),
-                        hw->width, hw->height,
-                        cpu_frame->width, cpu_frame->height,
-                        av_get_pix_fmt_name(static_cast<AVPixelFormat>(cpu_frame->format)),
-                        cpu_frame->linesize[0], cpu_frame->linesize[1],
-                        m_params.width, m_params.height,
-                        av_get_pix_fmt_name(m_params.pix_fmt));
-
-            this_thread::sleep_for(chrono::milliseconds(3));
-            continue;
-        }
-
         hw->colorspace      = m_params.color.space;
         hw->color_primaries = m_params.color.primaries;
         hw->color_trc       = m_params.color.trc;

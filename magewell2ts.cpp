@@ -50,7 +50,8 @@ Magewell* g_mw;
 
 void Shutdown(void)
 {
-    g_mw->Shutdown();
+    if (g_mw)
+        g_mw->Shutdown();
 }
 
 void signal_handler(int signum)
@@ -65,7 +66,8 @@ void signal_handler(int signum)
     {
         const char* msg = "Received SIGINT/SIGTERM.\n";
         write(STDERR_FILENO, msg, strlen(msg));
-        g_mw->Shutdown();
+        if (g_mw)
+            g_mw->Shutdown();
     }
     else
     {
@@ -136,7 +138,8 @@ bool string_to_int(string_view st, int &value, string_view var)
 {
     auto result = from_chars(st.data(), st.data() + st.size(),
                              value);
-    if (result.ec == errc::invalid_argument)
+
+    if (result.ec != errc{} || result.ptr != st.data() + st.size())
     {
         cerr << "Invalid " << var << ": " << st << endl;
         value = -1;
@@ -235,15 +238,16 @@ void setup_logging(int verbose_level, bool color,
             logger = std::make_shared<spdlog::logger>("app_logger",
                                                       begin(sinks), end(sinks));
         }
-        catch (const filesystem::filesystem_error& e)
+        catch (const std::exception& e)
         {
             cerr << "Error creating log file: " << e.what() << '\n';
         }
     }
-    else
+
+    if (!logger)
     {
         logger = std::make_shared<spdlog::logger>("app_logger",
-                      spdlog::sinks_init_list{console_sink});
+                                  spdlog::sinks_init_list{console_sink});
     }
 
     // Set logger level based on verbose level
@@ -309,19 +313,17 @@ int main(int argc, char* argv[])
 
     vector<string_view> args(argv + 1, argv + argc);
 
-    {
-        struct sigaction action;
-        action.sa_handler = signal_handler;
-        sigemptyset(&action.sa_mask);
-        action.sa_flags = 0;
-        sigaction(SIGINT, &action, NULL);
-        sigaction(SIGTERM, &action, NULL);
-        sigaction(SIGHUP, &action, NULL);
-        sigaction(SIGUSR1, &action, NULL);
-    }
-
     for (auto iter = args.begin(); iter != args.end(); ++iter)
     {
+        auto next_arg = [&](string_view opt) -> string_view {
+            if (++iter == args.end())
+            {
+                cerr << "Missing value for option " << opt << "\n";
+                exit(1);
+            }
+            return *iter;
+        };
+
         if (*iter == "-h" || *iter == "--help")
         {
             show_help(app_name);
@@ -329,7 +331,7 @@ int main(int argc, char* argv[])
         }
         else if (*iter == "--logfile")
         {
-            logpath = *(++iter);
+            logpath = next_arg(*iter);
         }
         else if (*iter == "-l" || *iter == "--list")
         {
@@ -337,32 +339,34 @@ int main(int argc, char* argv[])
         }
         else if (*iter == "-p" || *iter == "--preset")
         {
-            video_args.preset = *(++iter);
+            video_args.preset = next_arg(*iter);
         }
         else if (*iter == "-q" || *iter == "--quality")
         {
-            if (!string_to_int(*(++iter), video_args.quality, "quality"))
+            if (!string_to_int(next_arg(*iter), video_args.quality, "quality"))
                 exit(1);
         }
         else if (*iter == "-a" || *iter == "--lookahead")
         {
-            if (!string_to_int(*(++iter), video_args.lookahead, "lookahead"))
+            if (!string_to_int(next_arg(*iter),
+                               video_args.lookahead, "lookahead"))
                 exit(1);
         }
         else if (*iter == "-g" || *iter == "--gop-secs")
         {
-            if (!string_to_float(*(++iter), video_args.gopSecs, "gop-secs"))
+            if (!string_to_float(next_arg(*iter),
+                                 video_args.gopSecs, "gop-secs"))
                 exit(1);
         }
         else if (*iter == "--b-frames")
         {
-            if (!string_to_int(*(++iter), video_args.bframes,
+            if (!string_to_int(next_arg(*iter), video_args.bframes,
                                "b-frames"))
                 exit(1);
         }
         else if (*iter == "--idr-interval")
         {
-            if (!string_to_int(*(++iter), video_args.idrInterval,
+            if (!string_to_int(next_arg(*iter), video_args.idrInterval,
                                "idr-interval"))
                 exit(1);
         }
@@ -372,27 +376,27 @@ int main(int argc, char* argv[])
         }
         else if (*iter == "-i" || *iter == "--input")
         {
-            if (!string_to_int(*(++iter), devIndex, "device index"))
+            if (!string_to_int(next_arg(*iter), devIndex, "device index"))
                 exit(1);
         }
         else if (*iter == "-b" || *iter == "--board")
         {
-            if (!string_to_int(*(++iter), boardId, "board id"))
+            if (!string_to_int(next_arg(*iter), boardId, "board id"))
                 exit(1);
         }
         else if (*iter == "-c" || *iter == "--video-codec")
         {
-            video_args.codecName = *(++iter);
+            video_args.codecName = next_arg(*iter);
         }
         else if (*iter == "-r" || *iter == "--read-edid")
         {
             read_edid = true;
-            edid_file = *(++iter);
+            edid_file = next_arg(*iter);
         }
         else if (*iter == "-w" || *iter == "--write-edid")
         {
             write_edid = true;
-            edid_file = *(++iter);
+            edid_file = next_arg(*iter);
         }
         else if (*iter == "-n" || *iter == "--no-audio")
         {
@@ -404,39 +408,39 @@ int main(int argc, char* argv[])
         }
         else if (*iter == "-d" || *iter == "--device")
         {
-            video_args.device = *(++iter);
+            video_args.device = next_arg(*iter);
         }
         else if (*iter == "--settle")
         {
             int ms;
-            if (!string_to_int(*(++iter), ms, "Settle time"))
+            if (!string_to_int(next_arg(*iter), ms, "Settle time"))
                 exit(1);
             settle_time = chrono::milliseconds(ms);
         }
         else if (*iter == "-t" || *iter == "--copy-threads")
         {
-            if (!string_to_int(*(++iter), video_args.num_threads,
+            if (!string_to_int(next_arg(*iter), video_args.num_threads,
                                "Copy threads"))
                 exit(1);
         }
         else if (*iter == "--video-buffers")
         {
-            if (!string_to_int(*(++iter), video_buffers,
+            if (!string_to_int(next_arg(*iter), video_buffers,
                                "Video buffers"))
                 exit(1);
         }
         else if (*iter == "--extra-hw-frames")
         {
-            if (!string_to_int(*(++iter), video_args.extraHWframes,
+            if (!string_to_int(next_arg(*iter), video_args.extraHWframes,
                                "Extra HW frames"))
                 exit(1);
         }
         else if (*iter == "--wait-for")
         {
             int input_count;
-            if (!string_to_int(*(++iter), input_count, "input count"))
+            if (!string_to_int(next_arg(*iter), input_count, "input count"))
                 exit(1);
-            g_mw->WaitForInputs(input_count);
+            Magewell::WaitForInputs(input_count);
         }
         else if (*iter == "-o" || *iter == "--color")
         {
@@ -453,7 +457,7 @@ int main(int argc, char* argv[])
                 v = 1;
             else
             {
-                if (!string_to_int(*(++iter), v, "verbose"))
+                if (!string_to_int(next_arg(*iter), v, "verbose"))
                     exit(1);
             }
             verbose_level = v;
@@ -487,6 +491,17 @@ int main(int argc, char* argv[])
     if (!(*g_mw))
         return -1;
     g_mw->Verbose(verbose_level);
+
+    {
+        struct sigaction action;
+        action.sa_handler = signal_handler;
+        sigemptyset(&action.sa_mask);
+        action.sa_flags = 0;
+        sigaction(SIGINT, &action, NULL);
+        sigaction(SIGTERM, &action, NULL);
+        sigaction(SIGHUP, &action, NULL);
+        sigaction(SIGUSR1, &action, NULL);
+    }
 
     if (list_inputs)
         g_mw->ListInputs();

@@ -2176,7 +2176,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
     while (m_running.load() == true)
     {
         // Wait for notification
-        if (EcoEventWait(eco_event, -1) <= 0)
+        if (EcoEventWait(eco_event, m_frame_ms2) <= 0)
         {
             continue;
         }
@@ -2692,6 +2692,7 @@ bool Magewell::capture_video(void)
         int         prev_image_size = m_image_size;
 
         VideoStream::Params params;
+        std::optional<VideoStream::Params> last_params = std::nullopt;
 
         if (m_verbose > 1)
             m_log->info("Using {} RAM frame buffers.", m_image_buffers);
@@ -2832,12 +2833,22 @@ bool Magewell::capture_video(void)
                 break; // Upper limit timeout reached
             }
 
-            // Measure how long the signal parameters have been
-            // perfectly locked and unvarying
-            duration = chrono::duration_cast<chrono::milliseconds>
-                       (chrono::steady_clock::now() - stable_start);
-            if (duration > m_settle_time)
-                break;
+            if (!last_params || *last_params != params)
+            {
+                // Params changed or this is the first iteration;
+                // reset stability timer
+                last_params = params;
+                stable_start = chrono::steady_clock::now();
+            }
+            else
+            {
+                // Params match last seen; check if settled
+                duration = chrono::duration_cast<chrono::milliseconds>
+                           (chrono::steady_clock::now() - stable_start);
+
+                if (duration > m_settle_time)
+                    break;
+            }
 
             std::this_thread::sleep_for(std::chrono::milliseconds(3));
         }
@@ -2995,7 +3006,7 @@ bool Magewell::Capture(VideoStream::Args&& video_args,
 
     // Display input information if verbose
     if (m_verbose > 1)
-        describe_input(m_channel);
+        m_log->info("{}", describe_input(m_channel));
 
     // Determine encoder type based on codec name
     if (m_video_args.codecName.find("qsv") != string::npos)
@@ -3009,6 +3020,7 @@ bool Magewell::Capture(VideoStream::Args&& video_args,
         m_encoderType = VideoStream::EncoderType::UNKNOWN;
         m_log->critical("Codec '{}' not supported.", m_video_args.codecName);
         Shutdown();
+        return false;
     }
 
     // Create output handler based on capture mode

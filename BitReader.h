@@ -1,3 +1,4 @@
+
 #include <span>
 #include <cstdint>
 #include <bit>
@@ -38,12 +39,13 @@ public:
         if (count > m_bitsLeft)
         {
             uint32_t result = 0;
-            unsigned missing = count - m_bitsLeft;
+            unsigned initialBits = m_bitsLeft;
+            unsigned missing = count - initialBits;
 
             // Take whatever is left in the current cache
-            if (m_bitsLeft > 0)
+            if (initialBits > 0)
             {
-                result = static_cast<uint32_t>(m_cache >> (64 - m_bitsLeft));
+                result = static_cast<uint32_t>(m_cache >> (64 - initialBits));
                 result <<= missing;
             }
 
@@ -57,6 +59,7 @@ public:
                 m_cache <<= bitsToTake;
                 m_bitsLeft -= bitsToTake;
             }
+            m_totalBitsRead += initialBits + bitsToTake;
             return result;
         }
 

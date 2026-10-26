@@ -716,20 +716,18 @@ void OutputTS::mux(void)
             }
         }
 
-        if (targetQ->PeekMarker())
+        if (targetQ->PeekMarker() ||
+            (m_formatContext == nullptr &&
+             (m_videoPktQ.PeekMarker() || m_audioPktQ.PeekMarker())))
         {
             sync_markers();
             prev_state = {};
             continue;
         }
 
-        if (m_formatContext == nullptr)
-            continue;
-
         std::optional<Packet> outPkt = targetQ->PopValue();
-        if (!outPkt || !outPkt->pkt)
+        if (!outPkt || !outPkt->pkt || m_formatContext == nullptr)
         {
-            m_log->warn("Mux: Extracted packet payload is null");
             continue;
         }
 
@@ -777,6 +775,10 @@ void OutputTS::mux(void)
             .pts = pkt->pts,
             .dts = pkt->dts
         };
+
+        // Paranoid check.
+        if (static_cast<unsigned>(stream_id) >= m_formatContext->nb_streams)
+            continue;
 
         int ret = av_interleaved_write_frame(m_formatContext, pkt.get());
         if (ret < 0)
@@ -896,7 +898,8 @@ void OutputTS::process_audio(void)
             }
         }
 
-        audioStream->AddSamples(std::move(audio));
+        if (audioStream)
+            audioStream->AddSamples(std::move(audio));
     }
 
     delete audioStream;
@@ -951,6 +954,8 @@ void OutputTS::process_video(void)
 
         if (m_videoStream)
             m_videoStream->AddImage(std::move(image));
+        else
+            f_image_avail(image.pImage, image.pEco);
     }
 
     std::scoped_lock imlock(m_imageQ_mutex);

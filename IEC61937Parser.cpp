@@ -94,15 +94,17 @@ CodecParamsPtr
             {
                 if (word == PA)
                 {
-                    size_t relativeOffset =
-                        m_streamOffset - existingBufferedBytes;
+                    int64_t relativeBytes =
+                        static_cast<int64_t>(m_streamOffset) -
+                        static_cast<int64_t>(existingBufferedBytes);
 
-                    size_t wordIndex =
-                        relativeOffset / 2;
+                    // 4 bytes per IEC 61937 stereo sample period
+                    int64_t sampleOffset = relativeBytes / 4;
 
                     m_currentTimestamp =
                         timestamp100ns +
-                        ((wordIndex * 10000000ULL) / sampleRate);
+                        ((sampleOffset * 10000000LL) /
+                         static_cast<int64_t>(sampleRate));
 
                     m_state = State::FIND_PB;
                 }
@@ -117,10 +119,12 @@ CodecParamsPtr
                 {
                     m_state = State::READ_PC;
                 }
-                else
+                else if (word != PA)
                 {
                     m_state = State::FIND_PA;
                 }
+                // Note: if word == PA, stay in FIND_PB so the second PA
+                // in a [PA, PA, PB] sequence is not lost!
 
                 m_streamOffset += 2;
                 break;
@@ -196,6 +200,12 @@ CodecParamsPtr
 
                 m_payloadTarget = EAC3Parser::getFrameSizeBytes(m_payload,
                                                                 CodecType::EAC3);
+                if (m_payloadTarget < EAC3_HEADER_SIZE)
+                {
+                    m_payload.clear();
+                    m_state = State::FIND_PA;
+                    break;
+                }
 
                 // Header already included
                 m_state = State::READ_PAYLOAD;
@@ -290,6 +300,16 @@ bool IEC61937Parser::begin_payload(void)
 
 void IEC61937Parser::finalize_frame(void)
 {
+    if ((m_pc & 0x1F) == TYPE_PAUSE)
+    {
+        Frame frame {
+            .timestamp = m_currentTimestamp,
+            .is_pause  = true
+        };
+        m_frameQ.push_back(std::move(frame));
+        return;
+    }
+
     if (m_payload.size() < 2)
     {
         return;
@@ -298,9 +318,9 @@ void IEC61937Parser::finalize_frame(void)
     //
     // Validate syncword
     //
-    if (m_payload[0] != 0x0b || m_payload[1] != 0x77)
+    if (m_payload[0u] != 0x0b || m_payload[1u] != 0x77)
     {
-        spdlog::warn("[IEC61937] Invalid syncword");
+        m_log->warn("[IEC61937] Invalid syncword");
         return;
     }
 
@@ -334,7 +354,7 @@ void IEC61937Parser::finalize_frame(void)
             if (auto result = m_eac3Parser.processFrame(frame.payload,
                                                         CodecType::AC3))
             {
-                spdlog::info(EAC3Parser::formatOutput(*result));
+                m_log->info(EAC3Parser::formatOutput(*result));
                 if (result->total_channels < 2)
                 {
                     m_log->warn("Failed to parse valid AC3");
@@ -366,37 +386,33 @@ void IEC61937Parser::finalize_frame(void)
                 {
                     m_log->warn("Failed to parse valid EAC3");
                 }
-                else
+                else if (result->strmtyp == 0)
                 {
                     m_metaNeeded = false;
-
-                    if (result->strmtyp == 0)
+                    ++m_independentCnt;
+                    if (m_verbose > 3)
                     {
-                        ++m_independentCnt;
-                        if (m_verbose > 3)
-                        {
-                            spdlog::debug("[{}] {}", m_frameCnt,
-                                          EAC3Parser::formatOutput(*result));
-                        }
-                        m_codecpar = make_codec_params();
-                        m_codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
-                        m_codecpar->format = AV_SAMPLE_FMT_NONE;
-                        m_codecpar->codec_id = frame.codec_id;
-                        m_codecpar->sample_rate = result->sample_rate_hz;
-                        av_channel_layout_default(&m_codecpar->ch_layout,
-                                                  result->total_channels);
-
-                        std::array<char, 64> buffer{};
-                        av_channel_layout_describe(&(m_codecpar->ch_layout),
-                                                   buffer.data(),
-                                                   buffer.size());
-                    }
-                    else
-                    {
-                        ++m_dependentCnt;
-                        spdlog::info("[{}] {}", m_frameCnt,
+                        m_log->debug("[{}] {}", m_frameCnt,
                                      EAC3Parser::formatOutput(*result));
                     }
+                    m_codecpar = make_codec_params();
+                    m_codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
+                    m_codecpar->format = AV_SAMPLE_FMT_NONE;
+                    m_codecpar->codec_id = frame.codec_id;
+                    m_codecpar->sample_rate = result->sample_rate_hz;
+                    av_channel_layout_default(&m_codecpar->ch_layout,
+                                              result->total_channels);
+
+                    std::array<char, 64> buffer{};
+                    av_channel_layout_describe(&(m_codecpar->ch_layout),
+                                               buffer.data(),
+                                               buffer.size());
+                }
+                else
+                {
+                    ++m_dependentCnt;
+                    m_log->info("[{}] {}", m_frameCnt,
+                                EAC3Parser::formatOutput(*result));
                 }
             }
         }

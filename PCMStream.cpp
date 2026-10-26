@@ -133,14 +133,19 @@ bool PCMStream::open_encoder(void)
 
         AVSampleFormat resample_fmt = AV_SAMPLE_FMT_FLTP;
         SwrContext* swr_raw = nullptr;
+
+        AVChannelLayout in_ch_layout{};
+        av_channel_layout_default(&in_ch_layout, m_params.num_channels);
+
         ret = swr_alloc_set_opts2(&swr_raw,
-                                  &m_encoder->ch_layout,
+                                  &m_encoder->ch_layout, // Output: 6ch (max)
                                   m_encoder->sample_fmt,
-                                  m_encoder->sample_rate,
-                                  &m_encoder->ch_layout,
+                                  m_encoder->sample_rate, // Output: 48000
+                                  &in_ch_layout, // Input: m_params.num_channels
                                   resample_fmt,
-                                  m_params.sample_rate,
+                                  m_params.sample_rate, // Input: e.g. 44100 or 48000
                                   0, nullptr);
+        av_channel_layout_uninit(&in_ch_layout);
 
         if (ret < 0 || !swr_raw)
         {
@@ -170,7 +175,7 @@ bool PCMStream::open_encoder(void)
         // buffering room
         constexpr int fifo_size = 1536 * 16;
         AVAudioFifo* raw_fifo = av_audio_fifo_alloc(AV_SAMPLE_FMT_FLTP,
-                                         m_encoder->ch_layout.nb_channels
+                                            m_encoder->ch_layout.nb_channels,
                                                     fifo_size);
         if (!raw_fifo)
         {
@@ -226,7 +231,7 @@ void PCMStream::encode_frame(void)
 {
     constexpr int AC3_FRAME_SAMPLES = 1536;
 
-    AVFrame* frame = av_frame_alloc();
+    FramePtr frame = make_frame();
     if (!frame)
         return;
 
@@ -238,11 +243,10 @@ void PCMStream::encode_frame(void)
     av_channel_layout_copy(&frame->ch_layout,
                            &m_encoder->ch_layout);
 
-    int ret = av_frame_get_buffer(frame, 0);
+    int ret = av_frame_get_buffer(frame.get(), 0);
     if (ret < 0)
     {
         m_log->error("Failed to allocate audio frame buffer.");
-        av_frame_free(&frame);
         m_parent.Shutdown();
         return;
     }
@@ -252,13 +256,10 @@ void PCMStream::encode_frame(void)
                              reinterpret_cast<void**>(frame->data),
                              AC3_FRAME_SAMPLES);
     if (ret < AC3_FRAME_SAMPLES)
-    {
-        av_frame_free(&frame);
         return;
-    }
 
     if (!m_parent.EncodeFrame(OutputTS::AUDIO_STREAM_ID, m_version,
-                              m_encoder.get(), frame))
+                              m_encoder.get(), frame.get()))
     {
         m_log->error("encode_frame(audio) failed.");
     }
@@ -267,8 +268,6 @@ void PCMStream::encode_frame(void)
         // Advance perfect sample clock
         m_pts += AC3_FRAME_SAMPLES;
     }
-
-    av_frame_free(&frame);
 }
 
 void PCMStream::AddSamples(AudioStream::Samples&& audio)
@@ -331,6 +330,17 @@ void PCMStream::AddSamples(AudioStream::Samples&& audio)
         }
     }
 
+    int64_t hw_pts = av_rescale_q(audio.timestamp,
+                                  TimeBase::Magewell,
+                                  TimeBase::AUDIO48);
+    int64_t expected_front_pts = hw_pts - av_audio_fifo_size(m_fifo.get());
+    if (std::abs(m_pts - expected_front_pts) > 4800)
+    {
+        m_log->warn("Audio PTS drifted by {} samples; resyncing.",
+                    m_pts - expected_front_pts);
+        m_pts = expected_front_pts;
+    }
+
     if (m_swr)
     {
         // Calculate max output samples expected including resampler
@@ -344,7 +354,8 @@ void PCMStream::AddSamples(AudioStream::Samples&& audio)
         // Allocate dynamic scratchpad arrays for output planes
         uint8_t* converted_output_buffers[AV_NUM_DATA_POINTERS] = { nullptr };
         int ret = av_samples_alloc(converted_output_buffers, nullptr,
-                                   channels, max_output_samples,
+                                   m_encoder->ch_layout.nb_channels,
+                                   max_output_samples,
                                    m_encoder->sample_fmt, 0);
         if (ret < 0)
         {
@@ -388,24 +399,6 @@ void PCMStream::AddSamples(AudioStream::Samples&& audio)
             m_log->error("Failed writing raw samples to audio FIFO.");
             return;
         }
-    }
-
-    // Instead of completely overwriting m_pts on every frame block based on
-    // real-world system delivery timestamps (which jitter), establish a linear continuity baseline.
-    int64_t hw_pts = av_rescale_q(audio.timestamp,
-                                  TimeBase::Magewell,
-                                  TimeBase::AUDIO48);
-
-    // hw_pts corresponds to the start of the newly arrived block.
-    // The front of m_fifo is (fifo_size - newly_written_samples)
-    // earlier.
-    int64_t expected_front_pts = hw_pts - (av_audio_fifo_size(m_fifo.get())
-                                           - input_samples);
-    if (std::abs(m_pts - expected_front_pts) > 4800)
-    {
-        m_log->warn("Audio PTS drifted by {} samples; resyncing.",
-                    m_pts - expected_front_pts);
-        m_pts = expected_front_pts;
     }
 
     // Encode while enough samples exist
