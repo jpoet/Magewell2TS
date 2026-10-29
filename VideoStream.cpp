@@ -338,6 +338,20 @@ bool VideoStream::open_encoder(void)
     m_encoder->color_trc       = m_params.color.trc;
     m_encoder->colorspace      = m_params.color.space;
 
+    if (m_verbose > 4)
+    {
+        m_log->info("Encoder VUI Init: primaries={} ({}), trc={} ({}), "
+                    "space={} ({}), range={} ({})",
+                    static_cast<int>(m_encoder->color_primaries),
+                    av_color_primaries_name(m_encoder->color_primaries),
+                    static_cast<int>(m_encoder->color_trc),
+                    av_color_transfer_name(m_encoder->color_trc),
+                    static_cast<int>(m_encoder->colorspace),
+                    av_color_space_name(m_encoder->colorspace),
+                    static_cast<int>(m_encoder->color_range),
+                    av_color_range_name(m_encoder->color_range));
+    }
+
     // Evaluate hardware thread slicing permissions
     if (m_encoder->codec->capabilities & AV_CODEC_CAP_SLICE_THREADS)
     {
@@ -1033,7 +1047,7 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
             worker.images.pop_front();
         }
 
-        // Helper lambda: ONLY runs when called inside an error 'if' block below
+        // Helper lambda: Runs when called inside an error 'if' block below
         auto drop_image = [&]() {
             f_image_avail(image.pImage, image.pEco);
             {
@@ -1181,7 +1195,10 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
         // Handle HDR metadata attachments
         if (m_params.color.is_HDR)
         {
-            if (m_display_primaries)
+            // Attach mastering display metadata if the color space
+            // natively provides it (HDR10/PQ)
+            if (m_display_primaries && m_params.color.has_primaries &&
+                m_params.color.has_luminance)
             {
                 av_frame_remove_side_data(hw.get(),
                                      AV_FRAME_DATA_MASTERING_DISPLAY_METADATA);
@@ -1190,7 +1207,11 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
                 if (primaries)
                     *primaries = *m_display_primaries;
             }
-            if (m_content_light)
+
+            // Attach max content light levels if explicitly declared
+            // by the source
+            if (m_content_light && (m_params.color.MaxCLL > 0 ||
+                                    m_params.color.MaxFALL > 0))
             {
                 av_frame_remove_side_data(hw.get(),
                                           AV_FRAME_DATA_CONTENT_LIGHT_LEVEL);
