@@ -1500,6 +1500,21 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
 
     // Primaries
     color.is_HDR = true;
+
+    // HLG does not use Static Mastering Display Metadata or Light Levels.
+    if (hdr_info.byEOTF == HDMI_EOTF_HLG)
+    {
+        color.has_primaries = false;
+        color.has_luminance = false;
+        color.MaxCLL = 0;
+        color.MaxFALL = 0;
+
+        color.description = format("HDR Space:{} TRC:{} Rng:{} (HLG Mode)",
+                                   s_str, t_str, r_str);
+        return true;
+    }
+
+    // HDR10 / PQ absolute metadata parsing
     color.has_primaries = true;
     int den = 50000;
 
@@ -1523,7 +1538,6 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
          (static_cast<uint16_t>(hdr_info.display_primaries_msb_x1) << 8));
     color.display_primaries[1][0].den = den;
 
-
     color.display_primaries[1][1].num =
         static_cast<int32_t>
         (static_cast<uint16_t>(hdr_info.display_primaries_lsb_y1) |
@@ -1543,8 +1557,7 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
          (static_cast<uint16_t>(hdr_info.display_primaries_msb_y2) << 8));
     color.display_primaries[2][1].den = den;
 
-
-    // CIE 1931 xy chromaticity coords of white point.
+    // White Point - CIE 1931 xy chromaticity coords
     color.white_point[0].num  =
         static_cast<int32_t>
         (static_cast<uint16_t>(hdr_info.white_point_lsb_x) |
@@ -1560,22 +1573,19 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
     // Luminance
     color.has_luminance = true;
 
-    // Max luminance of mastering display (cd/m^2).
     color.max_luminance.num  =
         static_cast<int32_t>
         (static_cast<uint16_t>(hdr_info.max_display_mastering_lsb_luminance) |
          (static_cast<uint16_t>(hdr_info.max_display_mastering_msb_luminance) << 8));
     color.max_luminance.den  = 1;
 
-    // Min luminance of mastering display (cd/m^2).
     color.min_luminance.num  =
         static_cast<int32_t>
         (static_cast<uint16_t>(hdr_info.min_display_mastering_lsb_luminance) |
          (static_cast<uint16_t>(hdr_info.min_display_mastering_msb_luminance) << 8));
     color.min_luminance.den  = 10000;
 
-    /* Light level */
-
+    /* Light Level */
 
     // Max content light level (cd/m^2).
     color.MaxCLL  =
@@ -1589,15 +1599,13 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
         (static_cast<uint16_t>(hdr_info.maximum_frame_average_light_level_lsb) |
          (static_cast<uint16_t>(hdr_info.maximum_frame_average_light_level_msb) << 8));
 
-
-    // Calculate decimal nits safely using av_q2d
     double max_nits = av_q2d(color.max_luminance);
 
-    // Example output: "HDR | Space:bt2020nc | TRC:smpte2084 | Rng:tv | Luma:1000 nits | CLL:1000/400"
+    // Example output: "HDR | Space:bt2020nc | TRC:smpte2084 | Rng:tv
+    // | Luma:1000 nits | CLL:1000/400"
     color.description =
         format("HDR Space:{} TRC:{} Rng:{} Luma:{:.0f}nits CLL:{}/{}",
-               s_str, t_str, r_str, max_nits, color.MaxCLL, color.MaxFALL
-               );
+               s_str, t_str, r_str, max_nits, color.MaxCLL, color.MaxFALL);
 
     /*
      * FFmpeg AVMasteringDisplayMetadata expects:
