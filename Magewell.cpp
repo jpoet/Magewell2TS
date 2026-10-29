@@ -1382,7 +1382,6 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
     color.has_primaries = false;
     color.has_luminance = false;
 
-    // 1. Choose color range quantization spectrum
     if (signal_status.quantRange == MWCAP_VIDEO_QUANTIZATION_FULL)
     {
         color.range = AVCOL_RANGE_JPEG; // Full 0-255 range mapping
@@ -1416,6 +1415,75 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
         }
     }
 
+    if (m_verbose > 4)
+    {
+        static int last_color_fmt = -1;
+        static int last_eotf      = -1;
+        static unsigned int last_valid_mask = 0xFFFFFFFF;
+
+        int cur_eotf = has_hdr_packet ? static_cast<int>(hdr_info.byEOTF) : -1;
+        if (static_cast<int>(signal_status.colorFormat) != last_color_fmt ||
+            cur_eotf != last_eotf ||
+            uiValidFlag != last_valid_mask)
+        {
+            last_color_fmt  = static_cast<int>(signal_status.colorFormat);
+            last_eotf       = cur_eotf;
+            last_valid_mask = uiValidFlag;
+
+            m_log->info("HDMI Signal/InfoFrame Change: colorFormat={} ({}), "
+                        "quantRange={}, uiValidFlag={:#x}, has_hdr_pkt={}",
+                        static_cast<int>(signal_status.colorFormat),
+                        GetVideoColorName(signal_status.colorFormat),
+                        static_cast<int>(signal_status.quantRange),
+                        uiValidFlag,
+                        has_hdr_packet);
+
+            if (has_hdr_packet)
+            {
+                uint16_t max_lum =
+                    static_cast<uint16_t>
+                    (hdr_info.max_display_mastering_lsb_luminance) |
+                    (static_cast<uint16_t>
+                     (hdr_info.max_display_mastering_msb_luminance) << 8);
+                uint16_t max_cll =
+                    static_cast<uint16_t>
+                    (hdr_info.maximum_content_light_level_lsb) |
+                    (static_cast<uint16_t>
+                     (hdr_info.maximum_content_light_level_msb) << 8);
+
+                m_log->info("  -> HDR InfoFrame: byEOTF={} (0=SDR, 1=HDR, "
+                            "2=PQ/HDR10, 3=HLG), "
+                            "byMetadataDescriptorID={}, MaxLum={}, MaxCLL={}",
+                            static_cast<int>(hdr_info.byEOTF),
+                            static_cast<int>(hdr_info.byMetadataDescriptorID),
+                            max_lum, max_cll);
+            }
+            if (has_infoframe && (uiValidFlag & MWCAP_HDMI_INFOFRAME_MASK_AVI))
+            {
+                HDMI_INFOFRAME_PACKET avi_pkt{};
+                if (MW_SUCCEEDED == MWGetHDMIInfoFramePacket(m_channel,
+                                                  MWCAP_HDMI_INFOFRAME_ID_AVI,
+                                                             &avi_pkt))
+                {
+                    m_log->info("  -> AVI InfoFrame: colorimetry={}, "
+                                "extColorimetry={}, "
+                                "rgbQuantRange={}, yccQuantRange={}",
+                                static_cast<int>
+                                (avi_pkt.aviInfoFramePayload.byColorimetry),
+                                static_cast<int>
+                                (avi_pkt.aviInfoFramePayload
+                                 .byExtendedColorimetry),
+                                static_cast<int>
+                                (avi_pkt.aviInfoFramePayload
+                                 .byRGBQuantizationRange),
+                                static_cast<int>
+                                (avi_pkt.aviInfoFramePayload
+                                 .byYCCQuantizationRange));
+                }
+            }
+        }
+    }
+
     // DISPATCH SUB-COLOR METADATA SPACES
     if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV601)
     {
@@ -1436,26 +1504,7 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
                       ? AVCOL_SPC_BT2020_CL
                       : AVCOL_SPC_BT2020_NCL;
         color.primaries = AVCOL_PRI_BT2020;
-
-        if (has_hdr_packet)
-        {
-            switch (hdr_info.byEOTF)
-            {
-                case HDMI_EOTF_ST2084_PQ: // 2: HDR10 / PQ
-                    color.trc = AVCOL_TRC_SMPTE2084;
-                    break;
-                case HDMI_EOTF_HLG:       // 3: HLG
-                    color.trc = AVCOL_TRC_ARIB_STD_B67;
-                    break;
-                default:                  // SDR BT.2020
-                    color.trc = AVCOL_TRC_BT2020_10;
-                    break;
-            }
-        }
-        else
-        {
-            color.trc = AVCOL_TRC_BT2020_10;
-        }
+        color.trc       = AVCOL_TRC_BT2020_10;
     }
     else if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_RGB)
     {
@@ -1466,9 +1515,33 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
     }
     else
     {
-        color.space = AVCOL_SPC_UNSPECIFIED;
+        color.space     = AVCOL_SPC_UNSPECIFIED;
         color.primaries = AVCOL_PRI_UNSPECIFIED;
-        color.trc = AVCOL_TRC_UNSPECIFIED;
+        color.trc       = AVCOL_TRC_UNSPECIFIED;
+    }
+
+    // Override TRC (and fix buggy Android TV / Google Streamer AVI InfoFrames)
+    // whenever an active HDR10 (PQ) or HLG InfoFrame packet is present!
+    if (has_hdr_packet)
+    {
+        if (hdr_info.byEOTF == HDMI_EOTF_ST2084_PQ ||
+            hdr_info.byEOTF == HDMI_EOTF_HLG)
+        {
+            color.trc = (hdr_info.byEOTF == HDMI_EOTF_ST2084_PQ)
+                        ? AVCOL_TRC_SMPTE2084
+                        : AVCOL_TRC_ARIB_STD_B67;
+
+            // Many Android TV devices (like Google TV Streamer 4K) send an HDR
+            // InfoFrame with BT.2020/P3 content while leaving AVI Colorimetry=2 (BT.709).
+            if (color.primaries != AVCOL_PRI_BT2020)
+            {
+                color.primaries = AVCOL_PRI_BT2020;
+                if (color.space == AVCOL_SPC_BT709 || color.space == AVCOL_SPC_BT470BG)
+                {
+                    color.space = AVCOL_SPC_BT2020_NCL;
+                }
+            }
+        }
     }
 
     const char* range_name = av_color_range_name(color.range);
@@ -2180,6 +2253,15 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
 
     int used        {0};
 
+    VideoStream::ColorSpace active_color;
+    if (oParams)
+        active_color = oParams->color;
+    else
+    {
+        MWGetVideoSignalStatus(m_channel, &videoSignalStatus);
+        get_colorspace(videoSignalStatus, active_color);
+    }
+
     // Main capture loop
     while (m_running.load() == true)
     {
@@ -2201,10 +2283,16 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             continue;
         }
 
-        // Handle signal change
-        if (ullStatusBits & MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE)
+        // Handle signal or HDR/AVI InfoFrame change
+        if (ullStatusBits & (MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE |
+                             MWCAP_NOTIFY_HDMI_INFOFRAME_HDR  |
+                             MWCAP_NOTIFY_HDMI_INFOFRAME_AVI))
         {
-            if (m_frame_cnt > 2000)
+            if (ullStatusBits & MWCAP_NOTIFY_HDMI_INFOFRAME_HDR)
+                m_log->info("Eco detected HDMI HDR InfoFrame change.");
+            else if (ullStatusBits & MWCAP_NOTIFY_HDMI_INFOFRAME_AVI)
+                m_log->info("Eco detected HDMI AVI InfoFrame change.");
+            else if (m_frame_cnt > 2000)
                 m_log->warn("DAMAGED: Eco lost video sync.");
             return false;
         }
@@ -2234,6 +2322,21 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             }
 
             continue;
+        }
+
+        // Check every 60 frames if the HDR InfoFrame or ColorFormat
+        // changed without triggering an event
+        if (m_frame_cnt % 60 == 0)
+        {
+            VideoStream::ColorSpace current_color;
+            get_colorspace(videoSignalStatus, current_color);
+            if (current_color != active_color)
+            {
+                m_log->info("Detected ColorSpace/HDR transition:\n   {}\n-> {}",
+                            active_color.description,
+                            current_color.description);
+                return false;
+            }
         }
 
         // Process frame
@@ -2387,6 +2490,15 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
 
     int used = 0;
 
+    VideoStream::ColorSpace active_color;
+    if (oParams)
+        active_color = oParams->color;
+    else
+    {
+        MWGetVideoSignalStatus(m_channel, &videoSignalStatus);
+        get_colorspace(videoSignalStatus, active_color);
+    }
+
     // Main capture loop
     while (m_running.load() == true)
     {
@@ -2409,6 +2521,21 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             continue;
         }
 
+        // Check every 60 frames if the HDR InfoFrame or ColorFormat
+        // changed without triggering an event
+        if (m_frame_cnt % 60 == 0)
+        {
+            VideoStream::ColorSpace current_color;
+            get_colorspace(videoSignalStatus, current_color);
+            if (current_color != active_color)
+            {
+                m_log->info("Detected ColorSpace/HDR transition:\n   {}\n-> {}",
+                            active_color.description,
+                            current_color.description);
+                return false;
+            }
+        }
+
         // Get notification status
         if (MW_SUCCEEDED != MWGetNotifyStatus(m_channel, video_notify,
                                               &ullStatusBits))
@@ -2422,9 +2549,16 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         }
 
         // Handle signal change
-        if (ullStatusBits & MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE)
+        // Handle signal or HDR/AVI InfoFrame change
+        if (ullStatusBits & (MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE |
+                             MWCAP_NOTIFY_HDMI_INFOFRAME_HDR  |
+                             MWCAP_NOTIFY_HDMI_INFOFRAME_AVI))
         {
-            if (m_frame_cnt > 2000)
+            if (ullStatusBits & MWCAP_NOTIFY_HDMI_INFOFRAME_HDR)
+                m_log->info("Pro detected HDMI HDR InfoFrame change.");
+            else if (ullStatusBits & MWCAP_NOTIFY_HDMI_INFOFRAME_AVI)
+                m_log->info("Pro detected HDMI AVI InfoFrame change.");
+            else if (m_frame_cnt > 2000)
                 m_log->warn("DAMAGED: Pro lost video sync.");
             return false;
         }
@@ -2783,6 +2917,7 @@ bool Magewell::capture_video(void)
             }
 
             rejected = false;
+            params = {};
 
             if (get_colorspace(videoSignalStatus, params.color))
             {
@@ -2817,7 +2952,19 @@ bool Magewell::capture_video(void)
             params.stride    = m_min_stride;
             params.time_base = time_base;
 
-            eco_params.llFrameDuration = videoSignalStatus.dwFrameDuration;
+            // Snap 100ns hardware measurement jitter (+/- 5 ticks) to
+            // exact broadcast timings
+            DWORD raw_dur = videoSignalStatus.dwFrameDuration;
+            for (DWORD std_dur : {166667U, 166833U, 200000U,
+                    333333U, 333667U, 400000U, 416667U, 417083U})
+            {
+                if (raw_dur > std_dur - 15 && raw_dur < std_dur + 15)
+                {
+                    raw_dur = std_dur;
+                    break;
+                }
+            }
+            eco_params.llFrameDuration = raw_dur;
             params.frame_duration = {
                 static_cast<int>(eco_params.llFrameDuration), 10000000LL
             };
@@ -2887,6 +3034,8 @@ bool Magewell::capture_video(void)
 
             event_mask = MWCAP_NOTIFY_VIDEO_SIGNAL_CHANGE;
             event_mask |= MWCAP_NOTIFY_VIDEO_FRAME_BUFFERED;
+            event_mask |= MWCAP_NOTIFY_HDMI_INFOFRAME_HDR;
+            event_mask |= MWCAP_NOTIFY_HDMI_INFOFRAME_AVI;
 
             if (m_isEco)
             {
@@ -2955,7 +3104,10 @@ bool Magewell::capture_video(void)
             if (!capture_eco_video(eco_params, std::move(oParams),
                                    eco_event, video_notify,
                                    ullStatusBits))
+            {
                 *active_params = {};
+                oParams.reset();
+            }
         }
         else
         {
@@ -2963,7 +3115,10 @@ bool Magewell::capture_video(void)
                                    video_notify, notify_event,
                                    capture_event, frame_wrap_idx,
                                    event_mask, ullStatusBits))
+            {
                 *active_params = {};
+                oParams.reset();
+            }
         }
     }
 
