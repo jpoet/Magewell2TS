@@ -91,8 +91,11 @@ class IEC61937Parser
     size_t m_independentCnt {0};
 
     int m_sampleRate {0};
-    int64_t m_currentTimestamp { 0 };
+    int64_t m_currentTimestamp {0};
     CodecParamsPtr m_codecpar;
+
+    // Start offset of the current EAC3 syncframe within m_payload
+    size_t m_frameOffset {0};
 
     int m_verbose {0};
 };

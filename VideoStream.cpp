@@ -1021,6 +1021,7 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
     {
         m_log->error("{} failed to reference QSV frame context.",
                      worker.name);
+        Shutdown();
         return;
     }
 

@@ -152,11 +152,15 @@ CodecParamsPtr
                 if (m_payloadTarget == 0)
                 {
                     finalize_frame();
-
                     m_state = State::FIND_PA;
                 }
                 else if ((m_pc & 0x1F) == TYPE_EAC3)
                 {
+                    m_frameOffset = 0;
+                    // For EAC3, m_pd is either in bits or bytes
+                    // depending on the transmitter, or 0. Primarily
+                    // rely on EAC3 frmsiz, but track PD if it's a
+                    // valid byte/bit count.
                     m_state = State::READ_EAC3_HEADER;
                 }
                 else
@@ -168,10 +172,11 @@ CodecParamsPtr
                 break;
             }
 
-            case State::READ_EAC3_HEADER :
+            case State::READ_EAC3_HEADER:
             {
                 size_t available = m_stream.size() - m_streamOffset;
-                size_t needed = EAC3_HEADER_SIZE - m_payload.size();
+                size_t needed = (m_frameOffset + EAC3_HEADER_SIZE) -
+                                m_payload.size();
                 size_t toCopy = std::min(available, needed);
 
                 if (toCopy > 1)
@@ -192,24 +197,74 @@ CodecParamsPtr
 
                 m_streamOffset += toCopy;
 
-                // Need more header
-                if (m_payload.size() < EAC3_HEADER_SIZE)
+                // Need more header for the current syncframe
+                if (m_payload.size() < (m_frameOffset + EAC3_HEADER_SIZE))
                 {
                     break;
                 }
 
-                m_payloadTarget = EAC3Parser::getFrameSizeBytes(m_payload,
-                                                                CodecType::EAC3);
-                if (m_payloadTarget < EAC3_HEADER_SIZE)
+                // View of the current syncframe header starting at
+                // m_frameOffset
+                const uint8_t* hdr = m_payload.data() + m_frameOffset;
+
+                // Validate syncword (0x0B77)
+                if (hdr[0] != 0x0b || hdr[1] != 0x77)
                 {
-                    m_payload.clear();
+                    if (m_frameOffset > 0)
+                    {
+                        size_t extra_read = m_payload.size() - m_frameOffset;
+                        if (m_streamOffset >= extra_read)
+                        {
+                            m_streamOffset -= extra_read;
+                        }
+                        m_payload.resize(m_frameOffset);
+                        finalize_frame();
+                    }
+                    else
+                    {
+                        m_payload.clear();
+                    }
                     m_state = State::FIND_PA;
                     break;
                 }
 
-                // Header already included
-                m_state = State::READ_PAYLOAD;
+                std::vector<uint8_t> hdrVec(hdr, hdr + EAC3_HEADER_SIZE);
+                size_t syncframeBytes = EAC3Parser::getFrameSizeBytes(hdrVec,
+                                                              CodecType::EAC3);
 
+                if (syncframeBytes < EAC3_HEADER_SIZE)
+                {
+                    if (m_frameOffset > 0)
+                    {
+                        size_t extra_read = m_payload.size() - m_frameOffset;
+                        if (m_streamOffset >= extra_read)
+                        {
+                            m_streamOffset -= extra_read;
+                        }
+                        m_payload.resize(m_frameOffset);
+                        finalize_frame();
+                    }
+                    else
+                    {
+                        m_payload.clear();
+                    }
+                    m_state = State::FIND_PA;
+                    break;
+                }
+
+                // Expand target to cover the existing payload + this
+                // syncframe
+                m_payloadTarget = m_frameOffset + syncframeBytes;
+
+                if (m_frameCnt < 15)
+                {
+                    m_log->info("EAC3 frame [{}] (offset={}): frmsiz_bytes={} "
+                                "m_pd={} m_pc={:#x}",
+                                m_frameCnt, m_frameOffset,
+                                syncframeBytes, m_pd, m_pc);
+                }
+
+                m_state = State::READ_PAYLOAD;
                 break;
             }
 
@@ -217,9 +272,8 @@ CodecParamsPtr
             {
                 if (m_payload.capacity() < m_payloadTarget)
                 {
-                    m_maxPayloadSize =
-                        std::max(m_maxPayloadSize, m_payloadTarget);
-
+                    m_maxPayloadSize = std::max(m_maxPayloadSize,
+                                                m_payloadTarget);
                     m_payload.reserve(m_maxPayloadSize);
                 }
 
@@ -242,8 +296,18 @@ CodecParamsPtr
 
                 if (m_payload.size() >= m_payloadTarget)
                 {
-                    finalize_frame();
+                    if ((m_pc & 0x1F) == TYPE_EAC3)
+                    {
+                        // Transition to READ_EAC3_HEADER to check for
+                        // a concatenated dependent substream (or
+                        // finalize if none)
+                        m_frameOffset = m_payload.size();
+                        m_payloadTarget = m_frameOffset + EAC3_HEADER_SIZE;
+                        m_state = State::READ_EAC3_HEADER;
+                        break;
+                    }
 
+                    finalize_frame();
                     m_state = State::FIND_PA;
                 }
 
@@ -310,14 +374,11 @@ void IEC61937Parser::finalize_frame(void)
         return;
     }
 
-    if (m_payload.size() < 2)
+    if (m_payload.size() < 4)
     {
         return;
     }
 
-    //
-    // Validate syncword
-    //
     if (m_payload[0u] != 0x0b || m_payload[1u] != 0x77)
     {
         m_log->warn("[IEC61937] Invalid syncword");
@@ -340,6 +401,22 @@ void IEC61937Parser::finalize_frame(void)
         case TYPE_EAC3:
         {
             frame.codec_id = AV_CODEC_ID_EAC3;
+
+            // Extract 2-bit strmtyp without parsing the entire frame.
+            // Shifting byte 2 right by 6 leaves us with the stream
+            // type value (0=Ind, 1=Dep).
+            uint8_t strmtyp = (frame.payload[2u] >> 6) & 0x03;
+            if (strmtyp == 1)
+            {
+                ++m_dependentCnt;
+                if (!m_frameQ.empty() && !m_frameQ.back().is_pause)
+                {
+                    auto& prev = m_frameQ.back().payload;
+                    prev.insert(prev.end(), frame.payload.begin(),
+                                frame.payload.end());
+                }
+                return; // Append and skip the queue
+            }
             break;
         }
 
@@ -402,17 +479,6 @@ void IEC61937Parser::finalize_frame(void)
                     m_codecpar->sample_rate = result->sample_rate_hz;
                     av_channel_layout_default(&m_codecpar->ch_layout,
                                               result->total_channels);
-
-                    std::array<char, 64> buffer{};
-                    av_channel_layout_describe(&(m_codecpar->ch_layout),
-                                               buffer.data(),
-                                               buffer.size());
-                }
-                else
-                {
-                    ++m_dependentCnt;
-                    m_log->info("[{}] {}", m_frameCnt,
-                                EAC3Parser::formatOutput(*result));
                 }
             }
         }

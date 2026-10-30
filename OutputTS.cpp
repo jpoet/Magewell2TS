@@ -160,6 +160,7 @@ inline std::string DumpAVFormat(const AVFormatContext* fmtctx,
                                     (cp->format)));
                 }
 #endif
+                break;
             }
 
             default:

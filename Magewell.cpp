@@ -1056,10 +1056,33 @@ void Magewell::capture_audio_loop(void)
             }
 
             valid_channels = audio_signal_status.wChannelValid;
+            params.is_lpcm = audio_signal_status.bLPCM;
 
-            params.is_lpcm          = audio_signal_status.bLPCM;
-            params.sample_rate      = audio_signal_status.dwSampleRate;
-            params.bits_per_sample  = audio_signal_status.cBitsPerSample;
+            // Snap HDMI ACR sample rate jitter to standard audio clocks
+            uint32_t raw_rate = audio_signal_status.dwSampleRate;
+            for (uint32_t std_rate : {32000U, 44100U, 48000U, 88200U,
+                    96000U, 176400U, 192000U})
+            {
+                if (raw_rate > std_rate - 500 && raw_rate < std_rate + 500)
+                {
+                    raw_rate = std_rate;
+                    break;
+                }
+            }
+            params.sample_rate = raw_rate;
+
+            // For IEC 61937 Bitstream, lock to 16-bit 2-channel so
+            // status bit flickers on FireTV Cube don't prevent
+            // stabilization
+            if (!params.is_lpcm)
+            {
+                params.bits_per_sample = 16;
+                valid_channels = 0x01;
+            }
+            else
+            {
+                params.bits_per_sample = audio_signal_status.cBitsPerSample;
+            }
 
             bool maybe_MAT = (valid_channels == 0x0F &&
                               params.sample_rate == 192000);
@@ -1084,7 +1107,7 @@ void Magewell::capture_audio_loop(void)
             good_signal = true;
 
             // Handle parameter changes
-            even_bytes_per_sample = audio_signal_status.cBitsPerSample / 8;
+            even_bytes_per_sample = params.bits_per_sample / 8;
             if (even_bytes_per_sample > 2)
                 even_bytes_per_sample = 4;
             params.bytes_per_sample = even_bytes_per_sample;
@@ -1110,11 +1133,11 @@ void Magewell::capture_audio_loop(void)
                 continue;
             }
 
-            params.samples_per_channel = MWCAP_AUDIO_SAMPLES_PER_FRAME; // 768
+            params.samples_per_channel = MWCAP_AUDIO_SAMPLES_PER_FRAME;
             int interleaved_values     = params.samples_per_channel *
-                                         params.num_channels; // 1536 for 2 channel PCM
+                                         params.num_channels;
             params.buffer_bytes        = interleaved_values *
-                                         even_bytes_per_sample; // 3072 for 2 channel PCM
+                                         even_bytes_per_sample;
 
             params.frame_duration = AVRational {
                 params.samples_per_channel,
@@ -1122,7 +1145,7 @@ void Magewell::capture_audio_loop(void)
             };
 
             channel_pairs = params.num_channels / 2;
-            shift = audio_signal_status.cBitsPerSample > 16 ? 0 : 16;
+            shift = params.bits_per_sample > 16 ? 0 : 16;
 
             // On initial startup use whatever is available.
             if (!active_params)
@@ -1222,15 +1245,42 @@ void Magewell::capture_audio_loop(void)
                                                   &notify_status))
                 continue;
 
-            // Can be spurious from "bad" devices (And eco capture cards).
+            // Filter and handle audio signal changes
             if (notify_status & MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE)
             {
-                if (m_verbose > 2)
-                    m_log->info("AUDIO signal changed.");
-                break;
+                MWCAP_AUDIO_SIGNAL_STATUS check_status{};
+                if (MW_SUCCEEDED == MWGetAudioSignalStatus(m_channel,
+                                                           &check_status) &&
+                    check_status.bChannelStatusValid)
+                {
+                    bool mode_changed = (check_status.bLPCM !=
+                                         audio_signal_status.bLPCM);
+                    bool lpcm_changed = check_status.bLPCM &&
+                         ((std::abs(static_cast<int>(check_status.dwSampleRate) -
+                           static_cast<int>(audio_signal_status.dwSampleRate)) > 1000) ||
+                          (check_status.wChannelValid != audio_signal_status.wChannelValid) ||
+                          (check_status.cBitsPerSample != audio_signal_status.cBitsPerSample));
+
+                    if (mode_changed || lpcm_changed)
+                    {
+                        if (m_verbose > 1)
+                            m_log->info("AUDIO signal format changed.");
+                        break; // Break out loop to reconfigure parameters
+                    }
+                    else if (m_verbose > 2)
+                    {
+                        m_log->info("Ignored spurious AUDIO_SIGNAL_CHANGE: "
+                                    "valid={} lpcm={} ch={:#x} bits={} rate={}",
+                                    check_status.bChannelStatusValid,
+                                    check_status.bLPCM,
+                                    check_status.wChannelValid,
+                                    static_cast<int>(check_status.cBitsPerSample),
+                                    check_status.dwSampleRate);
+                    }
+                }
             }
 
-            // Handle input reset
+            // Handle hardware interface layer resets
             if (notify_status & MWCAP_NOTIFY_AUDIO_INPUT_RESET)
             {
                 if (m_verbose > 0)
@@ -1238,13 +1288,12 @@ void Magewell::capture_audio_loop(void)
                 break;
             }
 
-            // Check if frame is buffered
-            if (!(notify_status & MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED))
-                continue;
-
-            while (MW_ENODATA != MWCaptureAudioFrame(m_channel, &macf))
+            // Process and drain the hardware frame queues even if an
+            // absolute Frame Buffered interrupt bit wasn't explicitly
+            // raised alongside the flag!
+            while (MW_SUCCEEDED == MWCaptureAudioFrame(m_channel, &macf))
             {
-                if (buffered_frame_idx > macf.cFrameCount)
+                if (buffered_frame_idx >= macf.cFrameCount) [[unlikely]]
                 {
                     buffered_frame_idx = macf.iFrame;
                     if (m_verbose > 2)
@@ -1255,13 +1304,19 @@ void Magewell::capture_audio_loop(void)
                 }
                 else
                 {
-                    if (++buffered_frame_idx == macf.cFrameCount)
+                    if (++buffered_frame_idx >= macf.cFrameCount)
                         buffered_frame_idx = 0;
-                    if (buffered_frame_idx != macf.iFrame)
+
+                    if (buffered_frame_idx != macf.iFrame) [[unlikely]]
                     {
-                        m_log->warn("DAMAGED: Lost audio frame. Got: {}, "
-                                    "expected: {}. (frame {})",
-                                    macf.iFrame, buffered_frame_idx,
+                        int lost = (static_cast<int>(macf.iFrame) -
+                                    static_cast<int>(buffered_frame_idx) +
+                                    static_cast<int>(macf.cFrameCount)) %
+                                   static_cast<int>(macf.cFrameCount);
+
+                        m_log->warn("DAMAGED: Lost {} audio frame(s). Got: {}, "
+                                    "expected: {} (ring size: {})",
+                                    lost, macf.iFrame, buffered_frame_idx,
                                     macf.cFrameCount);
                         buffered_frame_idx = macf.iFrame;
                     }
@@ -1270,7 +1325,7 @@ void Magewell::capture_audio_loop(void)
 #ifdef DUMP_RAW_AUDIO_ALLBITS
                 fraw_all.write(reinterpret_cast<char*>(macf.adwSamples),
                                MWCAP_AUDIO_SAMPLES_PER_FRAME *
-                               MWCAP_AUDIO_MAX_NUM_CHANNELS);
+                               MWCAP_AUDIO_MAX_NUM_CHANNELS * 4);
 #endif
 
                 // Create audio frame buffer
@@ -1286,24 +1341,31 @@ void Magewell::capture_audio_loop(void)
                 samples.resize(active_params->buffer_bytes);
                 uint8_t* output_ptr = samples.data();
 
-                const bool swap_bytes = !params.is_lpcm;
+                const bool swap_bytes = !active_params->is_lpcm;
+                int active_extraction_pairs = swap_bytes ? 1 : channel_pairs;
 
-                for (int pair = 0; pair < channel_pairs; ++pair)
+                for (int sample = 0; sample < MWCAP_AUDIO_SAMPLES_PER_FRAME;
+                     ++sample)
                 {
-                    const uint32_t* left_samples = &macf.adwSamples[pair];
-                    const uint32_t* right_samples = &macf.adwSamples[pair + half_channels];
+                    // Calculate the absolute linear base index
+                    // position inside the hardware map for the
+                    // current sample period step across the 8-channel
+                    // array block
+                    int base_sample_stride_offset = sample * sample_stride;
 
-                    for (int sample = 0;
-                         sample < MWCAP_AUDIO_SAMPLES_PER_FRAME; ++sample)
+                    for (int pair = 0; pair < active_extraction_pairs; ++pair)
                     {
-                        uint32_t left_raw = left_samples[sample * sample_stride];
-                        uint32_t right_raw = right_samples[sample * sample_stride];
+                        // Map absolute hardware indices directly from
+                        // Pair 0 and Pair 1 definitions
+                        uint32_t left_raw  =
+                            macf.adwSamples[base_sample_stride_offset + pair];
+                        uint32_t right_raw =
+                            macf.adwSamples[base_sample_stride_offset +
+                                            pair + half_channels];
 
-                        uint32_t left_val = left_raw >> shift;
+                        uint32_t left_val  = left_raw >> shift;
                         uint32_t right_val = right_raw >> shift;
 
-                        // Assume bitstream will always be 16bit for
-                        // efficient swapping.
                         if (swap_bytes)
                         {
                             left_val  = ((left_val  & 0x00FF) << 8)
@@ -1312,12 +1374,11 @@ void Magewell::capture_audio_loop(void)
                                         | ((right_val & 0xFF00) >> 8);
                         }
 
-                        /* For 32-bit samples (LPCM), we copy 4 bytes,
-                         * for 16-bit samples (Bitstream), we copy 2 bytes
-                         */
-                        std::memcpy(output_ptr, &left_val, even_bytes_per_sample);
+                        std::memcpy(output_ptr, &left_val,
+                                    even_bytes_per_sample);
                         output_ptr += even_bytes_per_sample;
-                        std::memcpy(output_ptr, &right_val, even_bytes_per_sample);
+                        std::memcpy(output_ptr, &right_val,
+                                    even_bytes_per_sample);
                         output_ptr += even_bytes_per_sample;
                     }
                 }
