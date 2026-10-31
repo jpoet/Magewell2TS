@@ -256,6 +256,7 @@ CodecParamsPtr
                 // syncframe
                 m_payloadTarget = m_frameOffset + syncframeBytes;
 
+#if 0
                 if (m_frameCnt < 15)
                 {
                     m_log->info("EAC3 frame [{}] (offset={}): frmsiz_bytes={} "
@@ -263,7 +264,7 @@ CodecParamsPtr
                                 m_frameCnt, m_frameOffset,
                                 syncframeBytes, m_pd, m_pc);
                 }
-
+#endif
                 m_state = State::READ_PAYLOAD;
                 break;
             }
