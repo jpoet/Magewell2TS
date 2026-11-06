@@ -1449,7 +1449,6 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
     }
     else
     {
-        // Default fallback (MWCAP_VIDEO_QUANTIZATION_LIMITED or UNKNOWN)
         color.range = AVCOL_RANGE_MPEG; // Limited broadcast range
     }
 
@@ -1569,16 +1568,30 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
     }
     else if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_RGB)
     {
-        color.space     = AVCOL_SPC_RGB;
+        color.space     = AVCOL_SPC_BT709;
         color.primaries = AVCOL_PRI_BT709;
-        color.trc       = AVCOL_TRC_IEC61966_2_1;
-        color.range     = AVCOL_RANGE_JPEG;
+        color.trc       = AVCOL_TRC_BT709;
+        color.range     = AVCOL_RANGE_MPEG;
     }
     else
     {
         color.space     = AVCOL_SPC_UNSPECIFIED;
         color.primaries = AVCOL_PRI_UNSPECIFIED;
         color.trc       = AVCOL_TRC_UNSPECIFIED;
+    }
+
+    // Apply CLI color range override if requested
+    switch (m_video_args.colorRange)
+    {
+        case AVCOL_RANGE_MPEG:
+          color.range = AVCOL_RANGE_MPEG;
+          break;
+        case AVCOL_RANGE_JPEG:
+          color.range = AVCOL_RANGE_JPEG;
+          break;
+        case AVCOL_RANGE_UNSPECIFIED:
+        default:
+          break;
     }
 
     // Override TRC (and fix buggy Android TV / Google Streamer AVI InfoFrames)
@@ -2735,6 +2748,47 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
 
             used = m_image_buffers_total - m_avail_image_buffers.size();
         }
+
+        // Capture frame to virtual address
+
+        // NOTE: If an input source sends actual Full-Range (0-255)
+        // pixels that the Magewell FPGA does not automatically
+        // compress to Limited-Range (16-235), overriding only the
+        // FFmpeg VUI metadata to AVCOL_RANGE_MPEG will crush blacks
+        // and clip whites. To force the Pro Capture FPGA to convert
+        // the actual pixel data to BT.709 Limited Range during DMA
+        // transfer, replace MWCaptureVideoFrameToVirtualAddress with:
+        //
+        // result = MWCaptureVideoFrameWithOSDToVirtualAddressEx(
+        //     m_channel,
+        //     frame_idx,
+        //     reinterpret_cast<MWCAP_PTR>(pbImage),
+        //     m_image_size,
+        //     m_min_stride,
+        //     0,                                      // bBottomUp
+        //     0,                                      // pvContext
+        //     eco_params.dwFOURCC,
+        //     eco_params.cx,
+        //     eco_params.cy,
+        //     0,                                      // dwProcessSwitchs
+        //     0,                                      // cyParitalNotify
+        //     0,                                      // hOSDImage
+        //     nullptr,                                // pOSDRects
+        //     0,                                      // cOSDRects
+        //     100,                                    // sContrast
+        //     0,                                      // sBrightness
+        //     100,                                    // sSaturation
+        //     0,                                      // sHue
+        //     MWCAP_VIDEO_DEINTERLACE_BLEND,          // deinterlaceMode
+        //     MWCAP_VIDEO_ASPECT_RATIO_IGNORE,        // aspectRatioConvertMode
+        //     nullptr,                                // pRectSrc
+        //     nullptr,                                // pRectDest
+        //     0,                                      // nAspectX
+        //     0,                                      // nAspectY
+        //     MWCAP_VIDEO_COLOR_FORMAT_UNKNOWN,       // colorFormat (UNKNOWN = auto-select by resolution)
+        //     MWCAP_VIDEO_QUANTIZATION_LIMITED,       // quantRange  (Force 16-235 output pixels)
+        //     MWCAP_VIDEO_SATURATION_LIMITED          // satRange    (Force 16-240 chroma levels)
+        // );
 
         // Capture frame to virtual address
         result = MWCaptureVideoFrameToVirtualAddress

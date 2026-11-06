@@ -79,6 +79,7 @@ class VideoStream
         float gopSecs       { 1.5 };
         int   idrInterval   {  0  };
         bool  p010          { false };
+        AVColorRange colorRange = AVCOL_RANGE_UNSPECIFIED;
     };
 
     struct Params

@@ -101,6 +101,7 @@ void show_help(string_view app)
          << "--quality (-q)     : quality setting [25]\n"
          << "--preset (-p)      : encoder preset\n"
          << "--p010             : Force p010 (10bit) video format\n"
+         << "--color-range      : Force color range (auto, limited, full) [auto]\n"
          << "--b-frames         : Use B-Frames [0]\n"
          << "--gop-secs (-g)    : GOP size in seconds [1.5] (0 to disable)\n"
          << "--idr-interval     : Frequency that keyframe will be IDR [0]\n"
@@ -405,6 +406,22 @@ int main(int argc, char* argv[])
         else if (*iter == "--p010")
         {
             video_args.p010 = true;
+        }
+        else if (*iter == "--color-range")
+        {
+            string_view val = next_arg(*iter);
+            if (val == "auto")
+                video_args.colorRange = AVCOL_RANGE_UNSPECIFIED;
+            else if (val == "limited" || val == "tv" || val == "mpeg")
+                video_args.colorRange = AVCOL_RANGE_MPEG;
+            else if (val == "full" || val == "pc" || val == "jpeg")
+                video_args.colorRange = AVCOL_RANGE_JPEG;
+            else
+            {
+                cerr << "Invalid color-range: " << val
+                     << " (expected: auto, limited, full)\n";
+                exit(1);
+            }
         }
         else if (*iter == "-d" || *iter == "--device")
         {
