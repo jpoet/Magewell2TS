@@ -237,8 +237,8 @@ class Magewell
 
     // Video parameters
     VideoStream::Args        m_video_args;
-    VideoStream::EncoderType m_encoderType;
-    enum AVPixelFormat       m_pix_fmt;
+    VideoStream::EncoderType m_encoderType {VideoStream::EncoderType::UNKNOWN};
+    AVPixelFormat            m_pix_fmt     {AV_PIX_FMT_NONE};
 
     int m_image_size         {0};  ///< Image size in bytes
     int m_min_stride         {0};  ///< Minimum stride

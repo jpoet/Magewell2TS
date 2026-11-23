@@ -1,6 +1,11 @@
 #include <iostream>
 #include <ranges>
 
+#include <algorithm>
+#include <cctype>
+#include <filesystem>
+#include <fstream>
+
 extern "C" {
 #include <libavutil/opt.h>
 #include <libavutil/imgutils.h>
@@ -20,6 +25,175 @@ extern "C" {
 #include "OutputTS.h"
 
 using namespace std;
+
+namespace {
+struct DetectedGpu
+{
+    enum class Kind { Discrete, Integrated };
+    enum class Backend { Nvidia, Drm }; // Drm = VAAPI / QSV (/dev/dri/renderD*)
+
+    Kind        kind;
+    Backend     backend;
+    std::string device;      // e.g. "renderD128" or "0" (CUDA index)
+    std::string pciAddr;     // e.g. "0000:03:00.0"
+    std::string vendorId;    // e.g. "0x8086", "0x10de", "0x1002"
+    std::string deviceId;    // e.g. "0x56a5"
+    std::string driverName;  // e.g. "i915", "xe", "amdgpu", "nvidia"
+    std::string label;       // Human-readable description for m_verbose > 2
+    uint64_t    vramBytes {0};
+};
+
+std::string read_trimmed_line(const std::filesystem::path& p)
+{
+    std::ifstream f(p);
+    std::string s;
+    if (std::getline(f, s))
+    {
+        while (!s.empty() && (s.back() == '\r' || s.back() == '\n' ||
+                              s.back() == ' '  || s.back() == '\t'))
+            s.pop_back();
+    }
+    return s;
+}
+
+uint64_t read_u64_file(const std::filesystem::path& p)
+{
+    std::ifstream f(p);
+    uint64_t v = 0;
+    if (f >> v)
+        return v;
+    return 0;
+}
+
+std::string vendor_pretty_name(const std::string& vendorHex)
+{
+    if (vendorHex == "0x8086") return "Intel";
+    if (vendorHex == "0x10de") return "NVIDIA";
+    if (vendorHex == "0x1002") return "AMD";
+    return vendorHex;
+}
+
+std::vector<DetectedGpu> enumerate_system_gpus()
+{
+    namespace fs = std::filesystem;
+    std::vector<DetectedGpu> gpus;
+
+    // 1) Enumerate NVIDIA GPUs via /proc/driver/nvidia/gpus/* (works
+    //    without linking libcuda)
+    const fs::path nvRoot("/proc/driver/nvidia/gpus");
+    std::error_code ec;
+    if (fs::exists(nvRoot, ec))
+    {
+        std::vector<fs::path> nvDirs;
+        for (const auto& entry : fs::directory_iterator(nvRoot, ec))
+        {
+            if (entry.is_directory(ec))
+                nvDirs.push_back(entry.path());
+        }
+        std::sort(nvDirs.begin(), nvDirs.end());
+
+        int cudaIdx = 0;
+        for (const auto& dir : nvDirs)
+        {
+            DetectedGpu g;
+            g.kind       = DetectedGpu::Kind::Discrete;
+            g.backend    = DetectedGpu::Backend::Nvidia;
+            g.device     = std::to_string(cudaIdx++);
+            g.pciAddr    = dir.filename().string();
+            g.vendorId   = "0x10de";
+            g.driverName = "nvidia";
+
+            std::string modelName = "NVIDIA GPU";
+            std::ifstream info(dir / "information");
+            std::string line;
+            while (std::getline(info, line))
+            {
+                if (line.starts_with("Model:"))
+                {
+                    auto pos = line.find_first_not_of(" \t", 6);
+                    if (pos != std::string::npos)
+                        modelName = line.substr(pos);
+                }
+            }
+            g.label = fmt::format("{} (CUDA #{}, PCI {}, driver=nvidia)",
+                                  modelName, g.device, g.pciAddr);
+            gpus.push_back(std::move(g));
+        }
+    }
+
+    // 2) Enumerate DRM render nodes (/sys/class/drm/renderD*) for
+    //    Intel / AMD VAAPI & QSV
+    const fs::path drmRoot("/sys/class/drm");
+    if (fs::exists(drmRoot, ec))
+    {
+        std::vector<fs::path> nodes;
+        for (const auto& entry : fs::directory_iterator(drmRoot, ec))
+        {
+            const std::string name = entry.path().filename().string();
+            if (name.starts_with("renderD"))
+                nodes.push_back(entry.path());
+        }
+        std::sort(nodes.begin(), nodes.end());
+
+        for (const auto& nodePath : nodes)
+        {
+            const fs::path devLink = nodePath / "device";
+            const fs::path canonicalDev = fs::weakly_canonical(devLink, ec);
+            const std::string pciAddr   = canonicalDev.filename().string();
+            const std::string vendor    = read_trimmed_line(devLink / "vendor");
+            const std::string devId     = read_trimmed_line(devLink / "device");
+
+            // Skip NVIDIA DRM nodes here if already enumerated via CUDA above
+            if (vendor == "0x10de")
+                continue;
+
+            std::string driverName = "unknown";
+            const fs::path drvCanon = fs::weakly_canonical(devLink /
+                                                           "driver", ec);
+            if (!drvCanon.empty())
+                driverName = drvCanon.filename().string();
+
+            // Intel iGPUs always reside on root complex PCI
+            // 0000:00:02.0.  AMD APUs sit on bus 00 without dedicated
+            // VRAM (mem_info_vram_total).
+            bool isIntegrated = pciAddr.ends_with(":00:02.0");
+            if (!isIntegrated && pciAddr.starts_with("0000:00:"))
+                isIntegrated = !fs::exists(devLink / "mem_info_vram_total", ec);
+
+            uint64_t vram = read_u64_file(devLink / "mem_info_vram_total");
+            if (vram == 0)
+                vram = read_u64_file(devLink / "lmem_total_bytes");
+            if (vram == 0)
+                vram = read_u64_file(devLink /
+                             "tile0/gt0/mem_regions/vram0/physical_size");
+
+            DetectedGpu g;
+            g.kind       = isIntegrated ? DetectedGpu::Kind::Integrated
+                           : DetectedGpu::Kind::Discrete;
+            g.backend    = DetectedGpu::Backend::Drm;
+            g.device     = nodePath.filename().string(); // e.g. "renderD128"
+            g.pciAddr    = pciAddr;
+            g.vendorId   = vendor;
+            g.deviceId   = devId;
+            g.driverName = driverName;
+            g.vramBytes  = vram;
+
+            const std::string vramStr = (vram > 0)
+                                        ? fmt::format(", VRAM={} MiB",
+                                                      vram / (1024 * 1024))
+                                        : "";
+            g.label = fmt::format("{} {} (/dev/dri/{}, PCI {}, dev={}, driver={}{})",
+                                  vendor_pretty_name(vendor),
+                                  isIntegrated ? "iGPU" : "dGPU",
+                                  g.device, pciAddr, devId,
+                                  driverName, vramStr);
+            gpus.push_back(std::move(g));
+        }
+    }
+
+    return gpus;
+}
+} // namespace
 
 VideoStream::VideoStream(OutputTS& parent, int verbose_level, Args& args,
                          Params&& params, MagCallback image_buffer_avail,
@@ -47,7 +221,6 @@ VideoStream::VideoStream(OutputTS& parent, int verbose_level, Args& args,
     // Open replacement encoder
     if (!open_encoder())
     {
-        m_encoderType = EncoderType::UNKNOWN;
         m_log->error("Failed to open video encoder.");
         Shutdown();
         return;
@@ -258,6 +431,146 @@ void VideoStream::set_light(const ColorSpace& color)
 
     m_content_light->MaxCLL  = color.MaxCLL;
     m_content_light->MaxFALL = color.MaxFALL;
+}
+
+bool VideoStream::ResolveGpu(Args& args, int verbose_level)
+{
+    auto log = spdlog::get("app_logger");
+    const auto gpus = enumerate_system_gpus();
+
+    if (verbose_level > 2 && log)
+    {
+        log->info("Detected {} GPU device(s):", gpus.size());
+        for (const auto& g : gpus)
+            log->info("  - {}", g.label);
+    }
+
+    auto inferCodecForGpu = [&](const DetectedGpu& g)
+    {
+        if (args.codecExplicit)
+            return;
+
+        if (g.backend == DetectedGpu::Backend::Nvidia)
+            args.codecName = "hevc_nvenc";
+        else if (g.vendorId == "0x1002") // AMD
+            args.codecName = "hevc_vaapi";
+        else // Intel
+            args.codecName = "hevc_qsv";
+    };
+
+    // Rule 1 for Auto: If the user explicitly passed -d / --device,
+    // honor it directly.
+    if (args.gpuPref == GpuPreference::Auto && args.deviceExplicit)
+    {
+        std::error_code ec;
+        std::string resolvedNode = args.device;
+        if (args.device.starts_with('/'))
+        {
+            const auto canon = std::filesystem::weakly_canonical(args.device,
+                                                                 ec);
+            if (!ec && canon.filename().string().starts_with("renderD"))
+                resolvedNode = canon.filename().string();
+        }
+
+        auto it = std::find_if(gpus.begin(), gpus.end(),
+                               [&](const DetectedGpu& g) {
+            return g.device == resolvedNode ||
+                   ("/dev/dri/" + g.device) == args.device;
+        });
+
+        if (it != gpus.end())
+        {
+            args.device = it->device;
+            inferCodecForGpu(*it);
+            if (verbose_level > 2 && log)
+                log->info("Selected user-specified GPU: {} [codec={}]",
+                          it->label, args.codecName);
+        }
+        else
+        {
+            if (!args.codecExplicit)
+            {
+                const bool isNumeric = !args.device.empty() &&
+                                       std::all_of(args.device.begin(),
+                                                   args.device.end(),
+                                                   [](unsigned char c)
+                                           { return std::isdigit(c) != 0; });
+
+                args.codecName = isNumeric ? "hevc_nvenc" : "hevc_qsv";
+            }
+            if (verbose_level > 2 && log)
+                log->info("Selected user-specified device: '{}' [codec={}]",
+                          args.device, args.codecName);
+        }
+        return true;
+    }
+
+    auto matchesExplicitCodec = [&](const DetectedGpu& g) -> bool
+    {
+        if (!args.codecExplicit)
+            return true;
+
+        if (args.codecName.find("nvenc") != std::string::npos)
+            return g.backend == DetectedGpu::Backend::Nvidia;
+        if (args.codecName.find("qsv") != std::string::npos)
+            return g.backend == DetectedGpu::Backend::Drm &&
+                g.vendorId == "0x8086";
+        if (args.codecName.find("vaapi") != std::string::npos)
+            return g.backend == DetectedGpu::Backend::Drm;
+        return true;
+    };
+
+    auto findFirst = [&](DetectedGpu::Kind targetKind) -> const DetectedGpu*
+    {
+        for (const auto& g : gpus)
+        {
+            if (g.kind == targetKind && matchesExplicitCodec(g))
+                return &g;
+        }
+        return nullptr;
+    };
+
+    const DetectedGpu* chosen = nullptr;
+    if (args.gpuPref == GpuPreference::IGPU)
+    {
+        chosen = findFirst(DetectedGpu::Kind::Integrated);
+        if (!chosen)
+            chosen = findFirst(DetectedGpu::Kind::Discrete);
+    }
+    else // GpuPreference::Auto or GpuPreference::DGPU
+    {
+        chosen = findFirst(DetectedGpu::Kind::Discrete);
+        if (!chosen)
+            chosen = findFirst(DetectedGpu::Kind::Integrated);
+    }
+
+    if (!chosen)
+    {
+        if (log)
+        {
+            log->error("No compatible GPU found for --gpu {} (codec='{}').",
+                       args.gpuPref == GpuPreference::IGPU ? "iGPU" :
+                       args.gpuPref == GpuPreference::DGPU ? "dGPU" : "auto",
+                       args.codecName);
+        }
+        return false;
+    }
+
+    args.device = chosen->device;
+    inferCodecForGpu(*chosen);
+
+    if (verbose_level > 2 && log)
+    {
+        const char* modeStr = (args.gpuPref == GpuPreference::IGPU)
+                              ? "iGPU"
+                              : (args.gpuPref == GpuPreference::DGPU)
+                                ? "dGPU"
+                                : "auto";
+        log->info("Selected GPU (--gpu {}): {} [codec={}]",
+                  modeStr, chosen->label, args.codecName);
+    }
+
+    return true;
 }
 
 /**
@@ -495,7 +808,7 @@ bool VideoStream::open_nvidia(const AVCodec* codec, AVDictionary** opt_arg)
      *     AV_PIX_FMT_NV12   for normal 8-bit video
      *     AV_PIX_FMT_P010LE for HDR / forced P010
      * ---------------------------------------------------------------------
-    */
+     */
 
     AVBufferRef* raw_frames_ctx =
         av_hwframe_ctx_alloc(m_hw_device_ctx.get());
@@ -630,7 +943,9 @@ bool VideoStream::open_vaapi(const AVCodec* codec, AVDictionary** opt_arg)
     av_dict_set_int(&opt, "bf", m_args.bframes, 0);
     av_opt_set_int(m_encoder->priv_data, "async_depth", 4, 0);
 
-    string child_device = "/dev/dri/" + m_args.device;
+    string child_device = m_args.device.starts_with('/')
+                              ? m_args.device
+                              : ("/dev/dri/" + m_args.device);
 
     if (m_hw_device_ctx == nullptr)
     {
@@ -823,20 +1138,20 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
 /*
  *  Open the encoder
  */
-    string child_device = "/dev/dri/" + m_args.device;
+    string child_device = m_args.device.starts_with('/')
+                          ? m_args.device
+                          : ("/dev/dri/" + m_args.device);
 
     if (m_hw_device_ctx == nullptr)
     {
         setenv("LIBVA_DRIVER_NAME", "iHD", 0);
         setenv("LIBVA_MESSAGING_LEVEL", "0", 1);
 
-        av_dict_set(&opt, "child_device", child_device.c_str(), 0);
-
         AVBufferRef* raw_hw_ctx = nullptr;
-        // Pass the address of our local raw pointer variable
+        av_dict_set(&opt, "child_device", child_device.c_str(), 0);
         ret = av_hwdevice_ctx_create(&raw_hw_ctx,
                                      AV_HWDEVICE_TYPE_QSV,
-                                     m_args.device.c_str(), opt, 0);
+                                     "auto", opt, 0);
 
         // Check the raw output pointer state explicitly
         if (ret < 0 || !raw_hw_ctx)
@@ -1202,7 +1517,7 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
                 m_params.color.has_luminance)
             {
                 av_frame_remove_side_data(hw.get(),
-                                     AV_FRAME_DATA_MASTERING_DISPLAY_METADATA);
+                                    AV_FRAME_DATA_MASTERING_DISPLAY_METADATA);
                 AVMasteringDisplayMetadata* primaries =
                     av_mastering_display_metadata_create_side_data(hw.get());
                 if (primaries)

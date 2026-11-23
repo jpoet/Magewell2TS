@@ -85,7 +85,9 @@ void show_help(string_view app)
          << "\n";
 
     clog << "--board (-b)       : board id, if you have more than one [0]\n"
-         << "--device (-d)      : vaapi/qsv device (e.g. renderD129) [renderD128]\n"
+         << "--gpu              : GPU preference: auto, dGPU, iGPU [auto]\n"
+         << "--device (-d)      : vaapi/qsv device (e.g. renderD129) or CUDA index [auto]\n"
+         << "--video-codec (-c) : Video codec name (e.g. hevc_qsv, h264_nvenc) [auto: hevc_nvenc/hevc_qsv]\n"
          << "--input (-i)       : input idx, *required*. Starts at 1\n"
          << "--settle           : How long to wait for signal changes to 'settle' [66(ms)]\n"
          << "--list (-l)        : List capture card inputs\n"
@@ -96,7 +98,6 @@ void show_help(string_view app)
          << "--color (-o)       : Use color when logging to the console\n"
          << "--show-threads (-s) : Show thread name in logging\n"
          << "--verbose (-v)     : message verbose level. 0=completely quiet [1]\n"
-         << "--video-codec (-c) : Video codec name (e.g. hevc_qsv, h264_nvenc) [hevc_qsv]\n"
          << "--lookahead (-a)   : How many frames to 'look ahead' [35]\n"
          << "--quality (-q)     : quality setting [25]\n"
          << "--preset (-p)      : encoder preset\n"
@@ -387,7 +388,8 @@ int main(int argc, char* argv[])
         }
         else if (*iter == "-c" || *iter == "--video-codec")
         {
-            video_args.codecName = next_arg(*iter);
+            video_args.codecName     = next_arg(*iter);
+            video_args.codecExplicit = true;
         }
         else if (*iter == "-r" || *iter == "--read-edid")
         {
@@ -425,7 +427,24 @@ int main(int argc, char* argv[])
         }
         else if (*iter == "-d" || *iter == "--device")
         {
-            video_args.device = next_arg(*iter);
+            video_args.device         = next_arg(*iter);
+            video_args.deviceExplicit = true;
+        }
+        else if (*iter == "--gpu")
+        {
+            string_view val = next_arg(*iter);
+            if (val == "auto" || val == "AUTO")
+                video_args.gpuPref = VideoStream::GpuPreference::Auto;
+            else if (val == "dGPU" || val == "dgpu" || val == "DGPU")
+                video_args.gpuPref = VideoStream::GpuPreference::DGPU;
+            else if (val == "iGPU" || val == "igpu" || val == "IGPU")
+                video_args.gpuPref = VideoStream::GpuPreference::IGPU;
+            else
+            {
+                cerr << "Invalid --gpu value: " << val
+                     << " (expected: auto, dGPU, iGPU)\n";
+                exit(1);
+            }
         }
         else if (*iter == "--settle")
         {

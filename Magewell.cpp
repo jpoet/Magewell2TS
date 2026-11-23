@@ -3267,6 +3267,12 @@ bool Magewell::Capture(VideoStream::Args&& video_args,
                        bool no_audio, std::chrono::milliseconds settle_time,
                        int video_buffers, bool realtime)
 {
+    if (!VideoStream::ResolveGpu(video_args, m_verbose))
+    {
+        Shutdown();
+        return false;
+    }
+
     m_image_buffers = video_buffers;
     m_settle_time   = settle_time;
     m_video_args    = video_args;

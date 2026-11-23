@@ -9,7 +9,6 @@
 #include <atomic>
 
 #include <string>
-#include <utility>
 #include <functional>
 
 #include <variant>
@@ -38,7 +37,8 @@ class VideoStream
   public:
     using MagCallback = std::function<void (uint8_t*, void*)>;
 
-    enum EncoderType { UNKNOWN, NV, VAAPI, QSV };
+    enum class EncoderType   { UNKNOWN, NV, VAAPI, QSV };
+    enum class GpuPreference { Auto, DGPU, IGPU };
 
     struct ColorSpace
     {
@@ -68,7 +68,10 @@ class VideoStream
     struct Args
     {
         std::string device { "renderD128" };
+        bool        deviceExplicit { false };
+        GpuPreference gpuPref { GpuPreference::Auto };
         std::string codecName { "hevc_qsv" };
+        bool        codecExplicit { false };
         std::string preset { };
         int   quality       { 25 };
         int   lookahead     { 35 };
@@ -173,6 +176,8 @@ class VideoStream
     std::string ColorSpaceDesc(void) const
         { return m_params.color.description; }
 
+    static bool ResolveGpu(Args& args, int verbose_level = 1);
+
   private:
     bool open_encoder(void);
     void close_encoder(void);
@@ -193,8 +198,6 @@ class VideoStream
 
     // spdlog
     std::shared_ptr<spdlog::logger> m_log;
-
-    EncoderType m_encoderType { UNKNOWN };
 
     int m_frame_cnt {0};
     SharedCodecContextPtr m_encoder;
