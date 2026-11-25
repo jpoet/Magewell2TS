@@ -1,6 +1,7 @@
 
 #include <span>
 #include <cstdint>
+#include <cstring>
 #include <bit>
 #include <algorithm>
 

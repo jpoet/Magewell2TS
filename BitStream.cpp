@@ -2,6 +2,8 @@
 #include "OutputTS.h"
 #include "IEC61937Parser.h"
 
+#include <cstring>
+
 //#define DUMP_RAW
 
 #ifdef DUMP_RAW
