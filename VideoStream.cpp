@@ -1476,8 +1476,9 @@ void VideoStream::worker_thread_loop(CopyThread& worker)
 
         if (ret < 0) [[unlikely]]
         {
-            m_log->warn("DAMAGED: {} av_hwframe_transfer_data failed: "
-                        "{}", worker.name, AVerr2str(ret));
+            m_log->warn("{}{} av_hwframe_transfer_data failed: "
+                        "{}", m_args.damagedPrefix,
+                        worker.name, AVerr2str(ret));
 
             m_log->warn("{} transfer failed: "
                         "ctx={}x{} sw={} | "

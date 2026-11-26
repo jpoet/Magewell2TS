@@ -68,7 +68,8 @@ class VideoStream
     struct Args
     {
         std::string device { "renderD128" };
-        bool        deviceExplicit { false };
+        std::string damagedPrefix { "DAMAGED: "};
+        bool        deviceExplicit  { false };
         GpuPreference gpuPref { GpuPreference::Auto };
         std::string codecName { "hevc_qsv" };
         bool        codecExplicit { false };

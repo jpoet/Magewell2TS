@@ -90,6 +90,7 @@ void show_help(string_view app)
          << "--video-codec (-c) : Video codec name (e.g. hevc_qsv, h264_nvenc) [auto: hevc_nvenc/hevc_qsv]\n"
          << "--input (-i)       : input idx, *required*. Starts at 1\n"
          << "--settle           : How long to wait for signal changes to 'settle' [66(ms)]\n"
+         << "--damaged-prefix   : prefix of damaged log messages ['DAMAGED: ']\n"
          << "--list (-l)        : List capture card inputs\n"
          << "--mux (-m)         : capture audio and video and mux into TS [false]\n"
          << "--no-audio (-n)    : Only capture video. [false]\n"
@@ -375,6 +376,10 @@ int main(int argc, char* argv[])
         else if (*iter == "-m" || *iter == "--mux")
         {
             do_capture = true;
+        }
+        else if (*iter == "--damaged-prefix")
+        {
+            video_args.damagedPrefix = next_arg(*iter);
         }
         else if (*iter == "-i" || *iter == "--input")
         {
