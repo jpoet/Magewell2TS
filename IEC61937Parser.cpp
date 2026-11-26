@@ -395,7 +395,8 @@ void IEC61937Parser::finalize_frame(void)
     {
         case TYPE_AC3:
         {
-            frame.codec_id = AV_CODEC_ID_AC3;
+            frame.codec_id   = AV_CODEC_ID_AC3;
+            frame.nb_samples = 1536;
             break;
         }
 
@@ -417,6 +418,22 @@ void IEC61937Parser::finalize_frame(void)
                                 frame.payload.end());
                 }
                 return; // Append and skip the queue
+            }
+
+            // ATSC A/52 E.1.2.2: fscod is top 2 bits of byte 4.
+            // If fscod == 3 (half-rate), numblks is implicitly 6.
+            // Otherwise numblkscod is bits 5..4 of byte 4 (0->1, 1->2,
+            // 2->3, 3->6 blocks of 256 samples).
+            if (frame.payload.size() >= 5)
+            {
+                uint8_t fscod = (frame.payload[4u] >> 6) & 0x03;
+                uint32_t blocks = 6;
+                if (fscod != 3)
+                {
+                    uint8_t numblks_code = (frame.payload[4u] >> 4) & 0x03;
+                    blocks = (numblks_code == 3) ? 6 : (numblks_code + 1);
+                }
+                frame.nb_samples = blocks * 256;
             }
             break;
         }

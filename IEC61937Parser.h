@@ -16,12 +16,12 @@ class IEC61937Parser
     static constexpr size_t EAC3_HEADER_SIZE = 12;
 
   public:
-
     struct Frame
     {
-        AVCodecID codec_id{AV_CODEC_ID_NONE};
+        AVCodecID            codec_id   { AV_CODEC_ID_NONE };
         std::vector<uint8_t> payload;
-        int64_t timestamp { 0 };
+        int64_t              timestamp  { 0 };
+        uint32_t             nb_samples { 1536 };
 
         bool is_pause { false };
     };

@@ -71,7 +71,7 @@ bool PCMStream::open_encoder(void)
     m_encoder = make_codec_context(codec);
     if (!m_encoder)
     {
-        m_log->error("Failed to allocate unique video encoding context.");
+        m_log->error("Failed to allocate unique audio encoding context.");
         return false;
     }
 
@@ -225,6 +225,8 @@ void PCMStream::close_encoder(void)
     }
 
     m_encoder.reset();
+    m_fifo.reset();
+    m_swr.reset();
 }
 
 void PCMStream::encode_frame(void)
@@ -284,8 +286,8 @@ void PCMStream::AddSamples(AudioStream::Samples&& audio)
     const int  input_samples = m_params.samples_per_channel;
 
     // Temporary planar float buffer for normalized Magewell input
-    std::vector<float> planar(input_samples * channels);
-    float* planes[8] {};
+    std::vector<float>  planar(input_samples * channels);
+    std::vector<float*> planes(channels, nullptr);
     for (int ch = 0; ch < channels; ++ch)
     {
         planes[ch] = planar.data() + (input_samples * ch);
@@ -365,11 +367,13 @@ void PCMStream::AddSamples(AudioStream::Samples&& audio)
 
         // Execute rate conversion from our manual FLTP layout to
         // 48kHz FLTP layout
-        int output_samples = swr_convert(m_swr.get(),
-                                         converted_output_buffers,
-                                         max_output_samples,
-                 reinterpret_cast<const uint8_t**>(static_cast<void*>(planes)),
-                                         input_samples);
+        int output_samples =
+            swr_convert(m_swr.get(),
+                        converted_output_buffers,
+                        max_output_samples,
+                        reinterpret_cast<const uint8_t**>(
+                            static_cast<void*>(planes.data())),
+                        input_samples);
         if (output_samples < 0)
         {
             m_log->error("swr_convert failed: {}", AVerr2str(output_samples));
@@ -393,7 +397,7 @@ void PCMStream::AddSamples(AudioStream::Samples&& audio)
     {
         // Path for native 48kHz audio streams
         if (av_audio_fifo_write(m_fifo.get(),
-                                reinterpret_cast<void**>(planes),
+                                reinterpret_cast<void**>(planes.data()),
                                 input_samples) < input_samples)
         {
             m_log->error("Failed writing raw samples to audio FIFO.");

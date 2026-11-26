@@ -78,7 +78,7 @@ void BitStream::AddSamples(AudioStream::Samples&& samples)
             frame->codec_id == AV_CODEC_ID_EAC3)
         {
             pkt->duration =
-                av_rescale_q(1536,
+                av_rescale_q(frame->nb_samples,
                              AVRational {1, m_params.sample_rate},
                              TimeBase::Magewell);
         }
