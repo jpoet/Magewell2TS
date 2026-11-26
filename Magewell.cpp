@@ -1014,9 +1014,9 @@ void Magewell::capture_audio_loop(void)
             return;
         }
         notify_audio  = MWRegisterNotify(m_channel, notify_event,
-                                    (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED
-                                  | (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE
-                                  | (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET);
+                                       (DWORD)MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED
+                                     | (DWORD)MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE
+                                     | (DWORD)MWCAP_NOTIFY_AUDIO_INPUT_RESET);
     }
 
     // Main audio capture loop
@@ -1256,10 +1256,12 @@ void Magewell::capture_audio_loop(void)
                     bool mode_changed = (check_status.bLPCM !=
                                          audio_signal_status.bLPCM);
                     bool lpcm_changed = check_status.bLPCM &&
-                         ((std::abs(static_cast<int>(check_status.dwSampleRate) -
-                           static_cast<int>(audio_signal_status.dwSampleRate)) > 1000) ||
-                          (check_status.wChannelValid != audio_signal_status.wChannelValid) ||
-                          (check_status.cBitsPerSample != audio_signal_status.cBitsPerSample));
+                        ((std::abs(static_cast<int>(check_status.dwSampleRate) -
+                                   static_cast<int>(audio_signal_status.dwSampleRate)) > 1000) ||
+                         (check_status.wChannelValid !=
+                          audio_signal_status.wChannelValid) ||
+                         (check_status.cBitsPerSample !=
+                          audio_signal_status.cBitsPerSample));
 
                     if (mode_changed || lpcm_changed)
                     {
@@ -1454,12 +1456,44 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
     }
 
     unsigned int uiValidFlag = 0;
-    bool has_infoframe = (MW_SUCCEEDED == MWGetHDMIInfoFrameValidFlag(m_channel, &uiValidFlag))
-                         && (uiValidFlag != 0);
+    bool has_infoframe =
+        (MW_SUCCEEDED == MWGetHDMIInfoFrameValidFlag(m_channel,
+                                                     &uiValidFlag)) &&
+        (uiValidFlag != 0);
 
     if (!has_infoframe && m_verbose > 2)
     {
         m_log->info("No valid HDMI InfoFrame!");
+    }
+
+    HDMI_INFOFRAME_PACKET avi_pkt{};
+    bool has_avi_packet = false;
+    if (has_infoframe && (uiValidFlag & MWCAP_HDMI_INFOFRAME_MASK_AVI))
+    {
+        if (MW_SUCCEEDED == MWGetHDMIInfoFramePacket(m_channel,
+                                                     MWCAP_HDMI_INFOFRAME_ID_AVI, &avi_pkt))
+        {
+            has_avi_packet = true;
+        }
+    }
+
+    if (has_avi_packet)
+    {
+        // CTA-861 AVI InfoFrame quantization fields:
+        //   0 = Default (per video format), 1 = Limited, 2 = Full
+        uint8_t q_range =
+            (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_RGB)
+            ? avi_pkt.aviInfoFramePayload.byRGBQuantizationRange
+            : avi_pkt.aviInfoFramePayload.byYCCQuantizationRange;
+
+        if (q_range == 2)
+        {
+            color.range = AVCOL_RANGE_JPEG;
+        }
+        else if (q_range == 1)
+        {
+            color.range = AVCOL_RANGE_MPEG;
+        }
     }
 
     HDMI_INFOFRAME_PACKET info_packet{};
@@ -1469,8 +1503,7 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
     if (has_infoframe && (uiValidFlag & MWCAP_HDMI_INFOFRAME_MASK_HDR))
     {
         if (MW_SUCCEEDED == MWGetHDMIInfoFramePacket(m_channel,
-                                                     MWCAP_HDMI_INFOFRAME_ID_HDR,
-                                                     &info_packet))
+                                                     MWCAP_HDMI_INFOFRAME_ID_HDR, &info_packet))
         {
             has_hdr_packet = true;
         }
@@ -1482,7 +1515,8 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
         static int last_eotf      = -1;
         static unsigned int last_valid_mask = 0xFFFFFFFF;
 
-        int cur_eotf = has_hdr_packet ? static_cast<int>(hdr_info.byEOTF) : -1;
+        int cur_eotf =
+            has_hdr_packet ? static_cast<int>(hdr_info.byEOTF) : -1;
         if (static_cast<int>(signal_status.colorFormat) != last_color_fmt ||
             cur_eotf != last_eotf ||
             uiValidFlag != last_valid_mask)
@@ -1519,28 +1553,22 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
                             static_cast<int>(hdr_info.byMetadataDescriptorID),
                             max_lum, max_cll);
             }
-            if (has_infoframe && (uiValidFlag & MWCAP_HDMI_INFOFRAME_MASK_AVI))
+            if (has_avi_packet)
             {
-                HDMI_INFOFRAME_PACKET avi_pkt{};
-                if (MW_SUCCEEDED == MWGetHDMIInfoFramePacket(m_channel,
-                                                  MWCAP_HDMI_INFOFRAME_ID_AVI,
-                                                             &avi_pkt))
-                {
-                    m_log->info("  -> AVI InfoFrame: colorimetry={}, "
-                                "extColorimetry={}, "
-                                "rgbQuantRange={}, yccQuantRange={}",
-                                static_cast<int>
-                                (avi_pkt.aviInfoFramePayload.byColorimetry),
-                                static_cast<int>
-                                (avi_pkt.aviInfoFramePayload
-                                 .byExtendedColorimetry),
-                                static_cast<int>
-                                (avi_pkt.aviInfoFramePayload
-                                 .byRGBQuantizationRange),
-                                static_cast<int>
-                                (avi_pkt.aviInfoFramePayload
-                                 .byYCCQuantizationRange));
-                }
+                m_log->info("  -> AVI InfoFrame: colorimetry={}, "
+                            "extColorimetry={}, "
+                            "rgbQuantRange={}, yccQuantRange={}",
+                            static_cast<int>
+                            (avi_pkt.aviInfoFramePayload.byColorimetry),
+                            static_cast<int>
+                            (avi_pkt.aviInfoFramePayload
+                             .byExtendedColorimetry),
+                            static_cast<int>
+                            (avi_pkt.aviInfoFramePayload
+                             .byRGBQuantizationRange),
+                            static_cast<int>
+                            (avi_pkt.aviInfoFramePayload
+                             .byYCCQuantizationRange));
             }
         }
     }
@@ -1561,9 +1589,10 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
     else if (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV2020 ||
              signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV2020C)
     {
-        color.space = (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV2020C)
-                      ? AVCOL_SPC_BT2020_CL
-                      : AVCOL_SPC_BT2020_NCL;
+        color.space =
+            (signal_status.colorFormat == MWCAP_VIDEO_COLOR_FORMAT_YUV2020C)
+            ? AVCOL_SPC_BT2020_CL
+            : AVCOL_SPC_BT2020_NCL;
         color.primaries = AVCOL_PRI_BT2020;
         color.trc       = AVCOL_TRC_BT2020_10;
     }
@@ -1572,7 +1601,6 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
         color.space     = AVCOL_SPC_BT709;
         color.primaries = AVCOL_PRI_BT709;
         color.trc       = AVCOL_TRC_BT709;
-        color.range     = AVCOL_RANGE_MPEG;
     }
     else
     {
@@ -1663,10 +1691,9 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
     }
 
     // HDR10 / PQ absolute metadata parsing
-    color.has_primaries = true;
     int den = 50000;
 
-    // Green (P0)
+    // Primary 0
     color.display_primaries[0][0].num =
         static_cast<int32_t>
         (static_cast<uint16_t>(hdr_info.display_primaries_lsb_x0) |
@@ -1679,7 +1706,7 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
          (static_cast<uint16_t>(hdr_info.display_primaries_msb_y0) << 8));
     color.display_primaries[0][1].den = den;
 
-    // Blue (P1)
+    // Primary 1
     color.display_primaries[1][0].num =
         static_cast<int32_t>
         (static_cast<uint16_t>(hdr_info.display_primaries_lsb_x1) |
@@ -1692,7 +1719,7 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
          (static_cast<uint16_t>(hdr_info.display_primaries_msb_y1) << 8));
     color.display_primaries[1][1].den = den;
 
-    // Red (P2)
+    // Primary 2
     color.display_primaries[2][0].num =
         static_cast<int32_t>
         (static_cast<uint16_t>(hdr_info.display_primaries_lsb_x2) |
@@ -1706,32 +1733,46 @@ bool Magewell::get_colorspace(MWCAP_VIDEO_SIGNAL_STATUS signal_status,
     color.display_primaries[2][1].den = den;
 
     // White Point - CIE 1931 xy chromaticity coords
-    color.white_point[0].num  =
+    color.white_point[0].num =
         static_cast<int32_t>
         (static_cast<uint16_t>(hdr_info.white_point_lsb_x) |
          (static_cast<uint16_t>(hdr_info.white_point_msb_x) << 8));
-    color.white_point[0].den  = den;
+    color.white_point[0].den = den;
 
-    color.white_point[1].num  =
+    color.white_point[1].num =
         static_cast<int32_t>
         (static_cast<uint16_t>(hdr_info.white_point_lsb_y) |
          (static_cast<uint16_t>(hdr_info.white_point_msb_y) << 8));
-    color.white_point[1].den  = den;
+    color.white_point[1].den = den;
+
+    // Validate primaries and white point are non-zero per CTA-861.3
+    bool p0_ok = (color.display_primaries[0][0].num > 0 ||
+                  color.display_primaries[0][1].num > 0);
+    bool p1_ok = (color.display_primaries[1][0].num > 0 ||
+                  color.display_primaries[1][1].num > 0);
+    bool p2_ok = (color.display_primaries[2][0].num > 0 ||
+                  color.display_primaries[2][1].num > 0);
+    bool wp_ok = (color.white_point[0].num > 0 &&
+                  color.white_point[1].num > 0);
+
+    color.has_primaries = (p0_ok && p1_ok && p2_ok && wp_ok);
 
     // Luminance
-    color.has_luminance = true;
-
-    color.max_luminance.num  =
+    color.max_luminance.num =
         static_cast<int32_t>
         (static_cast<uint16_t>(hdr_info.max_display_mastering_lsb_luminance) |
-         (static_cast<uint16_t>(hdr_info.max_display_mastering_msb_luminance) << 8));
-    color.max_luminance.den  = 1;
+         (static_cast<uint16_t>(hdr_info.max_display_mastering_msb_luminance)
+          << 8));
+    color.max_luminance.den = 1;
 
-    color.min_luminance.num  =
+    color.min_luminance.num =
         static_cast<int32_t>
         (static_cast<uint16_t>(hdr_info.min_display_mastering_lsb_luminance) |
-         (static_cast<uint16_t>(hdr_info.min_display_mastering_msb_luminance) << 8));
-    color.min_luminance.den  = 10000;
+         (static_cast<uint16_t>(hdr_info.min_display_mastering_msb_luminance)
+          << 8));
+    color.min_luminance.den = 10000;
+
+    color.has_luminance = (color.max_luminance.num > 0);
 
     /* Light Level */
 
@@ -1916,7 +1957,7 @@ void Magewell::free_image_buffers(void)
                     m_image_buffers_avail);
 
         if (m_image_returned.wait_for(lock,
-                         std::chrono::seconds(1)) == std::cv_status::timeout)
+                                      std::chrono::seconds(1)) == std::cv_status::timeout)
         {
             if (m_running == false)
                 break;
@@ -2423,7 +2464,7 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         if (m_expected_ts == -1 && timestamp < 0)
         {
             eco_image_buffer_available(pbImage,
-                                reinterpret_cast<void*>(eco_status.pvContext));
+                                       reinterpret_cast<void*>(eco_status.pvContext));
             continue;
         }
         else if (m_expected_ts > 0 &&
@@ -2442,8 +2483,8 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                                / static_cast<float>(eco_params.llFrameDuration);
                 if (m_verbose > 3)
                     m_log->debug("Timestamp is {:.0f} frame less than "
-                                "expected.    ({}) [Adjusting]",
-                                frames, m_frame_cnt);
+                                 "expected.    ({}) [Adjusting]",
+                                 frames, m_frame_cnt);
                 short_frame = m_frame_cnt;
                 timestamp_adj = eco_params.llFrameDuration;
             }
@@ -2462,9 +2503,9 @@ bool Magewell::capture_eco_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
                         {
                             if (m_verbose > 3)
                                 m_log->debug("Timestamp is {:.0f} frame greater "
-                                            "than expected. ({}) "
-                                            "[Adjustment cleared]",
-                                            skipped, m_frame_cnt);
+                                             "than expected. ({}) "
+                                             "[Adjustment cleared]",
+                                             skipped, m_frame_cnt);
                             short_frame = -1;
                             timestamp_adj = 0;
                         }
@@ -2716,7 +2757,7 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
             {
                 if (m_verbose > 3)
                     m_log->info("None of the MW card buffers are valid.");
-                break;
+                return false;
             }
 
             skipped = (min_ts - m_expected_ts) / eco_params.llFrameDuration;
@@ -2794,17 +2835,47 @@ bool Magewell::capture_pro_video(MWCAP_VIDEO_ECO_CAPTURE_OPEN eco_params,
         // );
 
         // Capture frame to virtual address
-        result = MWCaptureVideoFrameToVirtualAddress
+        MWCAP_VIDEO_COLOR_FORMAT out_color =
+            active_color.is_HDR ? MWCAP_VIDEO_COLOR_FORMAT_YUV2020
+            : MWCAP_VIDEO_COLOR_FORMAT_UNKNOWN;
+        MWCAP_VIDEO_QUANTIZATION_RANGE out_quant =
+            (active_color.range == AVCOL_RANGE_JPEG)
+            ? MWCAP_VIDEO_QUANTIZATION_FULL
+            : MWCAP_VIDEO_QUANTIZATION_LIMITED;
+        MWCAP_VIDEO_SATURATION_RANGE out_sat =
+            (active_color.range == AVCOL_RANGE_JPEG)
+            ? MWCAP_VIDEO_SATURATION_FULL
+            : MWCAP_VIDEO_SATURATION_LIMITED;
+
+        result = MWCaptureVideoFrameToVirtualAddressEx
                  (m_channel,
                   frame_idx,
-                  reinterpret_cast<MWCAP_PTR>(pbImage),
+                  pbImage,
                   m_image_size,
                   m_min_stride,
-                  0,
-                  0,
+                  0,                                // bBottomUp
+                  0,                                // pvContext
                   eco_params.dwFOURCC,
                   eco_params.cx,
-                  eco_params.cy);
+                  eco_params.cy,
+                  0,                                // dwProcessSwitchs
+                  0,                                // cyPartialNotify
+                  0,                                // hOSDImage
+                  nullptr,                          // pOSDRects
+                  0,                                // cOSDRects
+                  100,                              // sContrast
+                  0,                                // sBrightness
+                  100,                              // sSaturation
+                  0,                                // sHue
+                  MWCAP_VIDEO_DEINTERLACE_BLEND,
+                  MWCAP_VIDEO_ASPECT_RATIO_IGNORE,
+                  nullptr,                          // pRectSrc
+                  nullptr,                          // pRectDest
+                  0,                                // nAspectX
+                  0,                                // nAspectY
+                  out_color,
+                  out_quant,
+                  out_sat);
 
         ++m_frame_cnt;
         {

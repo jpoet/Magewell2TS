@@ -398,29 +398,46 @@ void VideoStream::set_light(const ColorSpace& color)
     m_display_primaries->has_primaries = color.has_primaries ? 1 : 0;
     m_display_primaries->has_luminance = color.has_luminance ? 1 : 0;
 
-    // Magewell CTA-861 order: 0 = Green, 1 = Blue, 2 = Red
-    constexpr size_t MW_G = 0, MW_B = 1, MW_R = 2;
-    // FFmpeg order:           0 = Red,   1 = Green, 2 = Blue
+    // FFmpeg order: 0 = Red, 1 = Green, 2 = Blue
     constexpr size_t FF_R = 0, FF_G = 1, FF_B = 2;
     constexpr size_t X = 0, Y = 1;
 
-    // Red (FFmpeg 0 <- Magewell 2)
+    // CTA-861.3 allows primaries in any order:
+    // Red has largest x, Green has largest y, Blue is the remaining one.
+    size_t idx_r = 0;
+    size_t idx_g = 0;
+    for (size_t i = 1; i < 3; ++i)
+    {
+        if (color.display_primaries[i][X].num >
+            color.display_primaries[idx_r][X].num)
+            idx_r = i;
+        if (color.display_primaries[i][Y].num >
+            color.display_primaries[idx_g][Y].num)
+            idx_g = i;
+    }
+
+    if (idx_r == idx_g)
+    {
+        // Fallback to SMPTE ST 2086 order (G=0, B=1, R=2) if degenerate
+        idx_g = 0;
+        idx_r = 2;
+    }
+    size_t idx_b = 3 - idx_r - idx_g;
+
     m_display_primaries->display_primaries[FF_R][X] =
-        color.display_primaries[MW_R][X];
+        color.display_primaries[idx_r][X];
     m_display_primaries->display_primaries[FF_R][Y] =
-        color.display_primaries[MW_R][Y];
+        color.display_primaries[idx_r][Y];
 
-    // Green (FFmpeg 1 <- Magewell 0)
     m_display_primaries->display_primaries[FF_G][X] =
-        color.display_primaries[MW_G][X];
+        color.display_primaries[idx_g][X];
     m_display_primaries->display_primaries[FF_G][Y] =
-        color.display_primaries[MW_G][Y];
+        color.display_primaries[idx_g][Y];
 
-    // Blue (FFmpeg 2 <- Magewell 1)
     m_display_primaries->display_primaries[FF_B][X] =
-        color.display_primaries[MW_B][X];
+        color.display_primaries[idx_b][X];
     m_display_primaries->display_primaries[FF_B][Y] =
-        color.display_primaries[MW_B][Y];
+        color.display_primaries[idx_b][Y];
 
     std::copy(std::begin(color.white_point),
               std::end(color.white_point),
@@ -618,8 +635,14 @@ bool VideoStream::open_encoder(void)
         return false;
     }
 
-    m_encoder->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    if (m_params.pix_fmt == AV_PIX_FMT_P010LE &&
+        m_encoder->codec_id == AV_CODEC_ID_HEVC)
+    {
+        m_encoder->profile = AV_PROFILE_HEVC_MAIN_10;
+    }
 
+    // Do NOT set AV_CODEC_FLAG_GLOBAL_HEADER for MPEG-TS so Annex-B
+    // parameter sets (VUI) and HDR SEI messages are emitted in-band.
     AVRational encoder_fps = AVRational {
         m_params.frame_duration.den,
         m_params.frame_duration.num
@@ -1135,9 +1158,9 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
         }
     }
 
-/*
- *  Open the encoder
- */
+    /*
+     *  Open the encoder
+     */
     string child_device = m_args.device.starts_with('/')
                           ? m_args.device
                           : ("/dev/dri/" + m_args.device);
@@ -1148,10 +1171,12 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
         setenv("LIBVA_MESSAGING_LEVEL", "0", 1);
 
         AVBufferRef* raw_hw_ctx = nullptr;
-        av_dict_set(&opt, "child_device", child_device.c_str(), 0);
+        AVDictionary* dev_opt = nullptr;
+        av_dict_set(&dev_opt, "child_device", child_device.c_str(), 0);
         ret = av_hwdevice_ctx_create(&raw_hw_ctx,
                                      AV_HWDEVICE_TYPE_QSV,
-                                     "auto", opt, 0);
+                                     "auto", dev_opt, 0);
+        av_dict_free(&dev_opt);
 
         // Check the raw output pointer state explicitly
         if (ret < 0 || !raw_hw_ctx)
@@ -1173,9 +1198,6 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
 
     m_log->trace("VideoStream::open_qsv: device refs={}",
                  av_buffer_get_ref_count(m_hw_device_ctx.get()));
-
-    if (opt)
-        av_dict_free(&opt);
 
     m_encoder->pix_fmt = AV_PIX_FMT_QSV;
 
@@ -1227,7 +1249,10 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
     m_encoder->hw_frames_ctx = av_buffer_ref(m_hw_frames_ctx.get());
 
     // Intel kernel initialization codec activation
-    ret = avcodec_open2(m_encoder.get(), codec, nullptr);
+    ret = avcodec_open2(m_encoder.get(), codec, &opt);
+    if (opt)
+        av_dict_free(&opt);
+
     if (ret < 0)
     {
         m_log->error("Fatal Error: Intel QSV codec activation failed: {}",
@@ -1235,7 +1260,6 @@ bool VideoStream::open_qsv(const AVCodec* codec, AVDictionary** opt_arg)
         Shutdown();
         return false;
     }
-
     m_log->trace("Intel QSV pipeline hardware resolution {}x{}",
                  frames_ctx->width, frames_ctx->height);
 
